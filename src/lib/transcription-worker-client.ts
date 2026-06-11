@@ -3,6 +3,7 @@ import type {
   TranscriptSegment,
   TranscriptionProgress,
 } from "@/features/transcription/types"
+import type { LocalModelDtype } from "@/features/transcription/models"
 import { createId } from "@/lib/id"
 
 type WorkerMessage =
@@ -38,6 +39,7 @@ export function transcribeLocally(args: {
   modelId: string
   language: LanguageCode
   device: "webgpu" | "wasm"
+  dtype: LocalModelDtype
   onProgress: (progress: TranscriptionProgress) => void
 }) {
   return new Promise<{ text: string; segments: TranscriptSegment[] }>((resolve, reject) => {
@@ -119,6 +121,7 @@ export function transcribeLocally(args: {
             modelId: args.modelId,
             language: args.language,
             device: args.device,
+            dtype: args.dtype,
           },
           [audio.buffer]
         )

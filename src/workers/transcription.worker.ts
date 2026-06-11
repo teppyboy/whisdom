@@ -1,4 +1,5 @@
 import type { LanguageCode, TranscriptionProgress } from "@/features/transcription/types"
+import type { LocalModelDtype } from "@/features/transcription/models"
 import { toWhisperLanguageName } from "@/features/transcription/language"
 
 const ignoredWarnings = [
@@ -24,6 +25,7 @@ type WorkerRequest = {
   modelId: string
   language: LanguageCode
   device: "webgpu" | "wasm"
+  dtype: LocalModelDtype
 }
 
 type PipelineResult = {
@@ -44,12 +46,12 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     postProgress(event.data.id, { phase: "downloading-assets", message: "Loading Whisper model", progress: 0.05 })
     const { pipeline } = await import("@huggingface/transformers")
-    const key = `${event.data.modelId}:${event.data.device}`
+    const key = `${event.data.modelId}:${event.data.device}:${event.data.dtype}`
 
     if (!transcriber || loadedKey !== key) {
       transcriber = (await pipeline("automatic-speech-recognition", event.data.modelId, {
         device: event.data.device === "webgpu" ? "webgpu" : "wasm",
-        dtype: "fp32",
+        dtype: event.data.dtype,
         progress_callback: (progress: { progress?: number; status?: string; file?: string }) => {
           postProgress(event.data.id, {
             phase: "downloading-assets",
@@ -94,11 +96,26 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     self.postMessage({
       type: "error",
       id: event.data.id,
-      error: error instanceof Error ? error.message : "Transcription failed",
+      error: formatTranscriptionError(error),
     })
   }
 }
 
 function postProgress(id: string, progress: TranscriptionProgress) {
   self.postMessage({ type: "progress", id, progress })
+}
+
+function formatTranscriptionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+
+  if (
+    message.includes("Array buffer allocation failed") ||
+    message.includes("failed to allocate a buffer") ||
+    message.includes("Can't create a session") ||
+    error instanceof RangeError
+  ) {
+    return "Browser could not allocate enough memory for this Whisper model. Large models need WebGPU with quantized q4 weights; if this still fails, choose Whisper Small or use server-side transcription."
+  }
+
+  return message || "Transcription failed"
 }

@@ -17,6 +17,7 @@ import {
   Search,
   Sparkles,
   Sun,
+  Trash2,
   UploadCloud,
   User,
 } from "lucide-react"
@@ -55,7 +56,13 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useTheme } from "@/components/theme-provider"
 import { analyzeMediaFile, bytesToMb, formatDuration } from "@/features/media/preflight"
-import { DEFAULT_SETTINGS, findModel, WHISPER_MODELS } from "@/features/transcription/models"
+import {
+  DEFAULT_SETTINGS,
+  canRunModelLocally,
+  findModel,
+  getLocalModelDtype,
+  WHISPER_MODELS,
+} from "@/features/transcription/models"
 import {
   getLanguageLabel,
   isEnglishOnlyLanguageMismatch,
@@ -64,6 +71,7 @@ import {
 } from "@/features/transcription/language"
 import { downloadTranscript, type ExportFormat } from "@/features/transcription/exports"
 import {
+  deleteTranscript,
   listTranscripts,
   loadSettings,
   saveSettings,
@@ -129,6 +137,10 @@ const COPY = {
     reviewPlan: "Review downloads and processing plan",
     couldNotAnalyze: "Could not analyze media",
     serverGuardrail: "Server mode is manual opt-in but chunk upload is not enabled yet. Use local mode for now.",
+    quantizedLargeModel: (label: string) =>
+      `${label} will run with q4 browser weights to avoid multi-gigabyte buffer allocation.`,
+    largeModelNeedsWebGpu: (label: string) =>
+      `${label} requires WebGPU in the browser. Use HTTPS/localhost with a supported GPU, or choose Whisper Small.`,
     untitledTranscript: "Untitled transcript",
     transcriptReady: "Transcript ready",
     transcriptionFailed: "Transcription failed",
@@ -155,7 +167,7 @@ const COPY = {
     searchLanguage: "Search language",
     noLanguages: "No languages found.",
     englishOnlyWarning: "Current model is English-only. Pick a multilingual model for this language.",
-    englishOnlySidebar: "Current model is English-only. Switch to Base, Tiny, or Small multilingual.",
+    englishOnlySidebar: "Current model is English-only. Switch to a multilingual Whisper model.",
     processing: "Processing",
     processingDescription: "Where transcription runs and how media is chunked.",
     mode: "Mode",
@@ -186,11 +198,15 @@ const COPY = {
     emptyTranscript: "Your transcript appears here after local transcription. Export names include source, language, date, and time.",
     recent: "Recent",
     emptyHistory: "No transcripts saved yet.",
+    removeTranscript: "Remove transcript",
     downloadDescription: (notes: string, sizeMb: number) => `${notes} ~${sizeMb} MB download.`,
     modelDescriptions: {
       "onnx-community/whisper-base": "Default. Good English/Vietnamese balance for local browsers.",
       "onnx-community/whisper-tiny": "Fastest multilingual local option. Lower accuracy.",
       "onnx-community/whisper-small": "Better accuracy, heavier download and memory use.",
+      "onnx-community/whisper-medium_timestamped": "High-accuracy multilingual model with timestamp-focused weights for high-end devices.",
+      "onnx-community/whisper-large-v3-turbo": "Best high-end default: much higher accuracy than Small while staying faster than full Large v3.",
+      "onnx-community/whisper-large-v3-ONNX": "Maximum accuracy option. Very large download and long initialization; intended for high-end devices.",
       "onnx-community/whisper-tiny.en": "English-only. Not suitable for Vietnamese.",
     } satisfies Record<string, string>,
     modeDetails: {
@@ -241,6 +257,10 @@ const COPY = {
     reviewPlan: "Kiểm tra kế hoạch xử lý",
     couldNotAnalyze: "Không thể phân tích tệp",
     serverGuardrail: "Chế độ máy chủ chưa được bật. Vui lòng dùng xử lý cục bộ.",
+    quantizedLargeModel: (label: string) =>
+      `${label} sẽ dùng trọng số q4 trong trình duyệt để tránh cấp phát bộ nhớ nhiều GB.`,
+    largeModelNeedsWebGpu: (label: string) =>
+      `${label} cần WebGPU trong trình duyệt. Hãy dùng HTTPS/localhost với GPU được hỗ trợ, hoặc chọn Whisper Small.`,
     untitledTranscript: "Bản chép chưa đặt tên",
     transcriptReady: "Bản chép đã sẵn sàng",
     transcriptionFailed: "Không thể tạo bản chép",
@@ -267,7 +287,7 @@ const COPY = {
     searchLanguage: "Tìm ngôn ngữ",
     noLanguages: "Không tìm thấy ngôn ngữ phù hợp.",
     englishOnlyWarning: "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
-    englishOnlySidebar: "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn Base, Tiny hoặc Small đa ngôn ngữ.",
+    englishOnlySidebar: "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn một mô hình Whisper đa ngôn ngữ.",
     processing: "Xử lý",
     processingDescription: "Chọn nơi xử lý và cách chia tệp thành đoạn.",
     mode: "Chế độ",
@@ -298,11 +318,15 @@ const COPY = {
     emptyTranscript: "Bản chép sẽ xuất hiện ở đây sau khi xử lý. Tên tệp xuất gồm nguồn, ngôn ngữ, ngày và giờ.",
     recent: "Gần đây",
     emptyHistory: "Chưa có bản chép nào.",
+    removeTranscript: "Xóa bản chép",
     downloadDescription: (notes: string, sizeMb: number) => `${notes} Khoảng ${sizeMb} MB.`,
     modelDescriptions: {
       "onnx-community/whisper-base": "Mặc định. Cân bằng tốt giữa tốc độ và độ chính xác cho tiếng Anh/tiếng Việt.",
       "onnx-community/whisper-tiny": "Nhanh nhất trong các mô hình đa ngôn ngữ. Độ chính xác thấp hơn.",
       "onnx-community/whisper-small": "Độ chính xác cao hơn, cần tải xuống và bộ nhớ nhiều hơn.",
+      "onnx-community/whisper-medium_timestamped": "Mô hình đa ngôn ngữ có độ chính xác cao, tối ưu cho mốc thời gian và thiết bị mạnh.",
+      "onnx-community/whisper-large-v3-turbo": "Lựa chọn tốt cho thiết bị mạnh: chính xác hơn Small đáng kể nhưng nhanh hơn Large v3 đầy đủ.",
+      "onnx-community/whisper-large-v3-ONNX": "Tùy chọn chính xác tối đa. Tệp tải xuống rất lớn và khởi tạo lâu; dành cho thiết bị cao cấp.",
       "onnx-community/whisper-tiny.en": "Chỉ hỗ trợ tiếng Anh, không phù hợp cho tiếng Việt.",
     } satisfies Record<string, string>,
     modeDetails: {
@@ -463,7 +487,10 @@ export function App() {
       return
     }
 
-    if (settings.mode === "cloudflare-ai") {
+    const runSettings = settingsRef.current
+    const runModel = findModel(runSettings.modelId)
+
+    if (runSettings.mode === "cloudflare-ai") {
       setError(t.serverGuardrail)
       return
     }
@@ -472,9 +499,16 @@ export function App() {
     let input: File | Blob = file
 
     try {
-      const runSettings = settingsRef.current
       const freshAnalysis = await analyzeMediaFile(file, runSettings)
       setAnalysis(freshAnalysis)
+      const effectiveMode = freshAnalysis.recommendedMode === "local-webgpu" ? "local-webgpu" : "local-wasm"
+      const device = effectiveMode === "local-webgpu" ? "webgpu" : "wasm"
+
+      if (!canRunModelLocally(runModel, device)) {
+        setError(t.largeModelNeedsWebGpu(runModel.label))
+        setJobState("error")
+        return
+      }
 
       if (freshAnalysis.needsFfmpeg) {
         setJobState("preparing-media")
@@ -491,13 +525,13 @@ export function App() {
       }
 
       setJobState("transcribing")
-      const effectiveMode = freshAnalysis.recommendedMode === "local-webgpu" ? "local-webgpu" : "local-wasm"
       const effectiveLanguage = resolveTranscriptionLanguage(runSettings.language, runSettings.uiLanguage)
       const result = await transcribeLocally({
         file: input,
         modelId: runSettings.modelId,
         language: effectiveLanguage,
-        device: effectiveMode === "local-webgpu" ? "webgpu" : "wasm",
+        device,
+        dtype: getLocalModelDtype(runModel),
         onProgress: (nextProgress) => {
           setProgress({
             ...nextProgress,
@@ -549,6 +583,12 @@ export function App() {
         message: caught instanceof Error ? caught.message : t.driveSyncFailed,
       })
     }
+  }
+
+  async function removeTranscript(id: string) {
+    await deleteTranscript(id)
+    setHistory((current) => current.filter((item) => item.id !== id))
+    setTranscript((current) => (current?.id === id ? null : current))
   }
 
   function updateSetting<T extends keyof AppSettings>(key: T, value: AppSettings[T]) {
@@ -696,7 +736,12 @@ export function App() {
                 </div>
               ) : null}
 
-              <HistoryPanel history={history} onSelect={setTranscript} copy={t} />
+              <HistoryPanel
+                history={history}
+                onSelect={setTranscript}
+                onRemove={(id) => void removeTranscript(id)}
+                copy={t}
+              />
             </aside>
           </section>
         )}
@@ -720,6 +765,7 @@ function MainControls({
 }) {
   const modelDescription =
     copy.modelDescriptions[model.id as keyof typeof copy.modelDescriptions] ?? model.notes
+  const usesQuantizedWeights = getLocalModelDtype(model) === "q4"
 
   return (
     <Card className="relative z-20 overflow-visible animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
@@ -762,6 +808,12 @@ function MainControls({
 
         {isEnglishOnlyMismatch ? (
           <p className="text-sm text-destructive md:col-span-2">{copy.englishOnlyWarning}</p>
+        ) : null}
+
+        {usesQuantizedWeights ? (
+          <p className="text-sm text-muted-foreground md:col-span-2">
+            {copy.quantizedLargeModel(model.label)}
+          </p>
         ) : null}
       </CardContent>
     </Card>
@@ -1266,10 +1318,12 @@ function TranscriptPanel({
 function HistoryPanel({
   history,
   onSelect,
+  onRemove,
   copy,
 }: {
   history: TranscriptDocument[]
   onSelect: (document: TranscriptDocument) => void
+  onRemove: (id: string) => void
   copy: Copy
 }) {
   return (
@@ -1280,16 +1334,39 @@ function HistoryPanel({
           <p className="text-sm text-muted-foreground">{copy.emptyHistory}</p>
         ) : (
           history.map((item) => (
-            <button
+            <div
               key={item.id}
-              className="animate-in fade-in slide-in-from-bottom-1 rounded-md border px-3 py-2 text-left text-sm transition-colors duration-200 hover:bg-accent"
-              onClick={() => onSelect(item)}
+              className="group/history-item grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-md border p-2 text-sm transition-colors duration-200 hover:bg-accent animate-in fade-in slide-in-from-bottom-1"
             >
-              <span className="block truncate font-medium">{item.title}</span>
-              <span className="text-xs text-muted-foreground">
-                {new Date(item.createdAt).toLocaleString()}
-              </span>
-            </button>
+              <button
+                type="button"
+                className="min-w-0 text-left"
+                onClick={() => onSelect(item)}
+              >
+                <span className="block truncate font-medium">{item.title}</span>
+                <span className="mt-1 flex flex-wrap gap-1.5">
+                  <Badge variant="secondary" className="max-w-full truncate">
+                    {findModel(item.modelId).label}
+                  </Badge>
+                  <Badge variant="outline" className="max-w-full truncate">
+                    {getLanguageLabel(item.language, copy.languageLabels.auto)}
+                  </Badge>
+                </span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  {new Date(item.createdAt).toLocaleString()}
+                </span>
+              </button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 text-muted-foreground opacity-80 transition-opacity hover:text-destructive sm:opacity-0 sm:group-hover/history-item:opacity-100 sm:focus-visible:opacity-100"
+                aria-label={`${copy.removeTranscript}: ${item.title}`}
+                onClick={() => onRemove(item.id)}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
           ))
         )}
       </div>

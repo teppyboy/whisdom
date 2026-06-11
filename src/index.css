@@ -38,6 +38,9 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+    --scrollbar-track: oklch(0.97 0 0);
+    --scrollbar-thumb: oklch(0.556 0 0 / 60%);
+    --scrollbar-thumb-hover: oklch(0.439 0 0 / 75%);
 }
 
 .dark {
@@ -72,6 +75,9 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+    --scrollbar-track: oklch(0.145 0 0);
+    --scrollbar-thumb: oklch(0.708 0 0 / 55%);
+    --scrollbar-thumb-hover: oklch(0.82 0 0 / 70%);
 }
 
 @theme inline {
@@ -120,6 +126,7 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
     }
   body {
     @apply bg-background text-foreground antialiased;
@@ -127,5 +134,27 @@
     }
   html {
     @apply font-sans;
+    color-scheme: light;
+    }
+  .dark {
+    color-scheme: dark;
+    }
+  ::-webkit-scrollbar {
+    width: 0.75rem;
+    height: 0.75rem;
+    }
+  ::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border: 3px solid var(--scrollbar-track);
+    border-radius: 999px;
+    }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    }
+  ::-webkit-scrollbar-corner {
+    background: var(--scrollbar-track);
     }
 }

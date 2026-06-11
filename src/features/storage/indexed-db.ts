@@ -37,6 +37,11 @@ export async function saveTranscript(document: TranscriptDocument) {
   await db.put("transcripts", document)
 }
 
+export async function deleteTranscript(id: string) {
+  const db = await getDb()
+  await db.delete("transcripts", id)
+}
+
 export async function listTranscripts(): Promise<TranscriptDocument[]> {
   const db = await getDb()
   const documents = await db.getAll("transcripts")

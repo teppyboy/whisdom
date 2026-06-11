@@ -43,6 +43,49 @@ async function searchLanguage(page: Page, query: string, option: string | RegExp
   await page.getByRole("option", { name: option }).click()
 }
 
+async function seedRecentTranscript(page: Page) {
+  await page.evaluate(async () => {
+    const request = indexedDB.open("whisdom", 1)
+
+    await new Promise<void>((resolve, reject) => {
+      request.onupgradeneeded = () => {
+        const db = request.result
+
+        if (!db.objectStoreNames.contains("settings")) {
+          db.createObjectStore("settings")
+        }
+
+        if (!db.objectStoreNames.contains("transcripts")) {
+          db.createObjectStore("transcripts", { keyPath: "id" })
+        }
+      }
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        const db = request.result
+        const transaction = db.transaction("transcripts", "readwrite")
+
+        transaction.objectStore("transcripts").put({
+          id: "history-1",
+          title: "Research call",
+          sourceName: "research-call.mp3",
+          language: "ko",
+          modelId: "onnx-community/whisper-large-v3-turbo",
+          mode: "local-webgpu",
+          createdAt: "2026-06-11T10:15:30.456Z",
+          updatedAt: "2026-06-11T10:15:30.456Z",
+          text: "Seeded transcript",
+          segments: [],
+        })
+        transaction.oncomplete = () => {
+          db.close()
+          resolve()
+        }
+        transaction.onerror = () => reject(transaction.error)
+      }
+    })
+  })
+}
+
 test.describe("Whisdom", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/")
@@ -77,6 +120,19 @@ test.describe("Whisdom", () => {
     await page.getByRole("option", { name: "Whisper Tiny", exact: true }).click()
 
     await expect(page.getByText("Whisper Tiny").nth(1)).toBeVisible()
+  })
+
+  test("uses q4 guidance and blocks large models without WebGPU", async ({ page }) => {
+    await page.getByLabel("Model").click()
+    await page.getByRole("option", { name: "Whisper Large v3", exact: true }).click()
+
+    await expect(page.getByText("q4 browser weights")).toBeVisible()
+
+    await chooseAudio(page)
+    await expect(page.getByText("Large local models use q4 ONNX weights")).toBeVisible()
+    await page.getByRole("button", { name: /Confirm downloads and transcribe/i }).click()
+
+    await expect(page.getByText("requires WebGPU in the browser")).toBeVisible()
   })
 
   test("searches and selects many transcription languages on the main page", async ({ page }) => {
@@ -133,6 +189,20 @@ test.describe("Whisdom", () => {
     await page.getByRole("button", { name: /Confirm downloads and transcribe/i }).click()
 
     await expect(page.getByText("Server mode is manual opt-in but chunk upload is not enabled yet.")).toBeVisible()
+  })
+
+  test("shows recent transcript metadata and removes items", async ({ page }) => {
+    await seedRecentTranscript(page)
+    await page.reload()
+
+    await expect(page.getByText("Research call")).toBeVisible()
+    await expect(page.getByText("Whisper Large v3 Turbo")).toBeVisible()
+    await expect(page.getByText("Korean / 한국어")).toBeVisible()
+
+    await page.getByRole("button", { name: "Remove transcript: Research call" }).click()
+
+    await expect(page.getByText("Research call")).toHaveCount(0)
+    await expect(page.getByText("No transcripts saved yet.")).toBeVisible()
   })
 
 })

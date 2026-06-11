@@ -1,4 +1,4 @@
-import { findModel } from "@/features/transcription/models"
+import { getLocalModelDtype, requiresWebGpuForLocalModel, findModel } from "@/features/transcription/models"
 import { isEnglishOnlyLanguageMismatch } from "@/features/transcription/language"
 import type {
   AppSettings,
@@ -104,6 +104,20 @@ function buildWarnings(
     warnings.push(copy.englishOnly)
   }
 
+  const model = findModel(settings.modelId)
+
+  if (getLocalModelDtype(model) === "q4" && settings.mode !== "cloudflare-ai") {
+    warnings.push(copy.quantizedLargeModel)
+  }
+
+  if (
+    settings.mode !== "cloudflare-ai" &&
+    requiresWebGpuForLocalModel(model) &&
+    recommendedModeFromStatus(settings.mode, needsFfmpeg, webGpuStatus.available) !== "local-webgpu"
+  ) {
+    warnings.push(copy.largeModelNeedsWebGpu)
+  }
+
   if (settings.mode === "local-webgpu" && !webGpuStatus.available) {
     warnings.push(copy.webGpuUnavailable(webGpuStatus.reason))
   }
@@ -126,6 +140,8 @@ function buildWarnings(
 const WARNING_COPY = {
   en: {
     englishOnly: "Selected model is English-only. Choose a multilingual model for this language.",
+    quantizedLargeModel: "Large local models use q4 ONNX weights in the browser to avoid multi-gigabyte buffer allocation.",
+    largeModelNeedsWebGpu: "This large model requires WebGPU. Choose Whisper Small or use a secure WebGPU-capable browser.",
     webGpuUnavailable: (reason: string) => `WebGPU is unavailable (${reason}). Whisdom will use local WASM instead.`,
     needsFfmpeg: "Video or unsupported media needs ffmpeg.wasm before transcription.",
     serverChunksOnly: "Server mode sends audio chunks only. Full media stays in the browser.",
@@ -133,12 +149,22 @@ const WARNING_COPY = {
   },
   vi: {
     englishOnly: "Mô hình đã chọn chỉ hỗ trợ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
+    quantizedLargeModel: "Mô hình lớn sẽ dùng trọng số ONNX q4 trong trình duyệt để tránh cấp phát bộ nhớ nhiều GB.",
+    largeModelNeedsWebGpu: "Mô hình lớn này cần WebGPU. Hãy chọn Whisper Small hoặc dùng trình duyệt hỗ trợ WebGPU qua HTTPS/localhost.",
     webGpuUnavailable: (reason: string) => `Không thể dùng WebGPU (${reason}). Whisdom sẽ tự chuyển sang WASM cục bộ.`,
     needsFfmpeg: "Video hoặc định dạng chưa hỗ trợ cần ffmpeg.wasm trước khi chép lời.",
     serverChunksOnly: "Chế độ máy chủ chỉ gửi từng đoạn âm thanh. Tệp gốc vẫn ở trong trình duyệt.",
     resumeRequiresFile: "Sau khi đóng tab, bạn cần chọn lại tệp gốc để tiếp tục.",
   },
 } as const
+
+function recommendedModeFromStatus(
+  requestedMode: ProcessingMode,
+  needsFfmpeg: boolean,
+  webGpuAvailable: boolean
+) {
+  return recommendMode(requestedMode, needsFfmpeg, "low", webGpuAvailable)
+}
 
 type NavigatorWithGpu = Navigator & {
   gpu?: {

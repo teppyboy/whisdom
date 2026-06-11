@@ -1,5 +1,9 @@
 import type { AppSettings, WhisperModel } from "./types"
 
+export type LocalModelDtype = "fp32" | "q4"
+
+export const FULL_PRECISION_BROWSER_MODEL_LIMIT_MB = 1000
+
 export const WHISPER_MODELS: WhisperModel[] = [
   {
     id: "onnx-community/whisper-base",
@@ -26,6 +30,30 @@ export const WHISPER_MODELS: WhisperModel[] = [
     notes: "Better accuracy, heavier download and memory use.",
   },
   {
+    id: "onnx-community/whisper-medium_timestamped",
+    label: "Whisper Medium Timestamped",
+    sizeMb: 1450,
+    quality: "high",
+    multilingual: true,
+    notes: "High-accuracy multilingual model with timestamp-focused weights for high-end devices.",
+  },
+  {
+    id: "onnx-community/whisper-large-v3-turbo",
+    label: "Whisper Large v3 Turbo",
+    sizeMb: 1600,
+    quality: "high",
+    multilingual: true,
+    notes: "Best high-end default: much higher accuracy than Small while staying faster than full Large v3.",
+  },
+  {
+    id: "onnx-community/whisper-large-v3-ONNX",
+    label: "Whisper Large v3",
+    sizeMb: 3100,
+    quality: "high",
+    multilingual: true,
+    notes: "Maximum accuracy option. Very large download and long initialization; intended for high-end devices.",
+  },
+  {
     id: "onnx-community/whisper-tiny.en",
     label: "Whisper Tiny English",
     sizeMb: 75,
@@ -47,4 +75,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export function findModel(modelId: string) {
   return WHISPER_MODELS.find((model) => model.id === modelId) ?? WHISPER_MODELS[0]
+}
+
+export function getLocalModelDtype(model: WhisperModel): LocalModelDtype {
+  return model.sizeMb > FULL_PRECISION_BROWSER_MODEL_LIMIT_MB ? "q4" : "fp32"
+}
+
+export function requiresWebGpuForLocalModel(model: WhisperModel) {
+  return getLocalModelDtype(model) === "q4"
+}
+
+export function canRunModelLocally(model: WhisperModel, device: "webgpu" | "wasm") {
+  return !requiresWebGpuForLocalModel(model) || device === "webgpu"
 }
