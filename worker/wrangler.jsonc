@@ -1,0 +1,14 @@
+{
+  "name": "whisdom-ai",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "ALLOWED_ORIGIN": "https://example.github.io",
+    "ALLOWED_EMAILS": "",
+    "ALLOWED_DOMAINS": ""
+  }
+}

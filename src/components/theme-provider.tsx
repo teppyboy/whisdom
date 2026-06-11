@@ -13,6 +13,7 @@ type ThemeProviderProps = {
 
 type ThemeProviderState = {
   theme: Theme
+  resolvedTheme: ResolvedTheme
   setTheme: (theme: Theme) => void
 }
 
@@ -37,6 +38,27 @@ function getSystemTheme(): ResolvedTheme {
   }
 
   return "light"
+}
+
+function getSystemThemeSnapshot(): ResolvedTheme {
+  if (typeof window === "undefined") {
+    return "light"
+  }
+
+  return getSystemTheme()
+}
+
+function subscribeToSystemTheme(onStoreChange: () => void) {
+  if (typeof window === "undefined") {
+    return () => undefined
+  }
+
+  const mediaQuery = window.matchMedia(COLOR_SCHEME_QUERY)
+  mediaQuery.addEventListener("change", onStoreChange)
+
+  return () => {
+    mediaQuery.removeEventListener("change", onStoreChange)
+  }
 }
 
 function disableTransitionsTemporarily() {
@@ -92,6 +114,12 @@ export function ThemeProvider({
 
     return defaultTheme
   })
+  const systemTheme = React.useSyncExternalStore(
+    subscribeToSystemTheme,
+    getSystemThemeSnapshot,
+    (): ResolvedTheme => "light"
+  )
+  const resolvedTheme = theme === "system" ? systemTheme : theme
 
   const setTheme = React.useCallback(
     (nextTheme: Theme) => {
@@ -105,7 +133,7 @@ export function ThemeProvider({
     (nextTheme: Theme) => {
       const root = document.documentElement
       const resolvedTheme =
-        nextTheme === "system" ? getSystemTheme() : nextTheme
+        nextTheme === "system" ? systemTheme : nextTheme
       const restoreTransitions = disableTransitionOnChange
         ? disableTransitionsTemporarily()
         : null
@@ -117,26 +145,11 @@ export function ThemeProvider({
         restoreTransitions()
       }
     },
-    [disableTransitionOnChange]
+    [disableTransitionOnChange, systemTheme]
   )
 
   React.useEffect(() => {
     applyTheme(theme)
-
-    if (theme !== "system") {
-      return undefined
-    }
-
-    const mediaQuery = window.matchMedia(COLOR_SCHEME_QUERY)
-    const handleChange = () => {
-      applyTheme("system")
-    }
-
-    mediaQuery.addEventListener("change", handleChange)
-
-    return () => {
-      mediaQuery.removeEventListener("change", handleChange)
-    }
   }, [theme, applyTheme])
 
   React.useEffect(() => {
@@ -207,9 +220,10 @@ export function ThemeProvider({
   const value = React.useMemo(
     () => ({
       theme,
+      resolvedTheme,
       setTheme,
     }),
-    [theme, setTheme]
+    [theme, resolvedTheme, setTheme]
   )
 
   return (

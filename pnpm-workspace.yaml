@@ -1,5 +1,10 @@
-packages: []
+packages:
+  - worker
 
 allowBuilds:
   esbuild: true
   msw: false
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false
+  workerd: false
