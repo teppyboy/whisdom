@@ -29,7 +29,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -41,6 +40,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
@@ -105,6 +113,13 @@ const MODES: Array<{ value: ProcessingMode; label: string; detail: string }> = [
 const EXPORTS: ExportFormat[] = ["txt", "json", "srt", "vtt"]
 
 type View = "home" | "settings"
+type ProgressLogEntry = {
+  id: string
+  phase: JobState
+  message: string
+  progress?: number
+  updatedAt: string
+}
 type DriveStatus =
   | { type: "idle" }
   | { type: "opening-google" }
@@ -148,6 +163,7 @@ const COPY = {
     loadingWhisper: "Loading Whisper model",
     reusingWhisper: "Using loaded Whisper model",
     preparingModel: "Preparing model",
+    downloadingModelAssets: "Downloading model assets",
     downloading: (file: string) => `Downloading ${file}`,
     transcribingAudio: "Transcribing audio",
     loadingFfmpeg: "Loading ffmpeg.wasm",
@@ -156,7 +172,7 @@ const COPY = {
     backHome: "Back to home",
     quickSetup: "Transcription setup",
     quickSetupDescription: "Choose the model and spoken language before uploading or transcribing.",
-    settingsDescription: "Interface language, processing mode, and advanced options.",
+    settingsDescription: "Processing mode, storage, and advanced options.",
     interfaceLanguage: "Interface language",
     interfaceLanguageDescription: "Language used by the website UI.",
     transcription: "Transcription",
@@ -189,15 +205,23 @@ const COPY = {
     chunks: "Chunks",
     emptyPreflight: "Select a file to calculate duration, chunks, downloads, and mode.",
     downloads: "Downloads",
+    detailedLog: "Detailed log",
+    showDetailedLog: "Show detailed log",
+    hideDetailedLog: "Hide detailed log",
     unknownDuration: "Unknown",
     confirmTranscribe: "Confirm downloads and transcribe",
     transcript: "Transcript",
     timestamps: "Timestamps",
     transcriptDetails: "Model and processing details",
+    rawText: "Raw text",
+    textWithTimestamps: "Text with timestamps",
+    downloadFiles: "Download files",
+    closeResults: "Close results",
     readyForOutput: "Ready for output",
     emptyTranscript: "Your transcript appears here after local transcription. Export names include source, language, date, and time.",
     recent: "Recent",
     emptyHistory: "No transcripts saved yet.",
+    openTranscript: "Open transcript",
     removeTranscript: "Remove transcript",
     downloadDescription: (notes: string, sizeMb: number) => `${notes} ~${sizeMb} MB download.`,
     modelDescriptions: {
@@ -268,6 +292,7 @@ const COPY = {
     loadingWhisper: "Đang tải mô hình Whisper",
     reusingWhisper: "Đang dùng mô hình Whisper đã tải",
     preparingModel: "Đang chuẩn bị mô hình",
+    downloadingModelAssets: "Đang tải tài nguyên mô hình",
     downloading: (file: string) => `Đang tải ${file}`,
     transcribingAudio: "Đang tạo bản chép",
     loadingFfmpeg: "Đang tải ffmpeg.wasm",
@@ -276,7 +301,7 @@ const COPY = {
     backHome: "Quay lại trang chính",
     quickSetup: "Thiết lập chép lời",
     quickSetupDescription: "Chọn mô hình và ngôn ngữ nói trước khi tải tệp hoặc bắt đầu xử lý.",
-    settingsDescription: "Ngôn ngữ giao diện, chế độ xử lý và tùy chọn nâng cao.",
+    settingsDescription: "Chế độ xử lý, lưu trữ và tùy chọn nâng cao.",
     interfaceLanguage: "Ngôn ngữ giao diện",
     interfaceLanguageDescription: "Ngôn ngữ dùng cho website.",
     transcription: "Chép lời",
@@ -309,15 +334,23 @@ const COPY = {
     chunks: "Đoạn",
     emptyPreflight: "Chọn tệp để xem thời lượng, số đoạn, tài nguyên cần tải và chế độ xử lý.",
     downloads: "Cần tải",
+    detailedLog: "Nhật ký chi tiết",
+    showDetailedLog: "Hiện nhật ký chi tiết",
+    hideDetailedLog: "Ẩn nhật ký chi tiết",
     unknownDuration: "Không rõ",
     confirmTranscribe: "Tải và tạo bản chép",
     transcript: "Bản chép",
     timestamps: "Mốc thời gian",
     transcriptDetails: "Thông tin mô hình và xử lý",
+    rawText: "Văn bản thuần",
+    textWithTimestamps: "Văn bản kèm mốc thời gian",
+    downloadFiles: "Tải tệp xuống",
+    closeResults: "Đóng kết quả",
     readyForOutput: "Sẵn sàng xuất",
     emptyTranscript: "Bản chép sẽ xuất hiện ở đây sau khi xử lý. Tên tệp xuất gồm nguồn, ngôn ngữ, ngày và giờ.",
     recent: "Gần đây",
     emptyHistory: "Chưa có bản chép nào.",
+    openTranscript: "Mở bản chép",
     removeTranscript: "Xóa bản chép",
     downloadDescription: (notes: string, sizeMb: number) => `${notes} Khoảng ${sizeMb} MB.`,
     modelDescriptions: {
@@ -394,6 +427,10 @@ function localizeProgressMessage(message: string, copy: Copy) {
     return copy.preparingModel
   }
 
+  if (message === "Downloading model assets") {
+    return copy.downloadingModelAssets
+  }
+
   if (message.startsWith("Downloading ")) {
     return copy.downloading(message.slice("Downloading ".length))
   }
@@ -430,7 +467,9 @@ export function App() {
     message: COPY.en.waiting,
     progress: 0,
   })
+  const [progressLog, setProgressLog] = React.useState<ProgressLogEntry[]>([])
   const [transcript, setTranscript] = React.useState<TranscriptDocument | null>(null)
+  const [isResultOpen, setIsResultOpen] = React.useState(false)
   const [history, setHistory] = React.useState<TranscriptDocument[]>([])
   const [error, setError] = React.useState<string | null>(null)
   const [driveStatus, setDriveStatus] = React.useState<DriveStatus>({ type: "idle" })
@@ -454,20 +493,62 @@ export function App() {
   const canStart = file && analysis && !isBusy(jobState)
   const isEnglishOnlyMismatch = isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) && !model.multilingual
 
+  function recordProgress(nextProgress: TranscriptionProgress) {
+    const localizedProgress: TranscriptionProgress = {
+      ...nextProgress,
+      message: localizeProgressMessage(nextProgress.message, t),
+      detail: nextProgress.detail
+        ? {
+            ...nextProgress.detail,
+            message: localizeProgressMessage(nextProgress.detail.message, t),
+          }
+        : undefined,
+    }
+
+    setProgress(localizedProgress)
+
+    const detail = localizedProgress.detail ?? {
+      id: `phase:${localizedProgress.phase}`,
+      message: localizedProgress.message,
+      progress: localizedProgress.progress,
+    }
+    const updatedAt = new Date().toLocaleTimeString()
+
+    setProgressLog((current) => {
+      const existingIndex = current.findIndex((entry) => entry.id === detail.id)
+      const nextEntry: ProgressLogEntry = {
+        id: detail.id,
+        phase: localizedProgress.phase,
+        message: detail.message,
+        progress: detail.progress,
+        updatedAt,
+      }
+
+      if (existingIndex === -1) {
+        return [...current, nextEntry]
+      }
+
+      const nextLog = [...current]
+      nextLog[existingIndex] = nextEntry
+      return nextLog
+    })
+  }
+
   async function analyzeSelectedFile(nextFile: File, nextSettings: AppSettings, resetTranscript: boolean) {
     setFile(nextFile)
     if (resetTranscript) {
       setTranscript(null)
     }
     setError(null)
+    setProgressLog([])
     setJobState("analyzing")
-    setProgress({ phase: "analyzing", message: t.readingMetadata, progress: 0.08 })
+    recordProgress({ phase: "analyzing", message: t.readingMetadata, progress: 0.08 })
 
     try {
       const result = await analyzeMediaFile(nextFile, nextSettings)
       setAnalysis(result)
       setJobState("awaiting-confirmation")
-      setProgress({
+      recordProgress({
         phase: "awaiting-confirmation",
         message: t.reviewPlan,
         progress: 0.18,
@@ -514,11 +595,12 @@ export function App() {
         setJobState("preparing-media")
         input = await convertWithFfmpeg({
           file,
-        onProgress: (message, nextProgress) => {
-            setProgress({
+          onProgress: (nextProgress) => {
+            recordProgress({
               phase: "preparing-media",
-              message: localizeProgressMessage(message, t),
-              progress: nextProgress * 0.35,
+              message: nextProgress.message,
+              progress: nextProgress.progress * 0.35,
+              detail: nextProgress.detail,
             })
           },
         })
@@ -533,10 +615,7 @@ export function App() {
         device,
         dtype: getLocalModelDtype(runModel),
         onProgress: (nextProgress) => {
-          setProgress({
-            ...nextProgress,
-            message: localizeProgressMessage(nextProgress.message, t),
-          })
+          recordProgress(nextProgress)
           setJobState(nextProgress.phase)
         },
       })
@@ -557,9 +636,10 @@ export function App() {
       setJobState("saving")
       await saveTranscript(document)
       setTranscript(document)
+      setIsResultOpen(true)
       setHistory(await listTranscripts())
       setJobState("complete")
-      setProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+      recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
     } catch (caught) {
       setJobState("error")
       setError(caught instanceof Error ? caught.message : t.transcriptionFailed)
@@ -588,7 +668,15 @@ export function App() {
   async function removeTranscript(id: string) {
     await deleteTranscript(id)
     setHistory((current) => current.filter((item) => item.id !== id))
-    setTranscript((current) => (current?.id === id ? null : current))
+    if (transcript?.id === id) {
+      setIsResultOpen(false)
+      setTranscript(null)
+    }
+  }
+
+  function openTranscriptResult(document: TranscriptDocument) {
+    setTranscript(document)
+    setIsResultOpen(true)
   }
 
   function updateSetting<T extends keyof AppSettings>(key: T, value: AppSettings[T]) {
@@ -638,6 +726,32 @@ export function App() {
                 <span className="block text-xs font-normal text-muted-foreground">{driveStatusText}</span>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <div className="px-2 py-1.5">
+                <div className="mb-2 text-xs text-muted-foreground">{t.interfaceLanguage}</div>
+                <div
+                  className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"
+                  role="group"
+                  aria-label={t.interfaceLanguage}
+                >
+                  {UI_LANGUAGES.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      className={cn(
+                        "rounded-lg px-2 py-1.5 text-xs font-medium transition-colors",
+                        settings.uiLanguage === item.value
+                          ? "bg-background text-foreground shadow-xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                      aria-pressed={settings.uiLanguage === item.value}
+                      onClick={() => updateSetting("uiLanguage", item.value)}
+                    >
+                      {item.value.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={!isGoogleDriveConfigured()}
                 onClick={() => void syncTranscriptToDrive()}
@@ -650,13 +764,16 @@ export function App() {
                 {t.settings}
               </DropdownMenuItem>
               <DropdownMenuItem
-                className="cursor-default gap-3"
+                className="grid cursor-default grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-2"
                 onSelect={(event) => event.preventDefault()}
               >
-                {resolvedTheme === "dark" ? <Moon /> : <Sun />}
-                <span className="flex-1">{t.toggleTheme}</span>
+                <span className="flex size-4 items-center justify-center">
+                  {resolvedTheme === "dark" ? <Moon /> : <Sun />}
+                </span>
+                <span className="leading-5">{t.toggleTheme}</span>
                 <Switch
                   aria-label={t.toggleTheme}
+                  size="sm"
                   checked={resolvedTheme === "dark"}
                   onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
                 />
@@ -714,19 +831,17 @@ export function App() {
                 }}
               />
 
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(360px,0.58fr)]">
-                <PreflightPanel
-                  analysis={analysis}
-                  model={model.label}
-                  copy={t}
-                  progress={progress}
-                  jobState={jobState}
-                  error={error}
-                  canStart={Boolean(canStart)}
-                  onStart={() => void startTranscription()}
-                />
-                <TranscriptPanel transcript={transcript} onExport={downloadTranscript} copy={t} />
-              </div>
+              <PreflightPanel
+                analysis={analysis}
+                model={model.label}
+                copy={t}
+                progress={progress}
+                progressLog={progressLog}
+                jobState={jobState}
+                error={error}
+                canStart={Boolean(canStart)}
+                onStart={() => void startTranscription()}
+              />
             </div>
 
             <aside className="flex min-w-0 flex-col gap-4">
@@ -738,7 +853,7 @@ export function App() {
 
               <HistoryPanel
                 history={history}
-                onSelect={setTranscript}
+                onSelect={openTranscriptResult}
                 onRemove={(id) => void removeTranscript(id)}
                 copy={t}
               />
@@ -746,6 +861,13 @@ export function App() {
           </section>
         )}
       </div>
+      <ResultDialog
+        transcript={transcript}
+        open={isResultOpen}
+        onOpenChange={setIsResultOpen}
+        onExport={downloadTranscript}
+        copy={t}
+      />
     </main>
   )
 }
@@ -890,13 +1012,13 @@ function LanguageCombobox({
 
       {open ? (
         <div className="absolute z-50 mt-2 w-full min-w-[18rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg animate-in fade-in-0 zoom-in-95 duration-150">
-          <div className="flex items-center gap-2 border-b px-3 py-2">
+          <div className="flex items-center gap-2 border-b px-4 py-2.5">
             <Search className="size-4 text-muted-foreground" />
             <Input
               role="searchbox"
               aria-label={copy.searchLanguage}
               value={query}
-              className="h-8 border-0 px-0 shadow-none focus-visible:ring-0"
+              className="h-8 border-0 px-1 shadow-none focus-visible:ring-0"
               placeholder={copy.searchLanguage}
               autoFocus
               onChange={(event) => setQuery(event.target.value)}
@@ -908,7 +1030,7 @@ function LanguageCombobox({
             />
           </div>
 
-          <div role="listbox" className="max-h-72 overflow-auto p-1">
+          <div role="listbox" className="max-h-72 overflow-auto p-2">
             {options.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm text-muted-foreground">
                 {copy.noLanguages}
@@ -920,7 +1042,7 @@ function LanguageCombobox({
                   type="button"
                   role="option"
                   aria-selected={item.code === value}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground aria-selected:bg-accent"
+                  className="flex w-full items-center gap-3 rounded-sm px-3 py-3 text-left text-sm hover:bg-accent hover:text-accent-foreground aria-selected:bg-accent"
                   onClick={() => {
                     onValueChange(item.code)
                     setQuery("")
@@ -934,7 +1056,7 @@ function LanguageCombobox({
                       {item.code === "auto" ? copy.spokenLanguage : item.nativeName}
                     </span>
                   </span>
-                  <span className="text-xs uppercase text-muted-foreground">{item.code}</span>
+                  <span className="shrink-0 pr-1 text-xs uppercase text-muted-foreground">{item.code}</span>
                 </button>
               ))
             )}
@@ -971,35 +1093,6 @@ function SettingsPage({
       </div>
 
       <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
-        <CardHeader>
-          <CardTitle>{copy.transcription}</CardTitle>
-          <CardDescription>{copy.transcriptionDescription}</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-5">
-          <SettingRow
-            label={copy.interfaceLanguage}
-            description={copy.interfaceLanguageDescription}
-          >
-            <Select
-              value={settings.uiLanguage}
-              onValueChange={(value) => updateSetting("uiLanguage", value as UiLanguage)}
-            >
-              <SelectTrigger aria-label={copy.interfaceLanguage} className="w-full sm:w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="end">
-                {UI_LANGUAGES.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingRow>
-        </CardContent>
-      </Card>
-
-      <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out delay-75">
         <CardHeader>
           <CardTitle>{copy.processing}</CardTitle>
           <CardDescription>{copy.processingDescription}</CardDescription>
@@ -1048,7 +1141,7 @@ function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out delay-150">
+      <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out delay-75">
         <CardHeader>
           <CardTitle>{copy.storage}</CardTitle>
           <CardDescription>{copy.storageDescription}</CardDescription>
@@ -1143,6 +1236,7 @@ function PreflightPanel({
   model,
   copy,
   progress,
+  progressLog,
   jobState,
   error,
   canStart,
@@ -1152,12 +1246,14 @@ function PreflightPanel({
   model: string
   copy: Copy
   progress: TranscriptionProgress
+  progressLog: ProgressLogEntry[]
   jobState: JobState
   error: string | null
   canStart: boolean
   onStart: () => void
 }) {
   const progressMessage = progress.phase === "idle" ? copy.waiting : progress.message
+  const [showDetailedLog, setShowDetailedLog] = React.useState(false)
 
   return (
     <Card>
@@ -1220,6 +1316,41 @@ function PreflightPanel({
             <span className="text-muted-foreground">{progressMessage}</span>
             <span className="font-medium">{Math.round(progress.progress * 100)}%</span>
           </div>
+          {progressLog.length > 0 ? (
+            <div className="rounded-md border bg-muted/20">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-muted/40"
+                onClick={() => setShowDetailedLog((current) => !current)}
+                aria-expanded={showDetailedLog}
+              >
+                <span className="font-medium">{copy.detailedLog}</span>
+                <span className="text-xs text-muted-foreground">
+                  {showDetailedLog ? copy.hideDetailedLog : copy.showDetailedLog}
+                </span>
+              </button>
+              {showDetailedLog ? (
+                <div className="max-h-52 overflow-auto border-t px-3 py-2">
+                  <div className="grid gap-2">
+                    {progressLog.map((entry) => (
+                      <div key={entry.id} className="grid gap-1 text-xs">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="min-w-0 truncate text-muted-foreground">{entry.message}</span>
+                          <span className="shrink-0 font-medium">
+                            {entry.progress === undefined ? "--" : `${Math.round(entry.progress * 100)}%`}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground/70">
+                          <span>{copy.jobStateLabels[entry.phase]}</span>
+                          <span>{entry.updatedAt}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {error ? (
             <p className="animate-in fade-in slide-in-from-top-1 text-sm text-destructive duration-200">
               {error}
@@ -1235,83 +1366,97 @@ function PreflightPanel({
   )
 }
 
-function TranscriptPanel({
+function ResultDialog({
   transcript,
+  open,
+  onOpenChange,
   onExport,
   copy,
 }: {
   transcript: TranscriptDocument | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
   onExport: (document: TranscriptDocument, format: ExportFormat) => void
   copy: Copy
 }) {
   const transcriptModel = transcript ? findModel(transcript.modelId) : null
 
   return (
-    <Card className="flex min-h-[420px] flex-col">
-      <CardHeader className="border-b">
-        <CardDescription>{copy.transcript}</CardDescription>
-        <CardTitle className="truncate text-base">
-          {transcript?.title ?? copy.readyForOutput}
-        </CardTitle>
-        {transcript ? (
-          <div className="flex flex-wrap gap-2 pt-2" aria-label={copy.transcriptDetails}>
-            <Badge variant="secondary">{transcriptModel?.label ?? transcript.modelId}</Badge>
-            <Badge variant="outline">{copy.modeLabels[transcript.mode]}</Badge>
-            <Badge variant="outline">
-              {getLanguageLabel(transcript.language, copy.languageLabels.auto)}
-            </Badge>
-          </div>
-        ) : null}
-      </CardHeader>
-      <CardContent className="min-h-0 flex-1 space-y-5 pt-5">
+    <Dialog open={open && Boolean(transcript)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90svh] max-w-6xl overflow-hidden p-0">
         {transcript ? (
           <>
-            <Textarea
-              key={transcript.id}
-              className="min-h-[220px] w-full resize-none animate-in fade-in slide-in-from-bottom-1 text-sm leading-6 duration-300"
-              value={transcript.text}
-              onChange={() => undefined}
-              readOnly
-            />
-            <div className="animate-in fade-in slide-in-from-bottom-1 rounded-md border duration-300">
-              <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-                {copy.timestamps}
+            <DialogHeader className="border-b px-5 py-4 sm:px-6">
+              <DialogDescription>{copy.transcript}</DialogDescription>
+              <DialogTitle className="truncate text-base sm:text-lg">
+                {transcript.title}
+              </DialogTitle>
+              <div className="flex flex-wrap gap-2 pt-1" aria-label={copy.transcriptDetails}>
+                <Badge variant="secondary">{transcriptModel?.label ?? transcript.modelId}</Badge>
+                <Badge variant="outline">{copy.modeLabels[transcript.mode]}</Badge>
+                <Badge variant="outline">
+                  {getLanguageLabel(transcript.language, copy.languageLabels.auto)}
+                </Badge>
               </div>
-              <div className="max-h-56 overflow-auto">
-                {transcript.segments.map((segment) => (
-                  <div
-                    key={segment.id}
-                    className="grid gap-1 border-b px-3 py-2 last:border-b-0 sm:grid-cols-[7rem_1fr] sm:gap-3"
+            </DialogHeader>
+
+            <div className="grid min-h-0 gap-0 overflow-hidden lg:grid-cols-2">
+              <section className="min-h-0 border-b p-4 lg:border-r lg:border-b-0 sm:p-6">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-medium">{copy.rawText}</h3>
+                </div>
+                <Textarea
+                  key={transcript.id}
+                  className="h-[32svh] min-h-72 resize-none text-sm leading-6 lg:h-[48svh]"
+                  value={transcript.text}
+                  onChange={() => undefined}
+                  readOnly
+                />
+              </section>
+
+              <section className="min-h-0 p-4 sm:p-6">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-medium">{copy.textWithTimestamps}</h3>
+                </div>
+                <div className="h-[32svh] min-h-72 overflow-auto rounded-md border lg:h-[48svh]">
+                  {transcript.segments.map((segment) => (
+                    <div
+                      key={segment.id}
+                      className="grid gap-1 border-b px-3 py-2.5 last:border-b-0 sm:grid-cols-[7rem_1fr] sm:gap-3"
+                    >
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {formatSegmentTime(segment.start)} - {formatSegmentTime(segment.end)}
+                      </span>
+                      <span className="text-sm leading-6">{segment.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            <DialogFooter className="items-center justify-between gap-3 border-t px-5 py-4 sm:flex-row sm:px-6">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="mr-1 text-sm text-muted-foreground">{copy.downloadFiles}</span>
+                {EXPORTS.map((format) => (
+                  <Button
+                    key={format}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onExport(transcript, format)}
                   >
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {formatSegmentTime(segment.start)} - {formatSegmentTime(segment.end)}
-                    </span>
-                    <span className="text-sm leading-6">{segment.text}</span>
-                  </div>
+                    <Download />
+                    .{format}
+                  </Button>
                 ))}
               </div>
-            </div>
+              <DialogClose asChild>
+                <Button variant="secondary">{copy.closeResults}</Button>
+              </DialogClose>
+            </DialogFooter>
           </>
-        ) : (
-          <div className="grid h-full min-h-[280px] animate-in place-items-center rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground fade-in duration-200">
-            {copy.emptyTranscript}
-          </div>
-        )}
-      </CardContent>
-      <CardFooter className="flex-wrap gap-2 border-t pt-5">
-        {EXPORTS.map((format) => (
-          <Button
-            key={format}
-            variant="outline"
-            size="sm"
-            disabled={!transcript}
-            onClick={() => transcript && onExport(transcript, format)}
-          >
-            .{format}
-          </Button>
-        ))}
-      </CardFooter>
-    </Card>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1341,6 +1486,7 @@ function HistoryPanel({
               <button
                 type="button"
                 className="min-w-0 text-left"
+                aria-label={`${copy.openTranscript}: ${item.title}`}
                 onClick={() => onSelect(item)}
               >
                 <span className="block truncate font-medium">{item.title}</span>

@@ -80,6 +80,11 @@ export type TranscriptionProgress = {
   phase: JobState
   message: string
   progress: number
+  detail?: {
+    id: string
+    message: string
+    progress?: number
+  }
 }
 
 export type AppSettings = {

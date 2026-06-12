@@ -37,6 +37,8 @@ let transcriber:
   | ((input: string | Blob | Float32Array, options?: Record<string, unknown>) => Promise<PipelineResult>)
   | null = null
 let loadedKey = ""
+let downloadProgress = new Map<string, number>()
+let lastDownloadProgress = 0.05
 
 self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   if (event.data.type !== "transcribe") {
@@ -49,14 +51,40 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     const key = `${event.data.modelId}:${event.data.device}:${event.data.dtype}`
 
     if (!transcriber || loadedKey !== key) {
+      downloadProgress = new Map()
+      lastDownloadProgress = 0.05
       transcriber = (await pipeline("automatic-speech-recognition", event.data.modelId, {
         device: event.data.device === "webgpu" ? "webgpu" : "wasm",
         dtype: event.data.dtype,
         progress_callback: (progress: { progress?: number; status?: string; file?: string }) => {
+          const fileProgress = typeof progress.progress === "number" ? progress.progress / 100 : undefined
+
+          if (progress.file && fileProgress !== undefined) {
+            downloadProgress.set(progress.file, Math.min(1, Math.max(0, fileProgress)))
+          }
+
+          const averageProgress = downloadProgress.size > 0
+            ? [...downloadProgress.values()].reduce((total, value) => total + value, 0) / downloadProgress.size
+            : 0
+          lastDownloadProgress = Math.max(
+            lastDownloadProgress,
+            Math.min(0.32, 0.05 + averageProgress * 0.27)
+          )
+
           postProgress(event.data.id, {
             phase: "downloading-assets",
-            message: progress.file ? `Downloading ${progress.file}` : progress.status ?? "Preparing model",
-            progress: progress.progress ? Math.min(progress.progress / 100, 0.95) : 0.15,
+            message: progress.file ? "Downloading model assets" : progress.status ?? "Preparing model",
+            progress: lastDownloadProgress,
+            detail: progress.file
+              ? {
+                  id: `model:${progress.file}`,
+                  message: `Downloading ${progress.file}`,
+                  progress: fileProgress,
+                }
+              : {
+                  id: "model:prepare",
+                  message: progress.status ?? "Preparing model",
+                },
           })
         },
       })) as typeof transcriber

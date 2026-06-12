@@ -24,7 +24,13 @@ self.onmessage = async (event: MessageEvent<ConvertRequest>) => {
 
   try {
     activeRequestId = event.data.id
-    self.postMessage({ type: "progress", id: event.data.id, progress: 0.05, message: "Loading ffmpeg.wasm" })
+    self.postMessage({
+      type: "progress",
+      id: event.data.id,
+      progress: 0.05,
+      message: "Loading ffmpeg.wasm",
+      detail: { id: "ffmpeg:load", message: "Loading ffmpeg.wasm", progress: 0.05 },
+    })
     const [{ fetchFile }] = await Promise.all([import("@ffmpeg/util")])
     const ffmpeg = await getFfmpeg(event.data.id)
 
@@ -59,7 +65,13 @@ function getFfmpeg(requestId: string) {
   if (!ffmpegPromise) {
     ffmpegPromise = loadFfmpeg()
   } else {
-    self.postMessage({ type: "progress", id: requestId, progress: 0.12, message: "Reusing ffmpeg.wasm" })
+    self.postMessage({
+      type: "progress",
+      id: requestId,
+      progress: 0.12,
+      message: "Reusing ffmpeg.wasm",
+      detail: { id: "ffmpeg:load", message: "Reusing ffmpeg.wasm", progress: 1 },
+    })
   }
 
   return ffmpegPromise
@@ -79,6 +91,7 @@ async function loadFfmpeg() {
       id: activeRequestId,
       progress: Math.min(0.95, progress),
       message: "Converting media",
+      detail: { id: "ffmpeg:convert", message: "Converting media", progress: Math.min(0.95, progress) },
     })
   })
 

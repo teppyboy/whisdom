@@ -109,6 +109,9 @@ test.describe("Whisdom", () => {
     await expect(page.getByText("Review downloads and processing plan")).toBeVisible()
     await expect(page.getByText("Whisper Base").nth(1)).toBeVisible()
     await expect(page.getByText("Resume after tab close will require re-picking the original file.")).toBeVisible()
+    await page.getByRole("button", { name: /Detailed log/ }).click()
+    await expect(page.getByText("Reading media metadata")).toBeVisible()
+    await expect(page.getByText("Review downloads and processing plan").last()).toBeVisible()
     await expect(page.getByRole("button", { name: /Confirm downloads and transcribe/i })).toBeEnabled()
   })
 
@@ -145,25 +148,21 @@ test.describe("Whisdom", () => {
   })
 
   test("switches website copy to Vietnamese", async ({ page }) => {
-    await openSettings(page)
-    await page.getByLabel("Interface language").click()
-    await page.getByRole("option", { name: "Tiếng Việt" }).click()
+    await page.getByRole("button", { name: "Account menu" }).click()
+    await page.getByRole("button", { name: "VI" }).click()
 
-    await expect(page.getByRole("heading", { name: "Cài đặt" })).toBeVisible()
-    await expect(page.getByText("Ngôn ngữ giao diện", { exact: true })).toBeVisible()
-
-    await page.getByRole("button", { name: "Quay lại trang chính" }).click()
-    await expect(page.getByRole("heading", { name: "Thả âm thanh hoặc video" })).toBeVisible()
-    await page.getByRole("button", { name: "Menu tài khoản" }).click()
+    await expect(page.getByRole("button", { name: "VI" })).toHaveAttribute("aria-pressed", "true")
     await expect(page.getByRole("menuitem", { name: "Cài đặt" })).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("heading", { name: "Thả âm thanh hoặc video" })).toBeVisible()
   })
 
   test("settings page fits mobile viewport", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto("/")
-    await openSettings(page)
-    await page.getByLabel("Interface language").click()
-    await page.getByRole("option", { name: "Tiếng Việt" }).click()
+    await page.getByRole("button", { name: "Account menu" }).click()
+    await page.getByRole("button", { name: "VI" }).click()
+    await page.getByRole("menuitem", { name: "Cài đặt" }).click()
 
     await expect(page.getByRole("heading", { name: "Cài đặt" })).toBeVisible()
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
@@ -198,6 +197,14 @@ test.describe("Whisdom", () => {
     await expect(page.getByText("Research call")).toBeVisible()
     await expect(page.getByText("Whisper Large v3 Turbo")).toBeVisible()
     await expect(page.getByText("Korean / 한국어")).toBeVisible()
+
+    await page.getByRole("button", { name: "Open transcript: Research call" }).click()
+    await expect(page.getByRole("dialog", { name: "Research call" })).toBeVisible()
+    await expect(page.getByText("Raw text")).toBeVisible()
+    await expect(page.getByText("Text with timestamps")).toBeVisible()
+    await expect(page.getByText("Download files")).toBeVisible()
+    await expect(page.locator("textarea")).toHaveValue("Seeded transcript")
+    await page.getByRole("button", { name: "Close results" }).click()
 
     await page.getByRole("button", { name: "Remove transcript: Research call" }).click()
 

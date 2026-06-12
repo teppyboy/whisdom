@@ -82,7 +82,7 @@ async function transcribeFixture(page: Page, fixture: Fixture) {
   })
   await page.getByRole("button", { name: /Confirm downloads and transcribe/i }).click()
   await expect(page.getByText("Transcript ready")).toBeVisible({ timeout: 300_000 })
-  await expect(page.getByText("Timestamps")).toBeVisible()
+  await expect(page.getByText("Text with timestamps")).toBeVisible()
   await expect(page.getByText(/0:00 -/).first()).toBeVisible()
   return page.locator("textarea").inputValue({ timeout: 10_000 })
 }

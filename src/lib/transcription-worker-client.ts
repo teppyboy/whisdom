@@ -26,9 +26,9 @@ let transcriptionWorker: Worker | null = null
 let activeTranscription: ActiveTranscription | null = null
 let ffmpegWorker: Worker | null = null
 let activeConversion:
-  | {
+    | {
       id: string
-      onProgress: (message: string, progress: number) => void
+      onProgress: (progress: TranscriptionProgress) => void
       resolve: (blob: Blob) => void
       reject: (error: Error) => void
     }
@@ -200,7 +200,7 @@ function cleanTranscriptText(text: string) {
 
 export function convertWithFfmpeg(args: {
   file: File
-  onProgress: (message: string, progress: number) => void
+  onProgress: (progress: TranscriptionProgress) => void
 }) {
   return new Promise<Blob>((resolve, reject) => {
     if (activeConversion) {
@@ -226,7 +226,12 @@ export function convertWithFfmpeg(args: {
       }
 
       if (event.data.type === "progress") {
-        current.onProgress(event.data.message, event.data.progress)
+        current.onProgress({
+          phase: "preparing-media",
+          message: event.data.message,
+          progress: event.data.progress,
+          detail: event.data.detail,
+        })
         return
       }
 
