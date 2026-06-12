@@ -7,6 +7,7 @@ const ignoredWarnings = [
 ]
 
 const originalWarn = console.warn.bind(console)
+const MODEL_CACHE_KEY = "whisdom-transformers-models-v1"
 
 console.warn = (...args: unknown[]) => {
   const message = args.map(String).join(" ")
@@ -39,6 +40,8 @@ let transcriber:
 let loadedKey = ""
 let downloadProgress = new Map<string, number>()
 let lastDownloadProgress = 0.05
+let cacheConfigured = false
+const cachedModelFiles = new Set<string>()
 
 self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   if (event.data.type !== "transcribe") {
@@ -47,7 +50,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
   try {
     postProgress(event.data.id, { phase: "downloading-assets", message: "Loading Whisper model", progress: 0.05 })
-    const { pipeline } = await import("@huggingface/transformers")
+    const { pipeline, env } = await import("@huggingface/transformers")
+    await configureTransformersCache(env)
     const key = `${event.data.modelId}:${event.data.device}:${event.data.dtype}`
 
     if (!transcriber || loadedKey !== key) {
@@ -71,14 +75,20 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
             Math.min(0.32, 0.05 + averageProgress * 0.27)
           )
 
+          const fileIsCached = progress.file ? cachedModelFiles.has(progress.file) : false
+
           postProgress(event.data.id, {
             phase: "downloading-assets",
-            message: progress.file ? "Downloading model assets" : progress.status ?? "Preparing model",
+            message: progress.file
+              ? fileIsCached
+                ? "Using saved model assets"
+                : "Downloading model assets"
+              : progress.status ?? "Preparing model",
             progress: lastDownloadProgress,
             detail: progress.file
               ? {
                   id: `model:${progress.file}`,
-                  message: `Downloading ${progress.file}`,
+                  message: fileIsCached ? `Using saved ${progress.file}` : `Downloading ${progress.file}`,
                   progress: fileProgress,
                 }
               : {
@@ -126,6 +136,73 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       id: event.data.id,
       error: formatTranscriptionError(error),
     })
+  }
+}
+
+async function configureTransformersCache(env: {
+  allowLocalModels: boolean
+  useBrowserCache: boolean
+  useCustomCache: boolean
+  useWasmCache: boolean
+  cacheKey: string
+  customCache: unknown
+}) {
+  if (cacheConfigured) {
+    return
+  }
+
+  env.allowLocalModels = false
+  env.useBrowserCache = true
+  env.useWasmCache = true
+  env.cacheKey = MODEL_CACHE_KEY
+
+  if (typeof caches !== "undefined") {
+    const cache = await caches.open(MODEL_CACHE_KEY)
+
+    env.useCustomCache = true
+    env.customCache = {
+      async match(request: string) {
+        const response = await cache.match(request)
+
+        if (response) {
+          const fileName = getModelFileName(request)
+
+          if (fileName) {
+            cachedModelFiles.add(fileName)
+          }
+        }
+
+        return response
+      },
+      async put(request: string, response: Response) {
+        await cache.put(request, response)
+        const fileName = getModelFileName(request)
+
+        if (fileName) {
+          cachedModelFiles.add(fileName)
+        }
+      },
+    }
+  }
+
+  void navigator.storage?.persist?.().catch(() => undefined)
+  cacheConfigured = true
+}
+
+function getModelFileName(request: string) {
+  try {
+    const pathname = new URL(request).pathname
+    const marker = "/resolve/"
+    const resolveIndex = pathname.indexOf(marker)
+
+    if (resolveIndex !== -1) {
+      const parts = pathname.slice(resolveIndex + marker.length).split("/")
+      return decodeURIComponent(parts.slice(1).join("/"))
+    }
+
+    return decodeURIComponent(pathname.split("/").pop() ?? "")
+  } catch {
+    return request.split("/").slice(-2).join("/")
   }
 }
 

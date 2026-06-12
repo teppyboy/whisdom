@@ -10,6 +10,7 @@ import type {
 const VIDEO_TYPE_PATTERN = /^video\//
 const AUDIO_TYPE_PATTERN = /^audio\//
 const SERVER_CHUNK_LIMIT_MB = 10
+const MEDIA_METADATA_TIMEOUT_MS = 5000
 
 export async function analyzeMediaFile(
   file: File,
@@ -208,20 +209,37 @@ export async function getWebGpuStatus(): Promise<WebGpuStatus> {
   }
 }
 
-function readMediaDuration(file: File): Promise<number | null> {
+export function readMediaDuration(
+  file: File,
+  timeoutMs = MEDIA_METADATA_TIMEOUT_MS
+): Promise<number | null> {
   return new Promise((resolve) => {
     const element = document.createElement(file.type.startsWith("video/") ? "video" : "audio")
     const url = URL.createObjectURL(file)
+    let settled = false
+
+    const finish = (duration: number | null) => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timeout)
+      element.removeAttribute("src")
+      element.load()
+      URL.revokeObjectURL(url)
+      resolve(duration)
+    }
+
+    const timeout = window.setTimeout(() => finish(null), timeoutMs)
 
     element.preload = "metadata"
     element.onloadedmetadata = () => {
       const duration = Number.isFinite(element.duration) ? element.duration : null
-      URL.revokeObjectURL(url)
-      resolve(duration)
+      finish(duration)
     }
     element.onerror = () => {
-      URL.revokeObjectURL(url)
-      resolve(null)
+      finish(null)
     }
     element.src = url
   })

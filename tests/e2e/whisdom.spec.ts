@@ -37,6 +37,29 @@ async function chooseAudio(page: Page) {
   })
 }
 
+async function chooseNamedAudio(page: Page, name: string) {
+  await page.locator('input[type="file"]').setInputFiles({
+    name,
+    mimeType: "audio/wav",
+    buffer: createSilentWav(1),
+  })
+}
+
+async function chooseAudioFiles(page: Page) {
+  await page.locator('input[type="file"]').setInputFiles([
+    {
+      name: "first.wav",
+      mimeType: "audio/wav",
+      buffer: createSilentWav(1),
+    },
+    {
+      name: "second.wav",
+      mimeType: "audio/wav",
+      buffer: createSilentWav(1),
+    },
+  ])
+}
+
 async function searchLanguage(page: Page, query: string, option: string | RegExp) {
   await page.getByLabel("Language", { exact: true }).click()
   await page.getByRole("searchbox", { name: "Search language" }).fill(query)
@@ -113,6 +136,41 @@ test.describe("Whisdom", () => {
     await expect(page.getByText("Reading media metadata")).toBeVisible()
     await expect(page.getByText("Review downloads and processing plan").last()).toBeVisible()
     await expect(page.getByRole("button", { name: /Confirm downloads and transcribe/i })).toBeEnabled()
+  })
+
+  test("queues multiple files and switches selected preflight", async ({ page }) => {
+    await chooseAudioFiles(page)
+
+    await expect(page.getByRole("heading", { name: "2 files selected" })).toBeVisible()
+    await expect(page.getByText("Selected: first.wav")).toBeVisible()
+    await expect(page.getByText("File queue")).toBeVisible()
+    await expect(page.getByRole("button", { name: "Select file: first.wav" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Select file: second.wav" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Transcribe all 2 files" })).toBeEnabled()
+
+    await page.getByRole("button", { name: "Select file: second.wav" }).click()
+
+    await expect(page.getByText("Selected: second.wav")).toBeVisible()
+    await expect(page.getByText("Review downloads and processing plan")).toBeVisible()
+    await expect(page.getByRole("button", { name: "Transcribe selected file" })).toBeEnabled()
+  })
+
+  test("appends files picked in separate selections", async ({ page }) => {
+    await chooseNamedAudio(page, "first.wav")
+    await expect(page.getByRole("heading", { name: "first.wav" })).toBeVisible()
+
+    await chooseNamedAudio(page, "second.wav")
+
+    await expect(page.getByRole("heading", { name: "2 files selected" })).toBeVisible()
+    await expect(page.getByText("Selected: first.wav")).toBeVisible()
+    await expect(page.getByRole("button", { name: "Select file: first.wav" })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Select file: second.wav" })).toBeVisible()
+
+    await page.getByRole("button", { name: "Remove file: first.wav" }).click()
+
+    await expect(page.getByRole("heading", { name: "second.wav" })).toBeVisible()
+    await expect(page.getByText("2 files selected")).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "Select file: first.wav" })).toHaveCount(0)
   })
 
   test("updates preflight model after settings change", async ({ page }) => {
@@ -204,11 +262,17 @@ test.describe("Whisdom", () => {
     await expect(page.getByText("Text with timestamps")).toBeVisible()
     await expect(page.getByText("Download files")).toBeVisible()
     await expect(page.locator("textarea")).toHaveValue("Seeded transcript")
+    await page.getByLabel("Rename transcript").fill("Renamed call")
+    await page.getByRole("button", { name: "Save name" }).click()
+    await expect(page.getByRole("dialog", { name: "Renamed call" })).toBeVisible()
     await page.getByRole("button", { name: "Close results" }).click()
 
-    await page.getByRole("button", { name: "Remove transcript: Research call" }).click()
-
+    await expect(page.getByRole("button", { name: "Open transcript: Renamed call" })).toBeVisible()
     await expect(page.getByText("Research call")).toHaveCount(0)
+
+    await page.getByRole("button", { name: "Remove transcript: Renamed call" }).click()
+
+    await expect(page.getByText("Renamed call")).toHaveCount(0)
     await expect(page.getByText("No transcripts saved yet.")).toBeVisible()
   })
 

@@ -42,6 +42,24 @@ export async function deleteTranscript(id: string) {
   await db.delete("transcripts", id)
 }
 
+export async function renameTranscript(id: string, title: string) {
+  const db = await getDb()
+  const document = await db.get("transcripts", id) as TranscriptDocument | undefined
+
+  if (!document) {
+    return null
+  }
+
+  const updated: TranscriptDocument = {
+    ...document,
+    title,
+    updatedAt: new Date().toISOString(),
+  }
+
+  await db.put("transcripts", updated)
+  return updated
+}
+
 export async function listTranscripts(): Promise<TranscriptDocument[]> {
   const db = await getDb()
   const documents = await db.getAll("transcripts")

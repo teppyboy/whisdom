@@ -82,6 +82,7 @@ import {
   deleteTranscript,
   listTranscripts,
   loadSettings,
+  renameTranscript,
   saveSettings,
   saveTranscript,
 } from "@/features/storage/indexed-db"
@@ -119,6 +120,19 @@ type ProgressLogEntry = {
   message: string
   progress?: number
   updatedAt: string
+}
+type QueuedFileStatus = "pending" | "active" | "complete" | "error"
+type QueuedFile = {
+  id: string
+  file: File
+  status: QueuedFileStatus
+  transcriptId?: string
+  error?: string
+}
+type ToastMessage = {
+  id: string
+  title: string
+  description: string
 }
 type DriveStatus =
   | { type: "idle" }
@@ -162,6 +176,8 @@ const COPY = {
     decodedAudio: "Decoded audio for Whisper",
     loadingWhisper: "Loading Whisper model",
     reusingWhisper: "Using loaded Whisper model",
+    usingSavedModelAssets: "Using saved model assets",
+    usingSavedModelAsset: (file: string) => `Using saved ${file}`,
     preparingModel: "Preparing model",
     downloadingModelAssets: "Downloading model assets",
     downloading: (file: string) => `Downloading ${file}`,
@@ -198,6 +214,19 @@ const COPY = {
     dropTitle: "Drop audio or video",
     dropDescription: "Preflight checks the file before any model or ffmpeg download. Video is converted locally, then transcribed in chunks.",
     chooseFile: "Choose file",
+    filesSelected: (count: number) => `${count} files selected`,
+    selectedFile: (name: string) => `Selected: ${name}`,
+    fileQueue: "File queue",
+    selectFile: "Select file",
+    removeFile: "Remove file",
+    transcribeSelected: "Transcribe selected file",
+    transcribeAll: (count: number) => `Transcribe all ${count} files`,
+    queueStatusLabels: {
+      pending: "Pending",
+      active: "Processing",
+      complete: "Complete",
+      error: "Error",
+    } satisfies Record<QueuedFileStatus, string>,
     preflight: "Preflight",
     processingPlan: "Processing plan",
     duration: "Duration",
@@ -217,6 +246,12 @@ const COPY = {
     textWithTimestamps: "Text with timestamps",
     downloadFiles: "Download files",
     closeResults: "Close results",
+    renameTranscript: "Rename transcript",
+    saveName: "Save name",
+    batchComplete: (count: number) => `${count} transcripts saved to Recent.`,
+    batchCompleteWithFailures: (completed: number, failed: number) =>
+      `${completed} transcripts saved. ${failed} files need attention.`,
+    dismissNotification: "Dismiss notification",
     readyForOutput: "Ready for output",
     emptyTranscript: "Your transcript appears here after local transcription. Export names include source, language, date, and time.",
     recent: "Recent",
@@ -291,6 +326,8 @@ const COPY = {
     decodedAudio: "Đã giải mã audio cho Whisper",
     loadingWhisper: "Đang tải mô hình Whisper",
     reusingWhisper: "Đang dùng mô hình Whisper đã tải",
+    usingSavedModelAssets: "Đang dùng tài nguyên mô hình đã lưu",
+    usingSavedModelAsset: (file: string) => `Đang dùng ${file} đã lưu`,
     preparingModel: "Đang chuẩn bị mô hình",
     downloadingModelAssets: "Đang tải tài nguyên mô hình",
     downloading: (file: string) => `Đang tải ${file}`,
@@ -327,6 +364,19 @@ const COPY = {
     dropTitle: "Thả âm thanh hoặc video",
     dropDescription: "Tệp được kiểm tra trước khi tải mô hình hoặc ffmpeg. Video sẽ được chuyển thành âm thanh trên thiết bị rồi xử lý theo đoạn.",
     chooseFile: "Chọn tệp",
+    filesSelected: (count: number) => `Đã chọn ${count} tệp`,
+    selectedFile: (name: string) => `Đang chọn: ${name}`,
+    fileQueue: "Hàng đợi tệp",
+    selectFile: "Chọn tệp",
+    removeFile: "Xóa tệp",
+    transcribeSelected: "Chép tệp đang chọn",
+    transcribeAll: (count: number) => `Chép tất cả ${count} tệp`,
+    queueStatusLabels: {
+      pending: "Chờ xử lý",
+      active: "Đang xử lý",
+      complete: "Hoàn tất",
+      error: "Lỗi",
+    } satisfies Record<QueuedFileStatus, string>,
     preflight: "Kiểm tra tệp",
     processingPlan: "Kế hoạch xử lý",
     duration: "Thời lượng",
@@ -346,6 +396,12 @@ const COPY = {
     textWithTimestamps: "Văn bản kèm mốc thời gian",
     downloadFiles: "Tải tệp xuống",
     closeResults: "Đóng kết quả",
+    renameTranscript: "Đổi tên bản chép",
+    saveName: "Lưu tên",
+    batchComplete: (count: number) => `Đã lưu ${count} bản chép vào Gần đây.`,
+    batchCompleteWithFailures: (completed: number, failed: number) =>
+      `Đã lưu ${completed} bản chép. ${failed} tệp cần kiểm tra lại.`,
+    dismissNotification: "Đóng thông báo",
     readyForOutput: "Sẵn sàng xuất",
     emptyTranscript: "Bản chép sẽ xuất hiện ở đây sau khi xử lý. Tên tệp xuất gồm nguồn, ngôn ngữ, ngày và giờ.",
     recent: "Gần đây",
@@ -423,6 +479,14 @@ function localizeProgressMessage(message: string, copy: Copy) {
     return copy.reusingWhisper
   }
 
+  if (message === "Using saved model assets") {
+    return copy.usingSavedModelAssets
+  }
+
+  if (message.startsWith("Using saved ")) {
+    return copy.usingSavedModelAsset(message.slice("Using saved ".length))
+  }
+
   if (message === "Preparing model") {
     return copy.preparingModel
   }
@@ -460,6 +524,8 @@ export function App() {
   const [settings, setSettings] = React.useState<AppSettings>(DEFAULT_SETTINGS)
   const t = COPY[settings.uiLanguage]
   const [file, setFile] = React.useState<File | null>(null)
+  const [queue, setQueue] = React.useState<QueuedFile[]>([])
+  const [selectedQueueId, setSelectedQueueId] = React.useState<string | null>(null)
   const [analysis, setAnalysis] = React.useState<MediaAnalysis | null>(null)
   const [jobState, setJobState] = React.useState<JobState>("idle")
   const [progress, setProgress] = React.useState<TranscriptionProgress>({
@@ -470,6 +536,7 @@ export function App() {
   const [progressLog, setProgressLog] = React.useState<ProgressLogEntry[]>([])
   const [transcript, setTranscript] = React.useState<TranscriptDocument | null>(null)
   const [isResultOpen, setIsResultOpen] = React.useState(false)
+  const [toastMessage, setToastMessage] = React.useState<ToastMessage | null>(null)
   const [history, setHistory] = React.useState<TranscriptDocument[]>([])
   const [error, setError] = React.useState<string | null>(null)
   const [driveStatus, setDriveStatus] = React.useState<DriveStatus>({ type: "idle" })
@@ -483,6 +550,7 @@ export function App() {
       setSettings(storedSettings)
     })
     void listTranscripts().then(setHistory)
+    void navigator.storage?.persist?.().catch(() => undefined)
   }, [])
 
   React.useEffect(() => {
@@ -491,6 +559,7 @@ export function App() {
 
   const model = findModel(settings.modelId)
   const canStart = file && analysis && !isBusy(jobState)
+  const canStartAll = queue.length > 1 && !isBusy(jobState)
   const isEnglishOnlyMismatch = isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) && !model.multilingual
 
   function recordProgress(nextProgress: TranscriptionProgress) {
@@ -534,8 +603,24 @@ export function App() {
     })
   }
 
-  async function analyzeSelectedFile(nextFile: File, nextSettings: AppSettings, resetTranscript: boolean) {
+  function updateQueueItem(id: string | null, patch: Partial<QueuedFile>) {
+    if (!id) {
+      return
+    }
+
+    setQueue((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    )
+  }
+
+  async function analyzeSelectedFile(
+    nextFile: File,
+    nextSettings: AppSettings,
+    resetTranscript: boolean,
+    queueId = selectedQueueId
+  ) {
     setFile(nextFile)
+    setSelectedQueueId(queueId)
     if (resetTranscript) {
       setTranscript(null)
     }
@@ -559,8 +644,126 @@ export function App() {
     }
   }
 
-  async function handleFile(nextFile: File) {
-    await analyzeSelectedFile(nextFile, settings, true)
+  async function handleFiles(nextFiles: File[]) {
+    if (nextFiles.length === 0) {
+      return
+    }
+
+    const addedQueue = nextFiles.map((nextFile) => ({
+      id: createId("file"),
+      file: nextFile,
+      status: "pending" as const,
+    }))
+    const shouldAnalyzeFirstAddedFile = queue.length === 0 || !file
+
+    setQueue((current) => [...current, ...addedQueue])
+
+    if (shouldAnalyzeFirstAddedFile) {
+      await analyzeSelectedFile(addedQueue[0].file, settingsRef.current, true, addedQueue[0].id)
+    }
+  }
+
+  async function removeQueuedFile(id: string) {
+    const nextQueue = queue.filter((item) => item.id !== id)
+    setQueue(nextQueue)
+
+    if (selectedQueueId !== id) {
+      return
+    }
+
+    const removedIndex = queue.findIndex((item) => item.id === id)
+    const nextSelected = nextQueue[Math.min(Math.max(removedIndex, 0), nextQueue.length - 1)]
+
+    if (nextSelected) {
+      await analyzeSelectedFile(nextSelected.file, settingsRef.current, false, nextSelected.id)
+      return
+    }
+
+    setSelectedQueueId(null)
+    setFile(null)
+    setAnalysis(null)
+    setError(null)
+    setProgressLog([])
+    setJobState("idle")
+    setProgress({ phase: "idle", message: t.waiting, progress: 0 })
+  }
+
+  async function transcribeFile(targetFile: File, queueId: string | null, runSettings: AppSettings) {
+    const runModel = findModel(runSettings.modelId)
+
+    if (runSettings.mode === "cloudflare-ai") {
+      setError(t.serverGuardrail)
+      throw new Error(t.serverGuardrail)
+    }
+
+    setFile(targetFile)
+    setSelectedQueueId(queueId)
+    updateQueueItem(queueId, { status: "active", error: undefined })
+    setError(null)
+    setProgressLog([])
+    setJobState("analyzing")
+    recordProgress({ phase: "analyzing", message: t.readingMetadata, progress: 0.08 })
+    let input: File | Blob = targetFile
+
+    const freshAnalysis = await analyzeMediaFile(targetFile, runSettings)
+    setAnalysis(freshAnalysis)
+    const effectiveMode = freshAnalysis.recommendedMode === "local-webgpu" ? "local-webgpu" : "local-wasm"
+    const device = effectiveMode === "local-webgpu" ? "webgpu" : "wasm"
+
+    if (!canRunModelLocally(runModel, device)) {
+      setJobState("error")
+      throw new Error(t.largeModelNeedsWebGpu(runModel.label))
+    }
+
+    if (freshAnalysis.needsFfmpeg) {
+      setJobState("preparing-media")
+      input = await convertWithFfmpeg({
+        file: targetFile,
+        onProgress: (nextProgress) => {
+          recordProgress({
+            phase: "preparing-media",
+            message: nextProgress.message,
+            progress: nextProgress.progress * 0.35,
+            detail: nextProgress.detail,
+          })
+        },
+      })
+    }
+
+    setJobState("transcribing")
+    const effectiveLanguage = resolveTranscriptionLanguage(runSettings.language, runSettings.uiLanguage)
+    const result = await transcribeLocally({
+      file: input,
+      modelId: runSettings.modelId,
+      language: effectiveLanguage,
+      device,
+      dtype: getLocalModelDtype(runModel),
+      onProgress: (nextProgress) => {
+        recordProgress(nextProgress)
+        setJobState(nextProgress.phase)
+      },
+    })
+    const now = new Date().toISOString()
+    const document: TranscriptDocument = {
+      id: createId("transcript"),
+      title: targetFile.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
+      sourceName: targetFile.name,
+      language: effectiveLanguage,
+      modelId: runSettings.modelId,
+      mode: effectiveMode,
+      createdAt: now,
+      updatedAt: now,
+      text: result.text,
+      segments: result.segments,
+    }
+
+    setJobState("saving")
+    await saveTranscript(document)
+    updateQueueItem(queueId, { status: "complete", transcriptId: document.id })
+    setHistory(await listTranscripts())
+    setJobState("complete")
+    recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+    return document
   }
 
   async function startTranscription() {
@@ -568,81 +771,56 @@ export function App() {
       return
     }
 
-    const runSettings = settingsRef.current
-    const runModel = findModel(runSettings.modelId)
-
-    if (runSettings.mode === "cloudflare-ai") {
-      setError(t.serverGuardrail)
-      return
-    }
-
-    setError(null)
-    let input: File | Blob = file
-
     try {
-      const freshAnalysis = await analyzeMediaFile(file, runSettings)
-      setAnalysis(freshAnalysis)
-      const effectiveMode = freshAnalysis.recommendedMode === "local-webgpu" ? "local-webgpu" : "local-wasm"
-      const device = effectiveMode === "local-webgpu" ? "webgpu" : "wasm"
-
-      if (!canRunModelLocally(runModel, device)) {
-        setError(t.largeModelNeedsWebGpu(runModel.label))
-        setJobState("error")
-        return
-      }
-
-      if (freshAnalysis.needsFfmpeg) {
-        setJobState("preparing-media")
-        input = await convertWithFfmpeg({
-          file,
-          onProgress: (nextProgress) => {
-            recordProgress({
-              phase: "preparing-media",
-              message: nextProgress.message,
-              progress: nextProgress.progress * 0.35,
-              detail: nextProgress.detail,
-            })
-          },
-        })
-      }
-
-      setJobState("transcribing")
-      const effectiveLanguage = resolveTranscriptionLanguage(runSettings.language, runSettings.uiLanguage)
-      const result = await transcribeLocally({
-        file: input,
-        modelId: runSettings.modelId,
-        language: effectiveLanguage,
-        device,
-        dtype: getLocalModelDtype(runModel),
-        onProgress: (nextProgress) => {
-          recordProgress(nextProgress)
-          setJobState(nextProgress.phase)
-        },
-      })
-      const now = new Date().toISOString()
-      const document: TranscriptDocument = {
-        id: createId("transcript"),
-        title: file.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
-        sourceName: file.name,
-        language: effectiveLanguage,
-        modelId: runSettings.modelId,
-        mode: effectiveMode,
-        createdAt: now,
-        updatedAt: now,
-        text: result.text,
-        segments: result.segments,
-      }
-
-      setJobState("saving")
-      await saveTranscript(document)
+      const document = await transcribeFile(file, selectedQueueId, settingsRef.current)
       setTranscript(document)
       setIsResultOpen(true)
-      setHistory(await listTranscripts())
-      setJobState("complete")
-      recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
     } catch (caught) {
       setJobState("error")
-      setError(caught instanceof Error ? caught.message : t.transcriptionFailed)
+      const message = caught instanceof Error ? caught.message : t.transcriptionFailed
+      setError(message)
+      updateQueueItem(selectedQueueId, { status: "error", error: message })
+    }
+  }
+
+  async function startBatchTranscription() {
+    const runSettings = settingsRef.current
+    const queueSnapshot = queue.length > 0 ? queue : file ? [{ id: selectedQueueId ?? createId("file"), file, status: "pending" as const }] : []
+    const completed: TranscriptDocument[] = []
+    const failures: string[] = []
+
+    setIsResultOpen(false)
+
+    for (const item of queueSnapshot) {
+      try {
+        const document = await transcribeFile(item.file, item.id, runSettings)
+        completed.push(document)
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : t.transcriptionFailed
+        failures.push(`${item.file.name}: ${message}`)
+        updateQueueItem(item.id, { status: "error", error: message })
+      }
+    }
+
+    if (completed.length > 0) {
+      setHistory(await listTranscripts())
+      setJobState(failures.length > 0 ? "error" : "complete")
+      setToastMessage({
+        id: createId("toast"),
+        title: t.transcriptReady,
+        description:
+          failures.length > 0
+            ? t.batchCompleteWithFailures(completed.length, failures.length)
+            : t.batchComplete(completed.length),
+      })
+    }
+
+    if (failures.length > 0) {
+      setError(failures.join("\n"))
+    }
+
+    if (completed.length === 0 && failures.length === 0) {
+      setJobState("idle")
     }
   }
 
@@ -679,6 +857,18 @@ export function App() {
     setIsResultOpen(true)
   }
 
+  async function renameTranscriptTitle(id: string, title: string) {
+    const nextTitle = title.trim() || t.untitledTranscript
+    const updated = await renameTranscript(id, nextTitle)
+
+    if (!updated) {
+      return
+    }
+
+    setTranscript((current) => (current?.id === id ? updated : current))
+    setHistory(await listTranscripts())
+  }
+
   function updateSetting<T extends keyof AppSettings>(key: T, value: AppSettings[T]) {
     const nextSettings = { ...settings, [key]: value }
 
@@ -686,7 +876,7 @@ export function App() {
     setSettings(nextSettings)
 
     if (file && analysis && jobState === "awaiting-confirmation") {
-      void analyzeSelectedFile(file, nextSettings, false)
+      void analyzeSelectedFile(file, nextSettings, false, selectedQueueId)
     }
   }
 
@@ -812,24 +1002,38 @@ export function App() {
 
               <DropZone
                 file={file}
+                fileCount={queue.length}
                 isBusy={isBusy(jobState)}
                 copy={t}
                 onPick={() => fileInputRef.current?.click()}
-                onDropFile={(nextFile) => void handleFile(nextFile)}
+                onDropFiles={(nextFiles) => void handleFiles(nextFiles)}
               />
 
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 accept="audio/*,video/*"
                 className="hidden"
                 onChange={(event) => {
-                  const nextFile = event.target.files?.[0]
-                  if (nextFile) {
-                    void handleFile(nextFile)
+                  const nextFiles = Array.from(event.target.files ?? [])
+                  if (nextFiles.length > 0) {
+                    void handleFiles(nextFiles)
                   }
+                  event.currentTarget.value = ""
                 }}
               />
+
+              {queue.length > 1 ? (
+                <FileQueuePanel
+                  queue={queue}
+                  selectedId={selectedQueueId}
+                  disabled={isBusy(jobState)}
+                  copy={t}
+                  onSelect={(item) => void analyzeSelectedFile(item.file, settingsRef.current, false, item.id)}
+                  onRemove={(id) => void removeQueuedFile(id)}
+                />
+              ) : null}
 
               <PreflightPanel
                 analysis={analysis}
@@ -840,7 +1044,10 @@ export function App() {
                 jobState={jobState}
                 error={error}
                 canStart={Boolean(canStart)}
+                canStartAll={canStartAll}
+                queueCount={queue.length}
                 onStart={() => void startTranscription()}
+                onStartAll={() => void startBatchTranscription()}
               />
             </div>
 
@@ -866,6 +1073,12 @@ export function App() {
         open={isResultOpen}
         onOpenChange={setIsResultOpen}
         onExport={downloadTranscript}
+        onRename={(id, title) => void renameTranscriptTitle(id, title)}
+        copy={t}
+      />
+      <AppToast
+        message={toastMessage}
+        onDismiss={() => setToastMessage(null)}
         copy={t}
       />
     </main>
@@ -1185,17 +1398,22 @@ function SettingRow({
 
 function DropZone({
   file,
+  fileCount,
   isBusy,
   copy,
   onPick,
-  onDropFile,
+  onDropFiles,
 }: {
   file: File | null
+  fileCount: number
   isBusy: boolean
   copy: Copy
   onPick: () => void
-  onDropFile: (file: File) => void
+  onDropFiles: (files: File[]) => void
 }) {
+  const title = file ? (fileCount > 1 ? copy.filesSelected(fileCount) : file.name) : copy.dropTitle
+  const description = file && fileCount > 1 ? copy.selectedFile(file.name) : copy.dropDescription
+
   return (
     <div
       className={cn(
@@ -1205,9 +1423,9 @@ function DropZone({
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault()
-        const droppedFile = event.dataTransfer.files[0]
-        if (droppedFile) {
-          onDropFile(droppedFile)
+        const droppedFiles = Array.from(event.dataTransfer.files)
+        if (droppedFiles.length > 0) {
+          onDropFiles(droppedFiles)
         }
       }}
     >
@@ -1217,10 +1435,10 @@ function DropZone({
         </div>
         <div className="space-y-1.5">
           <h2 className="text-xl font-semibold tracking-tight">
-            {file ? file.name : copy.dropTitle}
+            {title}
           </h2>
           <p className="mx-auto max-w-[58ch] text-sm leading-6 text-muted-foreground">
-            {copy.dropDescription}
+            {description}
           </p>
         </div>
         <Button onClick={onPick} disabled={isBusy}>
@@ -1228,6 +1446,68 @@ function DropZone({
         </Button>
       </div>
     </div>
+  )
+}
+
+function FileQueuePanel({
+  queue,
+  selectedId,
+  disabled,
+  copy,
+  onSelect,
+  onRemove,
+}: {
+  queue: QueuedFile[]
+  selectedId: string | null
+  disabled: boolean
+  copy: Copy
+  onSelect: (item: QueuedFile) => void
+  onRemove: (id: string) => void
+}) {
+  return (
+    <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+      <CardHeader className="pb-3">
+        <CardDescription>{copy.fileQueue}</CardDescription>
+        <CardTitle className="text-base">{copy.filesSelected(queue.length)}</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-2">
+        {queue.map((item) => (
+          <div
+            key={item.id}
+            className={cn(
+              "grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded-md border px-2 py-2 text-sm transition-colors",
+              selectedId === item.id ? "border-ring bg-accent" : "hover:bg-accent/60",
+              disabled && "cursor-not-allowed opacity-70"
+            )}
+          >
+            <button
+              type="button"
+              className="min-w-0 text-left"
+              aria-label={`${copy.selectFile}: ${item.file.name}`}
+              disabled={disabled}
+              onClick={() => onSelect(item)}
+            >
+              <span className="block truncate font-medium">{item.file.name}</span>
+              <span className="block text-xs text-muted-foreground">{bytesToMb(item.file.size)} MB</span>
+            </button>
+            <Badge variant={item.status === "error" ? "destructive" : item.status === "complete" ? "secondary" : "outline"}>
+              {copy.queueStatusLabels[item.status]}
+            </Badge>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8 text-muted-foreground hover:text-destructive"
+              aria-label={`${copy.removeFile}: ${item.file.name}`}
+              disabled={disabled}
+              onClick={() => onRemove(item.id)}
+            >
+              <Trash2 />
+            </Button>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -1240,7 +1520,10 @@ function PreflightPanel({
   jobState,
   error,
   canStart,
+  canStartAll,
+  queueCount,
   onStart,
+  onStartAll,
 }: {
   analysis: MediaAnalysis | null
   model: string
@@ -1250,7 +1533,10 @@ function PreflightPanel({
   jobState: JobState
   error: string | null
   canStart: boolean
+  canStartAll: boolean
+  queueCount: number
   onStart: () => void
+  onStartAll: () => void
 }) {
   const progressMessage = progress.phase === "idle" ? copy.waiting : progress.message
   const [showDetailedLog, setShowDetailedLog] = React.useState(false)
@@ -1356,10 +1642,18 @@ function PreflightPanel({
               {error}
             </p>
           ) : null}
-          <Button className="w-full" disabled={!canStart} onClick={onStart}>
-            {isBusy(jobState) ? <Loader2 className="animate-spin" /> : <Play />}
-            {copy.confirmTranscribe}
-          </Button>
+          <div className={cn("grid gap-2", queueCount > 1 && "sm:grid-cols-2")}>
+            <Button className="w-full" disabled={!canStart} onClick={onStart}>
+              {isBusy(jobState) ? <Loader2 className="animate-spin" /> : <Play />}
+              {queueCount > 1 ? copy.transcribeSelected : copy.confirmTranscribe}
+            </Button>
+            {queueCount > 1 ? (
+              <Button className="w-full" variant="outline" disabled={!canStartAll} onClick={onStartAll}>
+                {isBusy(jobState) ? <Loader2 className="animate-spin" /> : <Play />}
+                {copy.transcribeAll(queueCount)}
+              </Button>
+            ) : null}
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -1371,12 +1665,14 @@ function ResultDialog({
   open,
   onOpenChange,
   onExport,
+  onRename,
   copy,
 }: {
   transcript: TranscriptDocument | null
   open: boolean
   onOpenChange: (open: boolean) => void
   onExport: (document: TranscriptDocument, format: ExportFormat) => void
+  onRename: (id: string, title: string) => void
   copy: Copy
 }) {
   const transcriptModel = transcript ? findModel(transcript.modelId) : null
@@ -1388,9 +1684,13 @@ function ResultDialog({
           <>
             <DialogHeader className="border-b px-5 py-4 sm:px-6">
               <DialogDescription>{copy.transcript}</DialogDescription>
-              <DialogTitle className="truncate text-base sm:text-lg">
-                {transcript.title}
-              </DialogTitle>
+              <DialogTitle className="sr-only">{transcript.title}</DialogTitle>
+              <RenameTitleForm
+                key={transcript.id}
+                transcript={transcript}
+                onRename={onRename}
+                copy={copy}
+              />
               <div className="flex flex-wrap gap-2 pt-1" aria-label={copy.transcriptDetails}>
                 <Badge variant="secondary">{transcriptModel?.label ?? transcript.modelId}</Badge>
                 <Badge variant="outline">{copy.modeLabels[transcript.mode]}</Badge>
@@ -1460,6 +1760,42 @@ function ResultDialog({
   )
 }
 
+function RenameTitleForm({
+  transcript,
+  onRename,
+  copy,
+}: {
+  transcript: TranscriptDocument
+  onRename: (id: string, title: string) => void
+  copy: Copy
+}) {
+  const [title, setTitle] = React.useState(transcript.title)
+
+  function saveTitle(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    onRename(transcript.id, title)
+  }
+
+  return (
+    <form className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={saveTitle}>
+      <Input
+        value={title}
+        aria-label={copy.renameTranscript}
+        className="h-9 text-base font-semibold sm:text-lg"
+        onChange={(event) => setTitle(event.target.value)}
+      />
+      <Button
+        type="submit"
+        size="sm"
+        variant="secondary"
+        disabled={title.trim() === transcript.title}
+      >
+        {copy.saveName}
+      </Button>
+    </form>
+  )
+}
+
 function HistoryPanel({
   history,
   onSelect,
@@ -1517,6 +1853,44 @@ function HistoryPanel({
         )}
       </div>
     </Card>
+  )
+}
+
+function AppToast({
+  message,
+  onDismiss,
+  copy,
+}: {
+  message: ToastMessage | null
+  onDismiss: () => void
+  copy: Copy
+}) {
+  if (!message) {
+    return null
+  }
+
+  return (
+    <div className="fixed right-4 bottom-4 z-50 w-[calc(100vw-2rem)] max-w-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
+      <div role="status" aria-live="polite" className="rounded-lg border bg-popover p-4 text-popover-foreground shadow-lg">
+        <div className="flex items-start gap-3">
+          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">{message.title}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{message.description}</p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2"
+            aria-label={copy.dismissNotification}
+            onClick={onDismiss}
+          >
+            ×
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }
 
