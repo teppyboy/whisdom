@@ -90,7 +90,6 @@ import {
 import {
   isGoogleDriveConfigured,
   requestDriveAccess,
-  uploadTranscriptMetadata,
 } from "@/features/google-drive/drive"
 import { clearModelCaches } from "@/features/storage/cleanup"
 import { cn } from "@/lib/utils"
@@ -138,6 +137,7 @@ type ToastMessage = {
 }
 type DriveStatus =
   | { type: "idle" }
+  | { type: "connected" }
   | { type: "opening-google" }
   | { type: "uploading-metadata" }
   | { type: "synced"; id: string }
@@ -161,6 +161,7 @@ const COPY = {
     openingGoogle: "Opening Google",
     uploadingMetadata: "Uploading metadata",
     driveSyncFailed: "Drive sync failed",
+    googleConnected: "Google connected",
     synced: (id: string) => `Synced ${id}`,
     notConnected: "Not connected",
     waiting: "Waiting for audio or video",
@@ -320,6 +321,7 @@ const COPY = {
     openingGoogle: "Đang mở Google",
     uploadingMetadata: "Đang đồng bộ dữ liệu",
     driveSyncFailed: "Không thể đồng bộ Drive",
+    googleConnected: "Đã kết nối Google",
     synced: (id: string) => `Đã đồng bộ ${id}`,
     notConnected: "Chưa kết nối",
     waiting: "Chọn tệp âm thanh hoặc video",
@@ -479,6 +481,8 @@ function getDriveStatusText(status: DriveStatus, copy: Copy) {
       return copy.uploadingMetadata
     case "synced":
       return copy.synced(status.id)
+    case "connected":
+      return copy.googleConnected
     case "error":
       return status.message
     case "idle":
@@ -560,6 +564,7 @@ export function App() {
   const [history, setHistory] = React.useState<TranscriptDocument[]>([])
   const [error, setError] = React.useState<string | null>(null)
   const [driveStatus, setDriveStatus] = React.useState<DriveStatus>({ type: "idle" })
+  const [driveAccessToken, setDriveAccessToken] = React.useState<string | null>(null)
   const settingsRef = React.useRef(settings)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const driveStatusText = getDriveStatusText(driveStatus, t)
@@ -844,22 +849,24 @@ export function App() {
     }
   }
 
-  async function syncTranscriptToDrive() {
-    if (!transcript) {
-      return
-    }
-
+  async function signInWithGoogle() {
     try {
       setDriveStatus({ type: "opening-google" })
       const token = await requestDriveAccess()
-      setDriveStatus({ type: "uploading-metadata" })
-      const result = await uploadTranscriptMetadata(token, transcript)
-      setDriveStatus({ type: "synced", id: result.id.slice(0, 8) })
+      setDriveAccessToken(token)
+      setDriveStatus({ type: "connected" })
+      setToastMessage({
+        id: createId("toast"),
+        title: t.googleConnected,
+        description: t.googleConnected,
+      })
+      return token
     } catch (caught) {
       setDriveStatus({
         type: "error",
         message: caught instanceof Error ? caught.message : t.driveSyncFailed,
       })
+      return null
     }
   }
 
@@ -991,10 +998,10 @@ export function App() {
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={!isGoogleDriveConfigured()}
-                onClick={() => void syncTranscriptToDrive()}
+                onClick={() => void signInWithGoogle()}
               >
                 <HardDrive />
-                {t.signInGoogle}
+                {driveAccessToken ? t.googleConnected : t.signInGoogle}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setView("settings")}>
                 <Settings2 />
