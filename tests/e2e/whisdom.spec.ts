@@ -276,4 +276,31 @@ test.describe("Whisdom", () => {
     await expect(page.getByText("No transcripts saved yet.")).toBeVisible()
   })
 
+  test("clears saved transcripts from settings", async ({ page }) => {
+    await seedRecentTranscript(page)
+    await page.reload()
+
+    await expect(page.getByText("Research call")).toBeVisible()
+    await openSettings(page)
+    await page.getByRole("button", { name: "Clear saved transcripts" }).click()
+
+    await expect(page.getByText("Saved transcripts were deleted.")).toBeVisible()
+    await page.getByRole("button", { name: "Back to home" }).click()
+    await expect(page.getByText("No transcripts saved yet.")).toBeVisible()
+    await expect(page.getByText("Research call")).toHaveCount(0)
+  })
+
+  test("clears downloaded model caches from settings", async ({ page }) => {
+    await page.evaluate(async () => {
+      const cache = await caches.open("whisdom-transformers-models-v1")
+      await cache.put("https://example.test/model.onnx", new Response("model"))
+    })
+
+    await openSettings(page)
+    await page.getByRole("button", { name: "Clear downloaded models" }).click()
+
+    await expect(page.getByText("1 model cache cleared.")).toBeVisible()
+    await expect.poll(() => page.evaluate(() => caches.has("whisdom-transformers-models-v1"))).toBe(false)
+  })
+
 })

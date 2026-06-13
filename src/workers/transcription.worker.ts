@@ -1,13 +1,13 @@
 import type { LanguageCode, TranscriptionProgress } from "@/features/transcription/types"
 import type { LocalModelDtype } from "@/features/transcription/models"
 import { toWhisperLanguageName } from "@/features/transcription/language"
+import { MODEL_CACHE_KEY } from "@/features/storage/cleanup"
 
 const ignoredWarnings = [
   "The powerPreference option is currently ignored when calling requestAdapter() on Windows",
 ]
 
 const originalWarn = console.warn.bind(console)
-const MODEL_CACHE_KEY = "whisdom-transformers-models-v1"
 
 console.warn = (...args: unknown[]) => {
   const message = args.map(String).join(" ")

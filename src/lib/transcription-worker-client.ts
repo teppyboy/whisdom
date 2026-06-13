@@ -34,6 +34,17 @@ let activeConversion:
     }
   | null = null
 
+export function clearLocalWorkerState() {
+  if (activeTranscription || activeConversion) {
+    throw new Error("Cannot clear active local processing workers.")
+  }
+
+  transcriptionWorker?.terminate()
+  ffmpegWorker?.terminate()
+  transcriptionWorker = null
+  ffmpegWorker = null
+}
+
 export function transcribeLocally(args: {
   file: File | Blob
   modelId: string

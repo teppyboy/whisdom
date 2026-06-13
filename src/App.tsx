@@ -80,6 +80,7 @@ import {
 import { downloadTranscript, type ExportFormat } from "@/features/transcription/exports"
 import {
   deleteTranscript,
+  clearTranscripts,
   listTranscripts,
   loadSettings,
   renameTranscript,
@@ -91,9 +92,10 @@ import {
   requestDriveAccess,
   uploadTranscriptMetadata,
 } from "@/features/google-drive/drive"
+import { clearModelCaches } from "@/features/storage/cleanup"
 import { cn } from "@/lib/utils"
 import { createId } from "@/lib/id"
-import { convertWithFfmpeg, transcribeLocally } from "@/lib/transcription-worker-client"
+import { clearLocalWorkerState, convertWithFfmpeg, transcribeLocally } from "@/lib/transcription-worker-client"
 import type {
   AppSettings,
   JobState,
@@ -211,6 +213,15 @@ const COPY = {
     storageDescription: "Local persistence options.",
     persistMediaBlobs: "Persist media blobs",
     persistMediaBlobsDescription: "Keep original media in this browser for quicker resume.",
+    storageCleanup: "Storage cleanup",
+    storageCleanupDescription: "Remove local browser data when you need disk space or a clean state.",
+    clearDownloadedModels: "Clear downloaded models",
+    clearDownloadedModelsDescription: "Deletes cached Whisper model files and resets loaded local workers.",
+    clearSavedTranscripts: "Clear saved transcripts",
+    clearSavedTranscriptsDescription: "Deletes transcript records stored in this browser. Export anything important first.",
+    storageCleaned: "Storage cleaned",
+    modelCachesCleared: (count: number) => count > 0 ? `${count} model cache cleared.` : "No model cache was found.",
+    savedTranscriptsCleared: "Saved transcripts were deleted.",
     dropTitle: "Drop audio or video",
     dropDescription: "Preflight checks the file before any model or ffmpeg download. Video is converted locally, then transcribed in chunks.",
     chooseFile: "Choose file",
@@ -361,6 +372,15 @@ const COPY = {
     storageDescription: "Tùy chọn lưu dữ liệu trên thiết bị.",
     persistMediaBlobs: "Lưu tệp media",
     persistMediaBlobsDescription: "Giữ tệp gốc trên thiết bị này để tiếp tục nhanh hơn.",
+    storageCleanup: "Dọn dẹp dữ liệu",
+    storageCleanupDescription: "Xóa dữ liệu cục bộ khi cần thêm dung lượng hoặc muốn bắt đầu lại.",
+    clearDownloadedModels: "Xóa mô hình đã tải",
+    clearDownloadedModelsDescription: "Xóa các tệp mô hình Whisper đã lưu và đặt lại worker cục bộ.",
+    clearSavedTranscripts: "Xóa bản chép đã lưu",
+    clearSavedTranscriptsDescription: "Xóa các bản chép lưu trong trình duyệt này. Hãy xuất tệp quan trọng trước.",
+    storageCleaned: "Đã dọn dẹp dữ liệu",
+    modelCachesCleared: (count: number) => count > 0 ? `Đã xóa ${count} bộ nhớ đệm mô hình.` : "Không tìm thấy bộ nhớ đệm mô hình.",
+    savedTranscriptsCleared: "Đã xóa các bản chép đã lưu.",
     dropTitle: "Thả âm thanh hoặc video",
     dropDescription: "Tệp được kiểm tra trước khi tải mô hình hoặc ffmpeg. Video sẽ được chuyển thành âm thanh trên thiết bị rồi xử lý theo đoạn.",
     chooseFile: "Chọn tệp",
@@ -852,6 +872,33 @@ export function App() {
     }
   }
 
+  async function clearDownloadedModels() {
+    try {
+      clearLocalWorkerState()
+      const deletedCount = await clearModelCaches()
+
+      setToastMessage({
+        id: createId("toast"),
+        title: t.storageCleaned,
+        description: t.modelCachesCleared(deletedCount),
+      })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t.transcriptionFailed)
+    }
+  }
+
+  async function clearSavedTranscripts() {
+    await clearTranscripts()
+    setHistory([])
+    setTranscript(null)
+    setIsResultOpen(false)
+    setToastMessage({
+      id: createId("toast"),
+      title: t.storageCleaned,
+      description: t.savedTranscriptsCleared,
+    })
+  }
+
   function openTranscriptResult(document: TranscriptDocument) {
     setTranscript(document)
     setIsResultOpen(true)
@@ -982,6 +1029,9 @@ export function App() {
             <SettingsPage
               settings={settings}
               updateSetting={updateSetting}
+              storageActionsDisabled={isBusy(jobState)}
+              onClearDownloadedModels={() => void clearDownloadedModels()}
+              onClearSavedTranscripts={() => void clearSavedTranscripts()}
               onBack={() => setView("home")}
               copy={t}
             />
@@ -1283,11 +1333,17 @@ function LanguageCombobox({
 function SettingsPage({
   settings,
   updateSetting,
+  storageActionsDisabled,
+  onClearDownloadedModels,
+  onClearSavedTranscripts,
   onBack,
   copy,
 }: {
   settings: AppSettings
   updateSetting: <T extends keyof AppSettings>(key: T, value: AppSettings[T]) => void
+  storageActionsDisabled: boolean
+  onClearDownloadedModels: () => void
+  onClearSavedTranscripts: () => void
   onBack: () => void
   copy: Copy
 }) {
@@ -1359,7 +1415,7 @@ function SettingsPage({
           <CardTitle>{copy.storage}</CardTitle>
           <CardDescription>{copy.storageDescription}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-5">
           <SettingRow
             label={copy.persistMediaBlobs}
             description={copy.persistMediaBlobsDescription}
@@ -1370,6 +1426,39 @@ function SettingsPage({
               onCheckedChange={(checked) => updateSetting("persistMediaBlobs", checked)}
             />
           </SettingRow>
+          <Separator />
+          <div className="grid gap-3">
+            <div className="space-y-0.5">
+              <h3 className="text-sm font-medium">{copy.storageCleanup}</h3>
+              <p className="text-xs text-muted-foreground">{copy.storageCleanupDescription}</p>
+            </div>
+            <SettingRow
+              label={copy.clearDownloadedModels}
+              description={copy.clearDownloadedModelsDescription}
+            >
+              <Button
+                type="button"
+                variant="outline"
+                disabled={storageActionsDisabled}
+                onClick={onClearDownloadedModels}
+              >
+                {copy.clearDownloadedModels}
+              </Button>
+            </SettingRow>
+            <SettingRow
+              label={copy.clearSavedTranscripts}
+              description={copy.clearSavedTranscriptsDescription}
+            >
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={storageActionsDisabled}
+                onClick={onClearSavedTranscripts}
+              >
+                {copy.clearSavedTranscripts}
+              </Button>
+            </SettingRow>
+          </div>
         </CardContent>
       </Card>
     </div>
