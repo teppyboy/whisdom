@@ -31,7 +31,7 @@ export function isGoogleDriveConfigured() {
   return Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID)
 }
 
-export async function requestDriveAccess(): Promise<string> {
+export async function requestDriveAccess(prompt = "consent"): Promise<string> {
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
   if (!clientId) {
     throw new Error("Google Drive is not configured. Add VITE_GOOGLE_CLIENT_ID.")
@@ -55,7 +55,7 @@ export async function requestDriveAccess(): Promise<string> {
       },
     })
 
-    client.requestAccessToken({ scope: DRIVE_SCOPE, prompt: "consent" })
+    client.requestAccessToken({ scope: DRIVE_SCOPE, prompt })
   })
 }
 

@@ -90,6 +90,7 @@ import {
 import {
   isGoogleDriveConfigured,
   requestDriveAccess,
+  uploadTranscriptMetadata,
 } from "@/features/google-drive/drive"
 import { clearModelCaches } from "@/features/storage/cleanup"
 import { cn } from "@/lib/utils"
@@ -784,6 +785,28 @@ export function App() {
 
     setJobState("saving")
     await saveTranscript(document)
+
+    if (driveAccessToken) {
+      let activeToken = driveAccessToken
+      try {
+        const refreshed = await requestDriveAccess("")
+        activeToken = refreshed
+        setDriveAccessToken(refreshed)
+      } catch (_) {
+        activeToken = driveAccessToken
+      }
+      setDriveStatus({ type: "uploading-metadata" })
+      try {
+        const uploaded = await uploadTranscriptMetadata(activeToken, document)
+        setDriveStatus({ type: "synced", id: uploaded.id })
+      } catch (caught) {
+        setDriveStatus({
+          type: "error",
+          message: caught instanceof Error ? caught.message : t.driveSyncFailed,
+        })
+      }
+    }
+
     updateQueueItem(queueId, { status: "complete", transcriptId: document.id })
     setHistory(await listTranscripts())
     setJobState("complete")

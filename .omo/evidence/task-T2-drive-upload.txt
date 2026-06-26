@@ -1,0 +1,37 @@
+TASK: T2 — Wire uploadTranscriptMetadata() after transcription
+
+TYPECHECK (rtk tsc --noEmit):
+TypeScript: No errors found
+EXIT: 0
+
+GREP — uploadTranscriptMetadata in src/App.tsx:
+  Line  93: uploadTranscriptMetadata,         (import)
+  Line 800: const uploaded = await uploadTranscriptMetadata(activeToken, document)   (call site inside transcribeFile())
+
+Call site count inside transcribeFile(): 1
+
+CHANGES MADE:
+1. src/features/google-drive/drive.ts
+   - requestDriveAccess(prompt = "consent"): prompt parameter added
+   - client.requestAccessToken({ scope: DRIVE_SCOPE, prompt })  — was hardcoded "consent"
+
+2. src/App.tsx
+   - Added uploadTranscriptMetadata to import from @/features/google-drive/drive
+   - After saveTranscript(document) in transcribeFile():
+     • Guard: if (driveAccessToken)
+     • Silent refresh: requestDriveAccess("") — keeps existing token on failure
+     • setDriveStatus({ type: "uploading-metadata" }) before upload
+     • On success: setDriveStatus({ type: "synced", id: uploaded.id })
+     • On failure: setDriveStatus({ type: "error", message: ... }) — does NOT re-throw
+
+COPY check:
+  - getDriveStatusText() case "error" returns status.message directly — no new COPY key needed
+  - driveSyncFailed key exists in both COPY.en and COPY.vi as fallback message
+
+DriveStatus union (App.tsx lines 138-145):
+  | { type: "idle" }
+  | { type: "connected" }
+  | { type: "opening-google" }
+  | { type: "uploading-metadata" }
+  | { type: "synced"; id: string }
+  | { type: "error"; message: string }   ← already present

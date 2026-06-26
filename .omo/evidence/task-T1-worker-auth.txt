@@ -1,0 +1,9 @@
+grep "id_token" worker/src/index.ts
+No matches found
+
+grep "access_token" worker/src/index.ts
+F:\Workspace\whisdom\whisdom\worker\src\index.ts:68: `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`
+
+pnpm --filter whisdom-worker typecheck
+$ tsc --noEmit
+exit 0
