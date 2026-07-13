@@ -1040,12 +1040,13 @@ export function App() {
     await saveTranscript(document)
 
     if (driveAccessToken) {
+      // eslint-disable-next-line no-useless-assignment
       let activeToken = driveAccessToken
       try {
         const refreshed = await requestDriveAccess("")
         activeToken = refreshed
         setDriveAccessToken(refreshed)
-      } catch (_) {
+      } catch {
         activeToken = driveAccessToken
       }
       setDriveStatus({ type: "uploading-metadata" })

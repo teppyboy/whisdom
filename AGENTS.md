@@ -33,6 +33,8 @@ Primary goals:
 - `src/features/media/preflight.ts`: file analysis, duration reads, WebGPU detection, warnings.
 - `src/features/storage/indexed-db.ts`: settings, transcript history, rename/delete/clear APIs.
 - `src/features/storage/cleanup.ts`: model cache cleanup constants and helpers.
+- `src/features/server-transcription/`: server-mode API client, SSE consumer, types.
+- `src/features/google-drive/drive.ts`: Google Identity Services, token refresh, Drive upload.
 - `src/lib/transcription-worker-client.ts`: singleton browser worker clients for ASR and ffmpeg.
 - `src/workers/transcription.worker.ts`: Transformers.js pipeline setup, model caching, ASR execution.
 - `src/workers/ffmpeg.worker.ts`: ffmpeg.wasm setup and media conversion.
@@ -40,6 +42,7 @@ Primary goals:
 - `tests/unit/`: Vitest coverage for pure logic.
 - `tests/e2e/`: Playwright browser tests.
 - `worker/`: optional Cloudflare Worker API surface.
+- `server/`: optional Rust/Axum server-side transcription backend with whisper.cpp.
 
 ## Commands
 
@@ -64,6 +67,22 @@ Before claiming completion for code changes, run at least:
 - `pnpm build`
 
 Run `pnpm test:e2e` when UI flows, storage, workers, routing, or browser behavior changed. Run worker typecheck when `worker/` or shared worker-facing types changed.
+
+## Pre-Commit Checklist
+
+Before committing and pushing, ALL of these MUST pass with zero errors:
+
+1. `pnpm lint` — zero errors and zero warnings.
+2. `pnpm typecheck` — no TS errors.
+3. `pnpm test` — all unit tests pass.
+4. `pnpm build` — production build succeeds.
+5. `pnpm test:e2e` — all Playwright tests pass.
+
+If the `server/` directory was changed, also run:
+
+6. `cd server && cargo build` — Rust backend compiles.
+
+Never push code that fails CI. CI runs the same checks. Fix lint errors before committing; suppress only when the rule is a false positive and an explanation comment is present.
 
 ## Architecture Rules
 
@@ -122,7 +141,9 @@ Run `pnpm test:e2e` when UI flows, storage, workers, routing, or browser behavio
 - `.env.example` documents optional client env vars.
 - `VITE_GOOGLE_CLIENT_ID` enables Google Identity Services / Drive behavior.
 - `VITE_CF_WORKER_URL` points to the optional Cloudflare Worker.
+- `VITE_SERVER_URL` points to the optional Rust/whisper.cpp server for "Server (CPU)" mode.
 - Worker config lives in `worker/wrangler.jsonc`; set allowed origin and identity allowlists there for deployment.
+- Server config lives in `server/config.toml`; see `server/README.md` for deployment and Turnstile setup.
 
 ## Common Pitfalls
 
