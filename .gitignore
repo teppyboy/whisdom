@@ -48,3 +48,6 @@ worker/.wrangler
 *.sw?
 
 .impeccable.md
+
+# WASM build artifacts
+src/wasm/.omo/
