@@ -18,6 +18,7 @@ concurrency:
 
 env:
   VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
+  VITE_SERVER_URL: ${{ secrets.VITE_SERVER_URL }}
 
 jobs:
   test:
@@ -72,6 +73,28 @@ jobs:
         with:
           name: github-pages
           path: dist
+
+  server:
+    name: Build server (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ffmpeg
+
+      - name: Build server
+        working-directory: server
+        run: cargo build --release
 
   deploy:
     name: Deploy GitHub Pages

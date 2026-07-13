@@ -1,0 +1,37 @@
+[server]
+# HTTP port
+port = 8788
+# Number of whisper threads (0 = auto-detect CPU cores)
+threads = 0
+
+[auth]
+# Frontend origin for CORS
+allowed_origin = "http://localhost:5173"
+# Restrict to specific email addresses (comma-separated in env var, array in TOML)
+allowed_emails = []
+# Restrict to specific domains (e.g. ["example.com"])
+allowed_domains = []
+
+[model]
+# Path to GGML quantized whisper model
+path = "./models/ggml-base-q5_1.bin"
+
+[paths]
+# Temporary working directory for job artifacts
+temp_dir = "./tmp"
+# Path to yt-dlp binary
+ytdlp_path = "yt-dlp"
+# Path to ffmpeg binary  
+ffmpeg_path = "ffmpeg"
+
+[limits]
+# Maximum upload size in MB
+max_upload_mb = 500
+
+[turnstile]
+# Enable Cloudflare Turnstile verification for /api/transcribe
+enabled = false
+# Turnstile secret key (from Cloudflare dashboard)
+secret_key = ""
+# Siteverify endpoint (default is correct for Cloudflare)
+siteverify_url = "https://challenges.cloudflare.com/turnstile/v0/siteverify"

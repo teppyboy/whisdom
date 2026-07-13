@@ -2,7 +2,7 @@ export type LanguageCode = "auto" | (string & {})
 
 export type UiLanguage = "en" | "vi"
 
-export type ProcessingMode = "local-webgpu" | "cloudflare-ai" | "local-wasm"
+export type ProcessingMode = "local-webgpu" | "cloudflare-ai" | "local-wasm" | "server"
 
 export type JobState =
   | "idle"

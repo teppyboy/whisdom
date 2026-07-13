@@ -1,5 +1,6 @@
 import * as React from "react"
 import {
+  AlertCircle,
   ArrowLeft,
   CheckCircle2,
   Check,
@@ -96,6 +97,9 @@ import { clearModelCaches } from "@/features/storage/cleanup"
 import { cn } from "@/lib/utils"
 import { createId } from "@/lib/id"
 import { clearLocalWorkerState, convertWithFfmpeg, transcribeLocally } from "@/lib/transcription-worker-client"
+import { transcribeChunkWithServer } from "@/features/server-transcription/client"
+import { ServerTranscriptionApi } from "@/features/server-transcription/api"
+import type { ServerJobPhase, ServerJobStatus } from "@/features/server-transcription/types"
 import type {
   AppSettings,
   JobState,
@@ -111,6 +115,7 @@ const MODES: Array<{ value: ProcessingMode; label: string; detail: string }> = [
   { value: "local-webgpu", label: "Local WebGPU", detail: "Default, fastest private path" },
   { value: "cloudflare-ai", label: "Manual server", detail: "Authorized users, free quota only" },
   { value: "local-wasm", label: "Local WASM", detail: "Fallback for unsupported browsers" },
+  { value: "server", label: "Server (CPU)", detail: "Server-side whisper.cpp. Sign in required." },
 ]
 
 const EXPORTS: ExportFormat[] = ["txt", "json", "srt", "vtt"]
@@ -170,6 +175,10 @@ const COPY = {
     reviewPlan: "Review downloads and processing plan",
     couldNotAnalyze: "Could not analyze media",
     serverGuardrail: "Server mode is manual opt-in but chunk upload is not enabled yet. Use local mode for now.",
+    serverRequiresAuth: "Server transcription requires Google sign-in. Please connect your account to continue.",
+    serverUrl: "Enter video/audio URL",
+    serverModeDesc: "Server-side transcription via whisper.cpp. Sign in required.",
+    serverUnavailable: "Transcription server unavailable",
     quantizedLargeModel: (label: string) =>
       `${label} will run with q4 browser weights to avoid multi-gigabyte buffer allocation.`,
     largeModelNeedsWebGpu: (label: string) =>
@@ -285,11 +294,13 @@ const COPY = {
       "local-webgpu": "Default, fastest private path",
       "cloudflare-ai": "Authorized users, free quota only",
       "local-wasm": "Fallback for unsupported browsers",
+      server: "Server-side transcription via whisper.cpp. Sign in required.",
     } satisfies Record<ProcessingMode, string>,
     modeLabels: {
       "local-webgpu": "Local WebGPU",
       "cloudflare-ai": "Manual server",
       "local-wasm": "Local WASM",
+      server: "Server (CPU)",
     } satisfies Record<ProcessingMode, string>,
     languageLabels: {
       auto: "Auto",
@@ -330,6 +341,10 @@ const COPY = {
     reviewPlan: "Kiểm tra kế hoạch xử lý",
     couldNotAnalyze: "Không thể phân tích tệp",
     serverGuardrail: "Chế độ máy chủ chưa được bật. Vui lòng dùng xử lý cục bộ.",
+    serverRequiresAuth: "Cần đăng nhập Google để dùng máy chủ. Vui lòng kết nối tài khoản để tiếp tục.",
+    serverUrl: "Nhập URL video/âm thanh",
+    serverModeDesc: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
+    serverUnavailable: "Máy chủ chuyển ngữ không khả dụng",
     quantizedLargeModel: (label: string) =>
       `${label} sẽ dùng trọng số q4 trong trình duyệt để tránh cấp phát bộ nhớ nhiều GB.`,
     largeModelNeedsWebGpu: (label: string) =>
@@ -445,11 +460,13 @@ const COPY = {
       "local-webgpu": "Xử lý cục bộ nhanh nhất khi trình duyệt hỗ trợ.",
       "cloudflare-ai": "Dành cho tài khoản được cấp quyền, chỉ dùng hạn mức miễn phí.",
       "local-wasm": "Dự phòng khi WebGPU không khả dụng.",
+      server: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
     } satisfies Record<ProcessingMode, string>,
     modeLabels: {
       "local-webgpu": "Local WebGPU",
       "cloudflare-ai": "Máy chủ",
       "local-wasm": "Local WASM",
+      server: "Máy chủ (CPU)",
     } satisfies Record<ProcessingMode, string>,
     languageLabels: {
       auto: "Tự động",
@@ -485,9 +502,22 @@ function getDriveStatusText(status: DriveStatus, copy: Copy) {
     case "connected":
       return copy.googleConnected
     case "error":
-      return status.message
+      return status.message || copy.driveSyncFailed
     case "idle":
       return copy.notConnected
+  }
+}
+
+function getDriveStatusIcon(status: DriveStatus) {
+  switch (status.type) {
+    case "uploading-metadata":
+      return <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+    case "synced":
+      return <Check className="size-3" aria-hidden="true" />
+    case "error":
+      return <AlertCircle className="size-3" aria-hidden="true" />
+    default:
+      return null
   }
 }
 
@@ -566,9 +596,12 @@ export function App() {
   const [error, setError] = React.useState<string | null>(null)
   const [driveStatus, setDriveStatus] = React.useState<DriveStatus>({ type: "idle" })
   const [driveAccessToken, setDriveAccessToken] = React.useState<string | null>(null)
+  const [urlInput, setUrlInput] = React.useState("")
+  const serverApiRef = React.useRef<ServerTranscriptionApi | null>(null)
   const settingsRef = React.useRef(settings)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const driveStatusText = getDriveStatusText(driveStatus, t)
+  const driveStatusIcon = getDriveStatusIcon(driveStatus)
 
   React.useEffect(() => {
     void loadSettings().then((storedSettings) => {
@@ -582,6 +615,24 @@ export function App() {
   React.useEffect(() => {
     void saveSettings(settings)
   }, [settings])
+
+  React.useEffect(() => {
+    if (settings.mode !== "server") return
+    const serverUrl = import.meta.env.VITE_SERVER_URL as string | undefined
+    if (!serverUrl) return
+    const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken)
+    serverApiRef.current = api
+    void api.getCapabilities().then((cap) => {
+      if (!cap?.available) {
+        setToastMessage({
+          id: createId("toast"),
+          title: t.transcriptionFailed,
+          description: t.serverUnavailable,
+        })
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.mode, driveAccessToken])
 
   const model = findModel(settings.modelId)
   const canStart = file && analysis && !isBusy(jobState)
@@ -714,13 +765,20 @@ export function App() {
     setProgress({ phase: "idle", message: t.waiting, progress: 0 })
   }
 
+  function mapServerPhase(phase: ServerJobPhase): JobState {
+    switch (phase) {
+      case "queued": return "idle"
+      case "downloading": return "downloading-assets"
+      case "extracting": return "preparing-media"
+      case "transcribing": return "transcribing"
+      case "complete": return "complete"
+      case "error": return "error"
+      case "cancelled": return "cancelled"
+    }
+  }
+
   async function transcribeFile(targetFile: File, queueId: string | null, runSettings: AppSettings) {
     const runModel = findModel(runSettings.modelId)
-
-    if (runSettings.mode === "cloudflare-ai") {
-      setError(t.serverGuardrail)
-      throw new Error(t.serverGuardrail)
-    }
 
     setFile(targetFile)
     setSelectedQueueId(queueId)
@@ -729,6 +787,201 @@ export function App() {
     setProgressLog([])
     setJobState("analyzing")
     recordProgress({ phase: "analyzing", message: t.readingMetadata, progress: 0.08 })
+
+    if (runSettings.mode === "cloudflare-ai") {
+      if (!driveAccessToken) {
+        setToastMessage({
+          id: createId("toast"),
+          title: t.transcriptionFailed,
+          description: t.serverRequiresAuth,
+        })
+        throw new Error(t.serverRequiresAuth)
+      }
+
+      let audioBlob: File | Blob = targetFile
+      const cfAnalysis = await analyzeMediaFile(targetFile, runSettings)
+      setAnalysis(cfAnalysis)
+
+      if (cfAnalysis.needsFfmpeg) {
+        setJobState("preparing-media")
+        audioBlob = await convertWithFfmpeg({
+          file: targetFile,
+          onProgress: (nextProgress) => {
+            recordProgress({
+              phase: "preparing-media",
+              message: nextProgress.message,
+              progress: nextProgress.progress * 0.35,
+              detail: nextProgress.detail,
+            })
+          },
+        })
+      }
+
+      setJobState("chunking")
+      recordProgress({ phase: "chunking", message: t.readingMetadata, progress: 0.4 })
+      const wavBytes = new Uint8Array(await audioBlob.arrayBuffer())
+      const { default: initAP, split_wav_chunks } = (await import(
+        "./wasm/audio-processor/audio_processor.js"
+      )) as unknown as {
+        default: () => Promise<void>
+        split_wav_chunks: (data: Uint8Array, size: number) => Iterable<unknown>
+      }
+      await initAP()
+      const rawChunks = split_wav_chunks(wavBytes, 9 * 1024 * 1024)
+      const chunks = Array.from(rawChunks).map((c) => new Uint8Array(c as ArrayBuffer))
+
+      setJobState("transcribing")
+      const cfLanguage = resolveTranscriptionLanguage(runSettings.language, runSettings.uiLanguage)
+      const texts: string[] = []
+      for (let i = 0; i < chunks.length; i++) {
+        recordProgress({
+          phase: "transcribing",
+          message: t.transcribingAudio,
+          progress: 0.5 + (i / chunks.length) * 0.4,
+          detail: {
+            id: `chunk:${i}`,
+            message: `Chunk ${i + 1} / ${chunks.length}`,
+            progress: i / chunks.length,
+          },
+        })
+        const audio = new Blob([chunks[i]], { type: "audio/wav" })
+        const result = await transcribeChunkWithServer({ audio, language: cfLanguage, accessToken: driveAccessToken })
+        texts.push(result.text)
+      }
+
+      const cfNow = new Date().toISOString()
+      const doc: TranscriptDocument = {
+        id: createId("tr"),
+        title: targetFile.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
+        sourceName: targetFile.name,
+        language: cfLanguage,
+        modelId: "cloudflare-whisper-large-v3-turbo",
+        mode: "cloudflare-ai",
+        createdAt: cfNow,
+        updatedAt: cfNow,
+        text: texts.join(" ").trim(),
+        segments: [],
+      }
+
+      setJobState("saving")
+      recordProgress({ phase: "saving", message: t.transcriptReady, progress: 0.95 })
+      await saveTranscript(doc)
+      updateQueueItem(queueId, { status: "complete", transcriptId: doc.id })
+      setHistory(await listTranscripts())
+      setJobState("complete")
+      recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+      return doc
+    }
+
+    if (runSettings.mode === "server") {
+      if (!driveAccessToken) {
+        setToastMessage({
+          id: createId("toast"),
+          title: t.transcriptionFailed,
+          description: t.serverRequiresAuth,
+        })
+        throw new Error(t.serverRequiresAuth)
+      }
+
+      const serverUrl = import.meta.env.VITE_SERVER_URL as string | undefined
+      if (!serverUrl) throw new Error("Server URL not configured")
+
+      const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken)
+
+      if (urlInput.trim()) {
+        setJobState("downloading-assets")
+        recordProgress({ phase: "downloading-assets", message: "Submitting URL...", progress: 0.1 })
+        const jobId = await api.submitJob({ type: "url", url: urlInput.trim() }, runSettings.language)
+
+        return new Promise<TranscriptDocument>((resolve, reject) => {
+          api.subscribeProgress(jobId, (status: ServerJobStatus) => {
+            const mapped = mapServerPhase(status.phase)
+            recordProgress({ phase: mapped, message: status.message ?? "", progress: status.progress ?? 0 })
+
+            if (status.phase === "complete" && status.segments) {
+              const now = new Date().toISOString()
+              const doc: TranscriptDocument = {
+                id: createId("tr"),
+                title: urlInput.trim().split("/").pop()?.replace(/[?#].*$/, "") || t.untitledTranscript,
+                sourceName: urlInput.trim(),
+                language: runSettings.language,
+                modelId: "whisper.cpp",
+                mode: "server",
+                createdAt: now,
+                updatedAt: now,
+                text: status.text ?? status.segments.map(s => s.text).join(" "),
+                segments: status.segments.map((s) => ({
+                  id: createId("seg"),
+                  start: s.start,
+                  end: s.end,
+                  text: s.text,
+                })),
+              }
+              setJobState("saving")
+              void saveTranscript(doc).then(() => {
+                updateQueueItem(queueId, { status: "complete", transcriptId: doc.id })
+                void listTranscripts().then(setHistory)
+                setJobState("complete")
+                recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+                resolve(doc)
+              })
+            } else if (status.phase === "error") {
+              reject(new Error(status.error ?? "Server transcription failed"))
+            } else if (status.phase === "cancelled") {
+              reject(new Error("Transcription cancelled"))
+            }
+          })
+        })
+      }
+
+      setJobState("preparing-media")
+      recordProgress({ phase: "preparing-media", message: "Uploading...", progress: 0.1 })
+      const jobId = await api.submitJob(
+        { type: "file", file: targetFile, filename: targetFile.name },
+        runSettings.language,
+      )
+
+      return new Promise<TranscriptDocument>((resolve, reject) => {
+        api.subscribeProgress(jobId, (status: ServerJobStatus) => {
+          const mapped = mapServerPhase(status.phase)
+          recordProgress({ phase: mapped, message: status.message ?? "", progress: status.progress ?? 0 })
+
+          if (status.phase === "complete" && status.segments) {
+            const now = new Date().toISOString()
+            const doc: TranscriptDocument = {
+              id: createId("tr"),
+              title: targetFile.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
+              sourceName: targetFile.name,
+              language: runSettings.language,
+              modelId: "whisper.cpp",
+              mode: "server",
+              createdAt: now,
+              updatedAt: now,
+              text: status.text ?? status.segments.map(s => s.text).join(" "),
+              segments: status.segments.map((s) => ({
+                id: createId("seg"),
+                start: s.start,
+                end: s.end,
+                text: s.text,
+              })),
+            }
+            setJobState("saving")
+            void saveTranscript(doc).then(() => {
+              updateQueueItem(queueId, { status: "complete", transcriptId: doc.id })
+              void listTranscripts().then(setHistory)
+              setJobState("complete")
+              recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+              resolve(doc)
+            })
+          } else if (status.phase === "error") {
+            reject(new Error(status.error ?? "Server transcription failed"))
+          } else if (status.phase === "cancelled") {
+            reject(new Error("Transcription cancelled"))
+          }
+        })
+      })
+    }
+
     let input: File | Blob = targetFile
 
     const freshAnalysis = await analyzeMediaFile(targetFile, runSettings)
@@ -990,7 +1243,10 @@ export function App() {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>
                 <span className="block text-sm font-medium">{t.guest}</span>
-                <span className="block text-xs font-normal text-muted-foreground">{driveStatusText}</span>
+                <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
+                  {driveStatusIcon}
+                  <span className="truncate">{driveStatusText}</span>
+                </span>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <div className="px-2 py-1.5">
@@ -1079,6 +1335,36 @@ export function App() {
                 isEnglishOnlyMismatch={isEnglishOnlyMismatch}
                 updateSetting={updateSetting}
               />
+
+              {settings.mode === "server" ? (
+                !driveAccessToken ? (
+                  <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+                    <CardContent className="flex flex-col items-center gap-4 py-8">
+                      <p className="text-sm text-muted-foreground">{t.serverModeDesc}</p>
+                      <Button onClick={() => void signInWithGoogle()}>
+                        <HardDrive className="mr-2 size-4" />
+                        {driveAccessToken ? t.googleConnected : t.signInGoogle}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+                    <CardContent className="pt-5">
+                      <Label htmlFor="server-url-input" className="text-sm font-medium">
+                        {t.serverUrl}
+                      </Label>
+                      <Input
+                        id="server-url-input"
+                        value={urlInput}
+                        placeholder={t.serverUrl}
+                        className="mt-2"
+                        onChange={(event) => setUrlInput(event.target.value)}
+                        disabled={isBusy(jobState)}
+                      />
+                    </CardContent>
+                  </Card>
+                )
+              ) : null}
 
               <DropZone
                 file={file}
@@ -1189,27 +1475,29 @@ function MainControls({
         <CardDescription>{copy.quickSetupDescription}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 md:grid-cols-2">
-        <div className="grid gap-2">
-          <Label>{copy.model}</Label>
-          <Select
-            value={settings.modelId}
-            onValueChange={(value) => updateSetting("modelId", value)}
-          >
-            <SelectTrigger aria-label={copy.model} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="start">
-              {WHISPER_MODELS.map((item) => (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-xs leading-5 text-muted-foreground">
-            {copy.downloadDescription(modelDescription, model.sizeMb)}
-          </p>
-        </div>
+        {settings.mode !== "server" ? (
+          <div className="grid gap-2">
+            <Label>{copy.model}</Label>
+            <Select
+              value={settings.modelId}
+              onValueChange={(value) => updateSetting("modelId", value)}
+            >
+              <SelectTrigger aria-label={copy.model} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="start">
+                {WHISPER_MODELS.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs leading-5 text-muted-foreground">
+              {copy.downloadDescription(modelDescription, model.sizeMb)}
+            </p>
+          </div>
+        ) : null}
 
         <div className="grid gap-2">
           <Label>{copy.language}</Label>
@@ -1406,7 +1694,7 @@ function SettingsPage({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">
-                {MODES.map((item) => (
+                {MODES.filter((item) => item.value !== "server" || Boolean(import.meta.env.VITE_SERVER_URL)).map((item) => (
                   <SelectItem key={item.value} value={item.value}>
                     {copy.modeLabels[item.value]}
                   </SelectItem>
@@ -1415,28 +1703,32 @@ function SettingsPage({
             </Select>
           </SettingRow>
           <Separator />
-          <SettingRow label={copy.chunkSeconds} description={copy.chunkSecondsDescription}>
-            <Input
-              type="number"
-              min={15}
-              max={60}
-              value={settings.chunkSeconds}
-              aria-label={copy.chunkSeconds}
-              className="w-full sm:w-24"
-              onChange={(event) => updateSetting("chunkSeconds", Number(event.target.value))}
-            />
-          </SettingRow>
-          <SettingRow label={copy.overlapSeconds} description={copy.overlapSecondsDescription}>
-            <Input
-              type="number"
-              min={0}
-              max={5}
-              value={settings.overlapSeconds}
-              aria-label={copy.overlapSeconds}
-              className="w-full sm:w-24"
-              onChange={(event) => updateSetting("overlapSeconds", Number(event.target.value))}
-            />
-          </SettingRow>
+          {settings.mode !== "server" ? (
+            <>
+              <SettingRow label={copy.chunkSeconds} description={copy.chunkSecondsDescription}>
+                <Input
+                  type="number"
+                  min={15}
+                  max={60}
+                  value={settings.chunkSeconds}
+                  aria-label={copy.chunkSeconds}
+                  className="w-full sm:w-24"
+                  onChange={(event) => updateSetting("chunkSeconds", Number(event.target.value))}
+                />
+              </SettingRow>
+              <SettingRow label={copy.overlapSeconds} description={copy.overlapSecondsDescription}>
+                <Input
+                  type="number"
+                  min={0}
+                  max={5}
+                  value={settings.overlapSeconds}
+                  aria-label={copy.overlapSeconds}
+                  className="w-full sm:w-24"
+                  onChange={(event) => updateSetting("overlapSeconds", Number(event.target.value))}
+                />
+              </SettingRow>
+            </>
+          ) : null}
         </CardContent>
       </Card>
 

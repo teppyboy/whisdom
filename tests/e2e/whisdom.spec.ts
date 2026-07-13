@@ -237,7 +237,7 @@ test.describe("Whisdom", () => {
     expect(overflowingControls).toBe(0)
   })
 
-  test("shows guardrail when manual server mode is selected", async ({ page }) => {
+  test("shows auth prompt when manual server mode is selected without sign-in", async ({ page }) => {
     await openSettings(page)
     await page.getByLabel("Mode", { exact: true }).click()
     await page.getByRole("option", { name: "Manual server" }).click()
@@ -245,7 +245,7 @@ test.describe("Whisdom", () => {
     await chooseAudio(page)
     await page.getByRole("button", { name: /Confirm downloads and transcribe/i }).click()
 
-    await expect(page.getByText("Server mode is manual opt-in but chunk upload is not enabled yet.")).toBeVisible()
+    await expect(page.locator(".text-destructive").getByText(/Server transcription requires Google sign-in/i)).toBeVisible()
   })
 
   test("shows recent transcript metadata and removes items", async ({ page }) => {
