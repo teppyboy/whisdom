@@ -138,8 +138,15 @@ export function transcribeLocally(args: {
         )
       })
       .catch((error: unknown) => {
+        const details = error instanceof Error
+          ? `${error.name}: ${error.message}\n${error.stack ?? ""}`
+          : String(error)
+        console.error("[decodeAudioForWhisper]", details)
         activeTranscription = null
-        reject(error instanceof Error ? error : new Error("Could not decode audio"))
+        const msg = error instanceof Error
+          ? `${error.message} (audio decoding failed)`
+          : "Unable to decode audio data"
+        reject(new Error(msg, { cause: error }))
       })
   })
 }

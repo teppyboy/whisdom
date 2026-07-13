@@ -1078,6 +1078,8 @@ export function App() {
       setTranscript(document)
       setIsResultOpen(true)
     } catch (caught) {
+      const detail = caught instanceof Error ? `${caught.name}: ${caught.message}\n${caught.stack ?? ""}` : String(caught)
+      console.error("[transcription]", detail)
       setJobState("error")
       const message = caught instanceof Error ? caught.message : t.transcriptionFailed
       setError(message)
@@ -2050,9 +2052,14 @@ function PreflightPanel({
             </div>
           ) : null}
           {error ? (
-            <p className="animate-in fade-in slide-in-from-top-1 text-sm text-destructive duration-200">
+            <button
+              type="button"
+              className="animate-in fade-in slide-in-from-top-1 cursor-pointer text-left text-sm text-destructive underline decoration-destructive/30 underline-offset-2 duration-200 hover:decoration-destructive"
+              onClick={() => window.alert(error)}
+              title="Click for full error details"
+            >
               {error}
-            </p>
+            </button>
           ) : null}
           <div className={cn("grid gap-2", queueCount > 1 && "sm:grid-cols-2")}>
             <Button className="w-full" disabled={!canStart} onClick={onStart}>
