@@ -134,6 +134,7 @@ Never push code that fails CI. CI runs the same checks. Fix lint errors before c
 - Vite `base` is `/` because the app deploys to custom domain root.
 - `public/CNAME` contains the custom Pages domain.
 - Do not commit generated build output, test output, caches, or local env files.
+- WASM build artifacts in `src/wasm/audio-processor/` are committed to avoid needing Rust/wasm-pack in CI. Rebuild with `pnpm build:wasm` after changing `audio-processor/`.
 - Make commits only when explicitly asked.
 
 ## Environment

@@ -27,7 +27,7 @@ export async function loadServerCapabilities(): Promise<ServerCapabilities> {
 export async function transcribeChunkWithServer(args: {
   audio: Blob
   language: LanguageCode
-  idToken: string
+  accessToken: string
 }) {
   const baseUrl = import.meta.env.VITE_CF_WORKER_URL
   if (!baseUrl) {
@@ -41,7 +41,7 @@ export async function transcribeChunkWithServer(args: {
   const response = await fetch(`${baseUrl}/api/transcribe-chunk`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${args.idToken}`,
+      Authorization: `Bearer ${args.accessToken}`,
     },
     body: form,
   })

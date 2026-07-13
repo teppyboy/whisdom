@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:wasm": "wasm-pack build audio-processor --target web --out-dir ../src/wasm/audio-processor"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",
@@ -45,9 +46,12 @@
     "globals": "^17",
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
+    "rollup": "^4.62.2",
     "typescript": "~6",
     "typescript-eslint": "^8",
     "vite": "^8",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.6.0",
     "vitest": "^4.1.8"
   }
 }
