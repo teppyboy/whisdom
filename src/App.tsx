@@ -140,6 +140,7 @@ type ToastMessage = {
   id: string
   title: string
   description: string
+  kind?: "success" | "error"
 }
 type DriveStatus =
   | { type: "idle" }
@@ -628,6 +629,7 @@ export function App() {
           id: createId("toast"),
           title: t.transcriptionFailed,
           description: t.serverUnavailable,
+          kind: "error",
         })
       }
     })
@@ -717,7 +719,14 @@ export function App() {
       })
     } catch (caught) {
       setJobState("error")
-      setError(caught instanceof Error ? caught.message : t.couldNotAnalyze)
+      const message = caught instanceof Error ? caught.message : t.couldNotAnalyze
+      setError(message)
+      setToastMessage({
+        id: createId("toast"),
+        title: t.transcriptionFailed,
+        description: message,
+        kind: "error",
+      })
     }
   }
 
@@ -794,6 +803,7 @@ export function App() {
           id: createId("toast"),
           title: t.transcriptionFailed,
           description: t.serverRequiresAuth,
+          kind: "error",
         })
         throw new Error(t.serverRequiresAuth)
       }
@@ -879,6 +889,7 @@ export function App() {
           id: createId("toast"),
           title: t.transcriptionFailed,
           description: t.serverRequiresAuth,
+          kind: "error",
         })
         throw new Error(t.serverRequiresAuth)
       }
@@ -1083,6 +1094,12 @@ export function App() {
       setJobState("error")
       const message = caught instanceof Error ? caught.message : t.transcriptionFailed
       setError(message)
+      setToastMessage({
+        id: createId("toast"),
+        title: t.transcriptionFailed,
+        description: message,
+        kind: "error",
+      })
       updateQueueItem(selectedQueueId, { status: "error", error: message })
     }
   }
@@ -1121,6 +1138,12 @@ export function App() {
 
     if (failures.length > 0) {
       setError(failures.join("\n"))
+      setToastMessage({
+        id: createId("toast"),
+        title: t.transcriptionFailed,
+        description: failures.join("\n"),
+        kind: "error",
+      })
     }
 
     if (completed.length === 0 && failures.length === 0) {
@@ -1169,7 +1192,14 @@ export function App() {
         description: t.modelCachesCleared(deletedCount),
       })
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t.transcriptionFailed)
+      const message = caught instanceof Error ? caught.message : t.transcriptionFailed
+      setError(message)
+      setToastMessage({
+        id: createId("toast"),
+        title: t.transcriptionFailed,
+        description: message,
+        kind: "error",
+      })
     }
   }
 
@@ -2290,12 +2320,21 @@ function AppToast({
 
   return (
     <div className="fixed right-4 bottom-4 z-50 w-[calc(100vw-2rem)] max-w-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
-      <div role="status" aria-live="polite" className="rounded-lg border bg-popover p-4 text-popover-foreground shadow-lg">
+      <div role="status" aria-live="polite" className={cn(
+        "rounded-lg border p-4 shadow-lg",
+        message.kind === "error"
+          ? "border-destructive/30 bg-destructive/5 text-destructive"
+          : "bg-popover text-popover-foreground"
+      )}>
         <div className="flex items-start gap-3">
-          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          {message.kind === "error" ? (
+            <AlertCircle className="mt-0.5 size-4 shrink-0" />
+          ) : (
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          )}
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">{message.title}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{message.description}</p>
+            <p className="mt-1 text-sm opacity-80">{message.description}</p>
           </div>
           <Button
             type="button"
