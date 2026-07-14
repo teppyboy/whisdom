@@ -14,6 +14,10 @@ pub async fn verify_token(config: &Config, token: &str) -> Result<String, AppErr
         return Err(AppError::Unauthorized);
     }
 
+    if config.dev_auth_bypass() {
+        return Ok("dev@localhost".into());
+    }
+
     let url = format!(
         "https://oauth2.googleapis.com/tokeninfo?access_token={}",
         token

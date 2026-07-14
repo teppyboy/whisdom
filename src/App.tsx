@@ -622,7 +622,7 @@ export function App() {
     if (settings.mode !== "server") return
     const serverUrl = import.meta.env.VITE_SERVER_URL as string | undefined
     if (!serverUrl) return
-    const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken)
+    const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : null))
     serverApiRef.current = api
     void api.getCapabilities().then((cap) => {
       if (!cap?.available) {
@@ -799,7 +799,7 @@ export function App() {
     recordProgress({ phase: "analyzing", message: t.readingMetadata, progress: 0.08 })
 
     if (runSettings.mode === "cloudflare-ai") {
-      if (!driveAccessToken) {
+      if (!driveAccessToken && !import.meta.env.DEV) {
         setToastMessage({
           id: createId("toast"),
           title: t.transcriptionFailed,
@@ -856,7 +856,7 @@ export function App() {
           },
         })
         const audio = new Blob([chunks[i]], { type: "audio/wav" })
-        const result = await transcribeChunkWithServer({ audio, language: cfLanguage, accessToken: driveAccessToken })
+        const result = await transcribeChunkWithServer({ audio, language: cfLanguage, accessToken: driveAccessToken ?? "dev-mode" })
         texts.push(result.text)
       }
 
@@ -885,7 +885,7 @@ export function App() {
     }
 
     if (runSettings.mode === "server") {
-      if (!driveAccessToken) {
+      if (!driveAccessToken && !import.meta.env.DEV) {
         setToastMessage({
           id: createId("toast"),
           title: t.transcriptionFailed,
@@ -898,7 +898,7 @@ export function App() {
       const serverUrl = import.meta.env.VITE_SERVER_URL as string | undefined
       if (!serverUrl) throw new Error("Server URL not configured")
 
-      const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken)
+      const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : null))
 
       if (urlInput.trim()) {
         setJobState("downloading-assets")
@@ -1371,7 +1371,7 @@ export function App() {
               />
 
               {settings.mode === "server" ? (
-                !driveAccessToken ? (
+                !driveAccessToken && !import.meta.env.DEV ? (
                   <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
                     <CardContent className="flex flex-col items-center gap-4 py-8">
                       <p className="text-sm text-muted-foreground">{t.serverModeDesc}</p>

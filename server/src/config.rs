@@ -54,6 +54,9 @@ pub struct AuthConfig {
 
     #[serde(default, deserialize_with = "deserialize_from_env_or")]
     pub allowed_domains: Vec<String>,
+
+    #[serde(default)]
+    pub dev_auth_bypass: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -122,6 +125,7 @@ impl Default for AuthConfig {
             allowed_origin: default_allowed_origin(),
             allowed_emails: Vec::new(),
             allowed_domains: Vec::new(),
+            dev_auth_bypass: false,
         }
     }
 }
@@ -188,6 +192,7 @@ impl Config {
         apply_env_string("WHISDOM_ALLOWED_ORIGIN", &mut cfg.auth.allowed_origin);
         apply_env_vec("WHISDOM_ALLOWED_EMAILS", &mut cfg.auth.allowed_emails);
         apply_env_vec("WHISDOM_ALLOWED_DOMAINS", &mut cfg.auth.allowed_domains);
+        apply_env_bool("WHISDOM_DEV_AUTH_BYPASS", &mut cfg.auth.dev_auth_bypass);
 
         apply_env_string("WHISDOM_MODEL_PATH", &mut cfg.model.path);
         apply_env_string("WHISDOM_TEMP_DIR", &mut cfg.paths.temp_dir);
@@ -212,6 +217,7 @@ impl Config {
     pub fn allowed_origin(&self) -> &str { &self.auth.allowed_origin }
     pub fn allowed_emails(&self) -> &[String] { &self.auth.allowed_emails }
     pub fn allowed_domains(&self) -> &[String] { &self.auth.allowed_domains }
+    pub fn dev_auth_bypass(&self) -> bool { self.auth.dev_auth_bypass }
     pub fn model_path(&self) -> &str { &self.model.path }
     pub fn temp_dir(&self) -> &str { &self.paths.temp_dir }
     pub fn max_upload_bytes(&self) -> usize { self.limits.max_upload_mb * 1024 * 1024 }
@@ -282,6 +288,12 @@ fn apply_env_usize(env_key: &str, target: &mut usize) {
         if let Ok(parsed) = val.parse() {
             *target = parsed;
         }
+    }
+}
+
+fn apply_env_bool(env_key: &str, target: &mut bool) {
+    if let Ok(val) = std::env::var(env_key) {
+        *target = val == "1" || val.eq_ignore_ascii_case("true");
     }
 }
 

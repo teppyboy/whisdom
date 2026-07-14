@@ -11,6 +11,8 @@ allowed_origin = "http://localhost:5173"
 allowed_emails = []
 # Restrict to specific domains (e.g. ["example.com"])
 allowed_domains = []
+# Skip Google token validation. Use only in development.
+dev_auth_bypass = true
 
 [model]
 # Path to GGML quantized whisper model
