@@ -595,6 +595,7 @@ export function App() {
   const [toastMessage, setToastMessage] = React.useState<ToastMessage | null>(null)
   const [history, setHistory] = React.useState<TranscriptDocument[]>([])
   const [error, setError] = React.useState<string | null>(null)
+  const [errorDialogOpen, setErrorDialogOpen] = React.useState(false)
   const [driveStatus, setDriveStatus] = React.useState<DriveStatus>({ type: "idle" })
   const [driveAccessToken, setDriveAccessToken] = React.useState<string | null>(null)
   const [urlInput, setUrlInput] = React.useState("")
@@ -1447,6 +1448,7 @@ export function App() {
                 queueCount={queue.length}
                 onStart={() => void startTranscription()}
                 onStartAll={() => void startBatchTranscription()}
+                onErrorClick={() => setErrorDialogOpen(true)}
               />
             </div>
 
@@ -1480,6 +1482,27 @@ export function App() {
         onDismiss={() => setToastMessage(null)}
         copy={t}
       />
+      <Dialog open={errorDialogOpen} onOpenChange={setErrorDialogOpen}>
+        <DialogContent className="max-w-lg border-destructive/30">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="size-5" />
+              {t.transcriptionFailed}
+            </DialogTitle>
+            <DialogDescription className="sr-only">Error details</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-80 overflow-auto rounded-md border bg-muted/30 p-4">
+            <pre className="whitespace-pre-wrap break-words text-sm font-mono text-foreground">
+              {error}
+            </pre>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="secondary">{t.closeResults}</Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   )
 }
@@ -1968,6 +1991,7 @@ function PreflightPanel({
   queueCount,
   onStart,
   onStartAll,
+  onErrorClick,
 }: {
   analysis: MediaAnalysis | null
   model: string
@@ -1981,6 +2005,7 @@ function PreflightPanel({
   queueCount: number
   onStart: () => void
   onStartAll: () => void
+  onErrorClick: () => void
 }) {
   const progressMessage = progress.phase === "idle" ? copy.waiting : progress.message
   const [showDetailedLog, setShowDetailedLog] = React.useState(false)
@@ -2085,7 +2110,7 @@ function PreflightPanel({
             <button
               type="button"
               className="animate-in fade-in slide-in-from-top-1 cursor-pointer text-left text-sm text-destructive underline decoration-destructive/30 underline-offset-2 duration-200 hover:decoration-destructive"
-              onClick={() => window.alert(error)}
+              onClick={() => onErrorClick()}
               title="Click for full error details"
             >
               {error}
