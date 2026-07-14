@@ -12,6 +12,8 @@ const AUDIO_TYPE_PATTERN = /^audio\//
 const SERVER_CHUNK_LIMIT_MB = 10
 const MEDIA_METADATA_TIMEOUT_MS = 5000
 
+const MAX_DECODED_MB = 400
+
 export async function analyzeMediaFile(
   file: File,
   settings: AppSettings
@@ -26,8 +28,9 @@ export async function analyzeMediaFile(
     : 1
   const fileSizeMb = bytesToMb(file.size)
   const memoryRisk = fileSizeMb > 1500 ? "high" : fileSizeMb > 500 ? "medium" : "low"
+  const estimatedDecodedMb = estimateDecodedMb(file, duration)
   const webGpuStatus = await getWebGpuStatus()
-  const recommendedMode = recommendMode(settings.mode, needsFfmpeg, memoryRisk, webGpuStatus.available)
+  const recommendedMode = recommendMode(settings.mode, needsFfmpeg, memoryRisk, estimatedDecodedMb, webGpuStatus.available)
   const requiredAssets: DownloadAsset[] = [
     {
       id: model.id,
@@ -48,7 +51,7 @@ export async function analyzeMediaFile(
     })
   }
 
-  const warnings = buildWarnings(file, settings, model.multilingual, needsFfmpeg, webGpuStatus)
+  const warnings = buildWarnings(file, settings, model.multilingual, needsFfmpeg, estimatedDecodedMb, webGpuStatus)
 
   return {
     fileName: file.name,
@@ -59,6 +62,7 @@ export async function analyzeMediaFile(
     needsFfmpeg,
     recommendedMode,
     memoryRisk,
+    estimatedDecodedMb,
     chunkPlan: {
       chunkSeconds: settings.chunkSeconds,
       overlapSeconds: settings.overlapSeconds,
@@ -74,8 +78,13 @@ function recommendMode(
   requestedMode: ProcessingMode,
   needsFfmpeg: boolean,
   memoryRisk: MediaAnalysis["memoryRisk"],
+  estimatedDecodedMb: number | null,
   webGpuAvailable: boolean
 ): ProcessingMode {
+  if (estimatedDecodedMb !== null && estimatedDecodedMb > MAX_DECODED_MB) {
+    return "cloudflare-ai"
+  }
+
   if (requestedMode === "local-wasm") {
     return "local-wasm"
   }
@@ -96,10 +105,15 @@ function buildWarnings(
   settings: AppSettings,
   modelMultilingual: boolean,
   needsFfmpeg: boolean,
+  estimatedDecodedMb: number | null,
   webGpuStatus: WebGpuStatus
 ) {
   const warnings: string[] = []
   const copy = WARNING_COPY[settings.uiLanguage]
+
+  if (estimatedDecodedMb !== null && estimatedDecodedMb > MAX_DECODED_MB) {
+    warnings.push(copy.decodedTooLarge(estimatedDecodedMb))
+  }
 
   if (isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) && !modelMultilingual) {
     warnings.push(copy.englishOnly)
@@ -147,6 +161,7 @@ const WARNING_COPY = {
     needsFfmpeg: "Video or unsupported media needs ffmpeg.wasm before transcription.",
     serverChunksOnly: "Server mode sends audio chunks only. Full media stays in the browser.",
     resumeRequiresFile: "Resume after tab close will require re-picking the original file.",
+    decodedTooLarge: (mb: number) => `Decoded audio would use ~${mb} MB. This exceeds the ${MAX_DECODED_MB} MB safety limit for local mode. Use server mode or a shorter file.`,
   },
   vi: {
     englishOnly: "Mô hình đã chọn chỉ hỗ trợ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
@@ -156,6 +171,7 @@ const WARNING_COPY = {
     needsFfmpeg: "Video hoặc định dạng chưa hỗ trợ cần ffmpeg.wasm trước khi chép lời.",
     serverChunksOnly: "Chế độ máy chủ chỉ gửi từng đoạn âm thanh. Tệp gốc vẫn ở trong trình duyệt.",
     resumeRequiresFile: "Sau khi đóng tab, bạn cần chọn lại tệp gốc để tiếp tục.",
+    decodedTooLarge: (mb: number) => `Âm thanh giải mã sẽ dùng ~${mb} MB. Vượt quá giới hạn an toàn ${MAX_DECODED_MB} MB cho chế độ cục bộ. Hãy dùng chế độ máy chủ hoặc tệp ngắn hơn.`,
   },
 } as const
 
@@ -164,7 +180,7 @@ function recommendedModeFromStatus(
   needsFfmpeg: boolean,
   webGpuAvailable: boolean
 ) {
-  return recommendMode(requestedMode, needsFfmpeg, "low", webGpuAvailable)
+  return recommendMode(requestedMode, needsFfmpeg, "low", null, webGpuAvailable)
 }
 
 type NavigatorWithGpu = Navigator & {
@@ -258,4 +274,30 @@ export function formatDuration(seconds: number | null) {
   const minutes = Math.floor(rounded / 60)
   const rest = rounded % 60
   return `${minutes}:${rest.toString().padStart(2, "0")}`
+}
+
+function estimateDecodedMb(file: File, duration: number | null): number | null {
+  if (duration === null) return null
+
+  const isCompressed =
+    file.type.includes("mp4") ||
+    file.type.includes("m4a") ||
+    file.type.includes("aac") ||
+    file.type.includes("mp3") ||
+    file.type.includes("mpeg") ||
+    file.type.includes("ogg") ||
+    file.type.includes("opus") ||
+    file.type.includes("webm") ||
+    file.type.includes("flac")
+
+  if (!isCompressed) {
+    // PCM-like: file size approximately equals decoded size
+    return bytesToMb(file.size)
+  }
+
+  // Compressed formats: estimate from duration
+  // Assume stereo decoded at source sample rate (assume 44.1kHz worst case)
+  // Each sample = 4 bytes (float32), 2 channels
+  const bytesPerSecond = 44100 * 4 * 2
+  return Math.round((duration * bytesPerSecond / (1024 * 1024)) * 10) / 10
 }

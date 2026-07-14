@@ -35,6 +35,7 @@ export type MediaAnalysis = {
   needsFfmpeg: boolean
   recommendedMode: ProcessingMode
   memoryRisk: "low" | "medium" | "high"
+  estimatedDecodedMb: number | null
   chunkPlan: ChunkPlan
   requiredAssets: DownloadAsset[]
   warnings: string[]
