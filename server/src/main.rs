@@ -10,7 +10,6 @@ mod turnstile;
 use std::net::SocketAddr;
 
 use tower_http::cors::CorsLayer;
-use tower_http::limit::RequestBodyLimitLayer;
 
 use config::Config;
 use queue::Queue;
@@ -42,7 +41,6 @@ async fn main() {
         .expect("failed to create temp directory");
 
     let queue = Queue::new();
-    let max_upload_bytes = config.max_upload_bytes();
 
     let cors = {
         let mut cors = CorsLayer::new()
@@ -77,8 +75,7 @@ async fn main() {
     let protected_routes = axum::Router::new()
         .route(
             "/api/transcribe",
-            axum::routing::post(routes::transcribe::transcribe)
-                .layer(RequestBodyLimitLayer::new(max_upload_bytes)),
+            axum::routing::post(routes::transcribe::transcribe),
         )
         .route(
             "/api/progress/{id}",

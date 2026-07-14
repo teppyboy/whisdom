@@ -15,6 +15,16 @@ pub async fn transcribe(
     headers: axum::http::HeaderMap,
     mut multipart: axum::extract::Multipart,
 ) -> Result<Json<Value>, AppError> {
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let content_length = headers
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    tracing::info!(content_type, content_length, "transcribe request received");
+
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -40,7 +50,14 @@ pub async fn transcribe(
                 let data = field
                     .bytes()
                     .await
-                    .map_err(|e| AppError::Internal(format!("failed to read audio field: {e}")))?;
+                    .map_err(|e| {
+                        tracing::error!(
+                            error = %e,
+                            filename = %fname,
+                            "failed to read audio field"
+                        );
+                        AppError::Internal(format!("failed to read audio field: {e}"))
+                    })?;
 
                 if data.len() > state.config.max_upload_bytes() {
                     return Err(AppError::PayloadTooLarge);

@@ -27,7 +27,11 @@ export class ServerTranscriptionApi {
     const form = new FormData()
 
     if (input.type === "file") {
-      form.set("audio", input.file, input.filename)
+      if (input.file.size === 0) {
+        throw new Error("File is empty")
+      }
+      console.debug("[ServerTranscriptionApi] submitting file:", input.filename, input.file.size, input.file.type)
+      form.append("audio", input.file, input.filename)
     } else {
       form.set("url", input.url)
     }
