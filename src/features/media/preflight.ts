@@ -12,8 +12,6 @@ const AUDIO_TYPE_PATTERN = /^audio\//
 const SERVER_CHUNK_LIMIT_MB = 10
 const MEDIA_METADATA_TIMEOUT_MS = 5000
 
-const MAX_DECODED_MB = 400
-
 export async function analyzeMediaFile(
   file: File,
   settings: AppSettings
@@ -30,7 +28,7 @@ export async function analyzeMediaFile(
   const memoryRisk = fileSizeMb > 1500 ? "high" : fileSizeMb > 500 ? "medium" : "low"
   const estimatedDecodedMb = estimateDecodedMb(file, duration)
   const webGpuStatus = await getWebGpuStatus()
-  const recommendedMode = recommendMode(settings.mode, needsFfmpeg, memoryRisk, estimatedDecodedMb, webGpuStatus.available)
+  const recommendedMode = recommendMode(settings.mode, needsFfmpeg, memoryRisk, webGpuStatus.available)
   const requiredAssets: DownloadAsset[] = [
     {
       id: model.id,
@@ -51,7 +49,7 @@ export async function analyzeMediaFile(
     })
   }
 
-  const warnings = buildWarnings(file, settings, model.multilingual, needsFfmpeg, estimatedDecodedMb, webGpuStatus)
+  const warnings = buildWarnings(file, settings, model.multilingual, needsFfmpeg, webGpuStatus)
 
   return {
     fileName: file.name,
@@ -78,13 +76,8 @@ function recommendMode(
   requestedMode: ProcessingMode,
   needsFfmpeg: boolean,
   memoryRisk: MediaAnalysis["memoryRisk"],
-  estimatedDecodedMb: number | null,
   webGpuAvailable: boolean
 ): ProcessingMode {
-  if (estimatedDecodedMb !== null && estimatedDecodedMb > MAX_DECODED_MB) {
-    return "cloudflare-ai"
-  }
-
   if (requestedMode === "local-wasm") {
     return "local-wasm"
   }
@@ -105,15 +98,10 @@ function buildWarnings(
   settings: AppSettings,
   modelMultilingual: boolean,
   needsFfmpeg: boolean,
-  estimatedDecodedMb: number | null,
   webGpuStatus: WebGpuStatus
 ) {
   const warnings: string[] = []
   const copy = WARNING_COPY[settings.uiLanguage]
-
-  if (estimatedDecodedMb !== null && estimatedDecodedMb > MAX_DECODED_MB) {
-    warnings.push(copy.decodedTooLarge(estimatedDecodedMb))
-  }
 
   if (isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) && !modelMultilingual) {
     warnings.push(copy.englishOnly)
@@ -161,7 +149,6 @@ const WARNING_COPY = {
     needsFfmpeg: "Video or unsupported media needs ffmpeg.wasm before transcription.",
     serverChunksOnly: "Server mode sends audio chunks only. Full media stays in the browser.",
     resumeRequiresFile: "Resume after tab close will require re-picking the original file.",
-    decodedTooLarge: (mb: number) => `Decoded audio would use ~${mb} MB. This exceeds the ${MAX_DECODED_MB} MB safety limit for local mode. Use server mode or a shorter file.`,
   },
   vi: {
     englishOnly: "Mô hình đã chọn chỉ hỗ trợ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
@@ -171,7 +158,6 @@ const WARNING_COPY = {
     needsFfmpeg: "Video hoặc định dạng chưa hỗ trợ cần ffmpeg.wasm trước khi chép lời.",
     serverChunksOnly: "Chế độ máy chủ chỉ gửi từng đoạn âm thanh. Tệp gốc vẫn ở trong trình duyệt.",
     resumeRequiresFile: "Sau khi đóng tab, bạn cần chọn lại tệp gốc để tiếp tục.",
-    decodedTooLarge: (mb: number) => `Âm thanh giải mã sẽ dùng ~${mb} MB. Vượt quá giới hạn an toàn ${MAX_DECODED_MB} MB cho chế độ cục bộ. Hãy dùng chế độ máy chủ hoặc tệp ngắn hơn.`,
   },
 } as const
 
@@ -180,7 +166,7 @@ function recommendedModeFromStatus(
   needsFfmpeg: boolean,
   webGpuAvailable: boolean
 ) {
-  return recommendMode(requestedMode, needsFfmpeg, "low", null, webGpuAvailable)
+  return recommendMode(requestedMode, needsFfmpeg, "low", webGpuAvailable)
 }
 
 type NavigatorWithGpu = Navigator & {
