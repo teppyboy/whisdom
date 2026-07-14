@@ -44,15 +44,23 @@ async fn main() {
     let queue = Queue::new();
     let max_upload_bytes = config.max_upload_bytes();
 
-    let cors = CorsLayer::new()
-        .allow_origin(
-            config
-                .allowed_origin()
-                .parse::<axum::http::HeaderValue>()
-                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("*")),
-        )
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any);
+    let cors = {
+        let mut cors = CorsLayer::new()
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any);
+
+        if config.dev_auth_bypass() {
+            cors = cors.allow_origin(tower_http::cors::Any);
+        } else {
+            cors = cors.allow_origin(
+                config
+                    .allowed_origin()
+                    .parse::<axum::http::HeaderValue>()
+                    .unwrap_or_else(|_| axum::http::HeaderValue::from_static("*")),
+            );
+        }
+        cors
+    };
 
     let state = AppState {
         config: config.clone(),
