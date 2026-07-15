@@ -157,7 +157,7 @@ let segments = tokio::task::spawn_blocking(move || {
 .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))??;
 ```
 
-This requires `execute()` to gain access to `state: &AppState` (or specifically `&ModelRegistry`) as a new parameter, since it currently receives only `config: &Config`.
+`execute()` currently has the signature `execute(&id, &input, &language, &work_dir, config, queue, &cancel_flag)` (individually destructured fields, not a `Job` reference). It needs a new `model_id: &str` parameter added alongside the existing `language: &Option<String>` one, plus a `model_registry: &ModelRegistry` (or `state: &AppState`) parameter for the registry lookup shown above. `run_pipeline(job: &Arc<Mutex<Job>>, config: &Config, queue: &Queue)` (`server/src/pipeline/run.rs:17`) destructures `(id, input, language, work_dir)` from the locked `Job` at lines 18-26 — this destructure must also extract `model_id`, and `run_pipeline`'s own signature must gain the `model_registry`/`state` parameter to pass through to `execute()`.
 
 `TranscribeOptions` drops `model_path` entirely:
 
@@ -289,7 +289,8 @@ export interface ServerCapabilities {
 **Settings:** add `serverModelId: string | null` to the settings type (default `null`, meaning "use server default until capabilities load or user selects"). Persisted via existing settings persistence (IndexedDB), same as `modelId`.
 
 **Capabilities fetch & gating in `App.tsx`:**
-- Add `serverCapabilities: ServerCapabilities | "loading" | "error" | null` state, fetched when entering server mode.
+- An existing `useEffect` (`App.tsx:621-638`) already fetches capabilities via `api.getCapabilities()` when `settings.mode === "server"`, but only uses the result to show a toast on `!cap?.available` — it doesn't store the response. Extend this same effect to also set the new `serverCapabilities` state described below, rather than adding a second/duplicate capabilities fetch.
+- Add `serverCapabilities: ServerCapabilities | "loading" | "error" | null` state, set by the extended effect above (not a new fetch).
 - **Blocking behavior:** if the fetch fails, returns `available: false`, or returns zero `models`, the "Start transcription" action for server mode is disabled and a localized error message is shown in both `COPY.en`/`COPY.vi` (e.g. "Could not load available models from the server. Check server status and try again."). No silent fallback to submitting without a model field.
 - On successful fetch: if `settings.serverModelId` is `null` or not present in `models`, auto-select `capabilities.default_model`.
 
