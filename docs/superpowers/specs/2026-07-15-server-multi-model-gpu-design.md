@@ -301,6 +301,20 @@ Description text under the dropdown in server mode uses `ServerModelInfo.label` 
 
 **Fixing the history/results mislabel bug:** replace the hardcoded `modelId: "whisper.cpp"` (`App.tsx:920,968`) with the actual resolved server model id used for that request (`settings.serverModelId` at submit time, e.g. `"base"`). Add a small `SERVER_MODEL_LABELS` lookup (built at render time from the last-fetched `serverCapabilities.models`, with a minimal static fallback map of known ids → labels for viewing old history when capabilities aren't currently loaded), used at the three display sites (`App.tsx:2152,2169,2305`) **before** falling back to `findModel`. This ensures old and new server transcripts show real labels ("Base", "Small") instead of uniformly mislabeling as "Whisper Base".
 
+**Local-model-derived warnings must not leak into server mode:** `settings.modelId` (the local `WHISPER_MODELS` catalog selection) keeps its own value even while `settings.mode === "server"` — it's simply not shown in the UI. Several pieces of logic currently derive from `findModel(settings.modelId)` regardless of mode, and after this change would be evaluating warnings against an irrelevant local model instead of the actual server model in use (which has no `multilingual`/dtype data in `ServerModelInfo` to substitute in):
+
+- `App.tsx:643` `isEnglishOnlyMismatch` (`!model.multilingual` check) — rendered at `App.tsx:1568` (inline, inside `MainControls`) and `App.tsx:1456` (sidebar banner). Neither render site is currently gated by `settings.mode`.
+- `App.tsx:1525` `usesQuantizedWeights` (`getLocalModelDtype(model) === "q4"`) — rendered at `App.tsx:1572-1576`. Not gated by `settings.mode`.
+- `src/features/media/preflight.ts` quantized-weight warning (line ~112-114) and WebGPU-requirement warning (line ~116-122) — both gated only by `settings.mode !== "cloudflare-ai"`, which evaluates true for `"server"` mode too, so they currently fire (or after this change, would continue to fire) using the stale local `settings.modelId` even during server-mode runs.
+
+**Fix:** treat `"server"` the same as `"cloudflare-ai"` for all of the above — these are local-model-only warnings and must be suppressed whenever `settings.mode` is not a local mode (`local-webgpu`/`local-wasm`):
+- Change the `preflight.ts` gates from `settings.mode !== "cloudflare-ai"` to `settings.mode !== "cloudflare-ai" && settings.mode !== "server"` (or equivalently, a positive check for local modes).
+- Gate `isEnglishOnlyMismatch`'s computation or its two render sites (`App.tsx:1456`, `App.tsx:1568`) and `usesQuantizedWeights`'s render site (`App.tsx:1572-1576`) so they don't render when `settings.mode === "server"` (or `"cloudflare-ai"`), consistent with the existing model-picker gating at `App.tsx:1534`.
+
+Server-mode-specific warnings (e.g. capabilities fetch failure, zero models available) are handled separately per the blocking behavior described above, not through this local-model warning path.
+
+**Pipeline function signature threading:** in addition to `execute()` gaining a `state: &AppState` (or `&ModelRegistry`) parameter (Section 3), `run_pipeline()` — which calls `execute()` — and its call site in `routes/transcribe.rs` (currently spawning `run_pipeline(job, config, queue)`, around line 163) must also be updated to thread `state`/`ModelRegistry` through, since `run_pipeline()` is the entry point that receives whatever the route handler passes at spawn time.
+
 ## Out of Scope
 
 - Auto-downloading models the server doesn't have — rejecting with a clear 400 keeps the server predictable and offline-friendly.
