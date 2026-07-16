@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod job;
+mod models;
 mod pipeline;
 mod queue;
 mod routes;
