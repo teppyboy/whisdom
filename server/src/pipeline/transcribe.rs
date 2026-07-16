@@ -2,29 +2,23 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 use crate::error::AppError;
 use crate::job::TranscriptSegment;
 
 pub struct TranscribeOptions {
-    pub model_path: String,
     pub threads: usize,
     pub language: Option<String>,
 }
 
 pub fn transcribe_wav(
     wav_path: &Path,
+    context: &WhisperContext,
     options: &TranscribeOptions,
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<Vec<TranscriptSegment>, AppError> {
-    let model_path = Path::new(&options.model_path);
-
-    let ctx_params = WhisperContextParameters::default();
-    let ctx = WhisperContext::new_with_params(model_path, ctx_params)
-        .map_err(|e| AppError::Internal(format!("failed to load whisper model: {e}")))?;
-
-    let mut state = ctx
+    let mut state = context
         .create_state()
         .map_err(|e| AppError::Internal(format!("failed to create whisper state: {e}")))?;
 
