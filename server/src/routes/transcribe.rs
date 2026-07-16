@@ -10,6 +10,31 @@ use crate::pipeline::run;
 use crate::turnstile;
 use crate::AppState;
 
+fn multipart_error(error: axum::extract::multipart::MultipartError) -> AppError {
+    match error.status() {
+        axum::http::StatusCode::PAYLOAD_TOO_LARGE => AppError::PayloadTooLarge,
+        axum::http::StatusCode::BAD_REQUEST => AppError::BadRequest(error.body_text()),
+        _ => AppError::Internal(error.body_text()),
+    }
+}
+
+fn resolve_model_id(
+    requested: Option<String>,
+    registry: &crate::models::ModelRegistry,
+) -> Result<String, AppError> {
+    match requested {
+        Some(id) => {
+            if registry.info(&id).is_none() {
+                return Err(AppError::BadRequest(format!(
+                    "model '{id}' is not available on this server"
+                )));
+            }
+            Ok(id)
+        }
+        None => Ok(registry.default_id().to_string()),
+    }
+}
+
 pub async fn transcribe(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -36,9 +61,10 @@ pub async fn transcribe(
     let mut file_filename: Option<String> = None;
     let mut url_string: Option<String> = None;
     let mut language: Option<String> = None;
+    let mut model: Option<String> = None;
     let mut turnstile_token: Option<String> = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart.next_field().await.map_err(multipart_error)? {
         let name = field.name().unwrap_or("").to_string();
 
         match name.as_str() {
@@ -47,17 +73,14 @@ pub async fn transcribe(
                     .file_name()
                     .unwrap_or("upload.bin")
                     .to_string();
-                let data = field
-                    .bytes()
-                    .await
-                    .map_err(|e| {
-                        tracing::error!(
-                            error = %e,
-                            filename = %fname,
-                            "failed to read audio field"
-                        );
-                        AppError::Internal(format!("failed to read audio field: {e}"))
-                    })?;
+                let data = field.bytes().await.map_err(|error| {
+                    tracing::error!(
+                        error = %error,
+                        filename = %fname,
+                        "failed to read audio field"
+                    );
+                    multipart_error(error)
+                })?;
 
                 if data.len() > state.config.max_upload_bytes() {
                     return Err(AppError::PayloadTooLarge);
@@ -67,28 +90,25 @@ pub async fn transcribe(
                 file_filename = Some(fname);
             }
             "url" => {
-                let value = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("failed to read url field: {e}")))?;
+                let value = field.text().await.map_err(multipart_error)?;
                 if !value.is_empty() {
                     url_string = Some(value);
                 }
             }
             "language" => {
-                let value = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("failed to read language field: {e}")))?;
+                let value = field.text().await.map_err(multipart_error)?;
                 if !value.is_empty() {
                     language = Some(value);
                 }
             }
+            "model" => {
+                let value = field.text().await.map_err(multipart_error)?;
+                if !value.is_empty() {
+                    model = Some(value);
+                }
+            }
             "turnstile_token" => {
-                let value = field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("failed to read turnstile field: {e}")))?;
+                let value = field.text().await.map_err(multipart_error)?;
                 if !value.is_empty() {
                     turnstile_token = Some(value);
                 }
@@ -96,6 +116,16 @@ pub async fn transcribe(
             _ => {}
         }
     }
+
+    let resolved_model_id = resolve_model_id(model, &state.model_registry)?;
+    tracing::debug!(model_id = %resolved_model_id, "resolved model for job");
+
+    tracing::debug!(
+        filename = file_filename.as_deref().unwrap_or(""),
+        bytes = file_bytes.as_ref().map_or(0, Vec::len),
+        language = language.as_deref().unwrap_or("auto"),
+        "transcribe input parsed"
+    );
 
     turnstile::verify_turnstile(
         &state.config.turnstile,
@@ -128,6 +158,11 @@ pub async fn transcribe(
         })?;
     }
 
+    let input_kind = match &input {
+        JobInput::File { .. } => "file",
+        JobInput::Url { .. } => "url",
+    };
+
     let (cancel_tx, _) = tokio::sync::watch::channel(false);
 
     let job = Job {
@@ -135,6 +170,7 @@ pub async fn transcribe(
         email: email.clone(),
         input,
         language,
+        model_id: resolved_model_id,
         phase: JobPhase::Queued,
         progress: None,
         message: None,
@@ -146,14 +182,36 @@ pub async fn transcribe(
     };
 
     let (id, job_arc) = state.queue.insert(job).await;
+    tracing::info!(job_id = %id, input_kind, "transcription job queued");
     let job_clone = job_arc.clone();
     let config_clone = state.config.clone();
     let queue_clone = state.queue.clone();
+    let model_registry_clone = std::sync::Arc::clone(&state.model_registry);
 
     tokio::spawn(async move {
-        run::run_pipeline(&job_clone, &config_clone, &queue_clone).await;
+        run::run_pipeline(&job_clone, &config_clone, &queue_clone, &model_registry_clone).await;
         queue_clone.remove(&id).await;
     });
 
     Ok(Json(json!({ "job_id": job_id })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ModelRegistry;
+
+    #[test]
+    fn resolve_model_id_defaults_to_registry_default_when_none_requested() {
+        let registry = ModelRegistry::empty_for_tests();
+        let result = resolve_model_id(None, &registry);
+        assert_eq!(result.unwrap(), registry.default_id().to_string());
+    }
+
+    #[test]
+    fn resolve_model_id_rejects_unknown_model() {
+        let registry = ModelRegistry::empty_for_tests();
+        let result = resolve_model_id(Some("nonexistent".to_string()), &registry);
+        assert!(result.is_err());
+    }
 }
