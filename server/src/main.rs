@@ -10,6 +10,7 @@ mod routes;
 mod turnstile;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use tower_http::cors::CorsLayer;
@@ -21,9 +22,10 @@ use queue::Queue;
 pub struct AppState {
     pub config: Config,
     pub queue: Queue,
+    pub model_registry: Arc<models::ModelRegistry>,
 }
 
-fn build_app(config: Config, queue: Queue) -> axum::Router {
+fn build_app(config: Config, queue: Queue, model_registry: Arc<models::ModelRegistry>) -> axum::Router {
     let multipart_body_limit = config.multipart_body_limit();
     let cors = {
         let mut cors = CorsLayer::new()
@@ -43,7 +45,11 @@ fn build_app(config: Config, queue: Queue) -> axum::Router {
         cors
     };
 
-    let state = AppState { config, queue };
+    let state = AppState {
+        config,
+        queue,
+        model_registry,
+    };
 
     let public_routes = axum::Router::new()
         .route("/api/health", axum::routing::get(routes::health::health))
@@ -88,11 +94,19 @@ async fn main() {
         .await
         .expect("failed to create temp directory");
 
+    let model_registry = match models::preload_models(&config).await {
+        Ok(registry) => Arc::new(registry),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to preload models, server cannot start");
+            std::process::exit(1);
+        }
+    };
+
     let port = config.port();
     if config.turnstile.enabled {
         tracing::info!("turnstile verification enabled");
     }
-    let app = build_app(config, Queue::new());
+    let app = build_app(config, Queue::new(), model_registry);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(%addr, "whisdom-server starting");
 
@@ -116,6 +130,13 @@ mod tests {
         config.limits.max_upload_mb = max_upload_mb;
         config.paths.temp_dir = temp_dir.path().to_string_lossy().into_owned();
         config
+    }
+
+    fn test_model_registry() -> Arc<models::ModelRegistry> {
+        // Empty registry is fine for multipart-body-limit tests — they never
+        // reach model resolution logic (audio parsing fails/succeeds before
+        // model lookup in routes/transcribe.rs, per Task 9's ordering).
+        Arc::new(models::ModelRegistry::empty_for_tests())
     }
 
     fn multipart_request(audio_size: usize, complete: bool) -> Request<Body> {
@@ -143,7 +164,7 @@ mod tests {
     #[tokio::test]
     async fn transcribe_accepts_audio_above_axum_default_limit() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 4), Queue::new());
+        let app = build_app(test_config(&temp_dir, 4), Queue::new(), test_model_registry());
 
         let response = app
             .oneshot(multipart_request(3 * 1024 * 1024, true))
@@ -156,7 +177,7 @@ mod tests {
     #[tokio::test]
     async fn transcribe_accepts_audio_at_configured_file_limit() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new());
+        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
 
         let response = app
             .oneshot(multipart_request(1024 * 1024, true))
@@ -169,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn transcribe_rejects_audio_above_configured_file_limit() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new());
+        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
 
         let response = app
             .oneshot(multipart_request(1024 * 1024 + 1, true))
@@ -182,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn transcribe_maps_parser_limit_to_payload_too_large() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new());
+        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
 
         let response = app
             .oneshot(multipart_request(2 * 1024 * 1024, true))
@@ -195,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn transcribe_reports_incomplete_multipart_as_bad_request() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new());
+        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
 
         let response = app
             .oneshot(multipart_request(16, false))
