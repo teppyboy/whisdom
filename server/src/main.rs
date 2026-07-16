@@ -161,6 +161,44 @@ mod tests {
             .expect("multipart request should be valid")
     }
 
+    fn multipart_request_with_model(audio_size: usize, model: &str) -> Request<Body> {
+        let mut body = format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"test.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+        )
+        .into_bytes();
+        body.resize(body.len() + audio_size, 0);
+        body.extend_from_slice(
+            format!(
+                "\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n--{BOUNDARY}--\r\n"
+            )
+            .as_bytes(),
+        );
+
+        Request::builder()
+            .method("POST")
+            .uri("/api/transcribe")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            .header(header::AUTHORIZATION, "Bearer dev-mode")
+            .body(Body::from(body))
+            .expect("multipart request should be valid")
+    }
+
+    #[tokio::test]
+    async fn transcribe_rejects_unknown_model_with_bad_request() {
+        let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
+
+        let response = app
+            .oneshot(multipart_request_with_model(16, "nonexistent-model"))
+            .await
+            .expect("request should complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
     #[tokio::test]
     async fn transcribe_accepts_audio_above_axum_default_limit() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
