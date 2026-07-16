@@ -21,10 +21,12 @@ RUN apt-get update \
 
 RUN mkdir -p /data/models /data/tmp
 
+WORKDIR /app
+
 COPY --from=builder /build/target/release/whisdom-server /usr/local/bin/whisdom-server
 COPY scripts/download-model.sh /usr/local/bin/download-model.sh
 
-ENV WHISDOM_MODEL_PATH=/data/models/ggml-base-q5_1.bin
+ENV WHISDOM_MODEL_DIR=/data/models
 ENV WHISDOM_TEMP_DIR=/data/tmp
 ENV WHISDOM_SERVER_PORT=8788
 

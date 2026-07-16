@@ -1,6 +1,3 @@
-// Wired up in a later task (ModelRegistry/preload_models and route integration).
-#![allow(dead_code)]
-
 //! Model catalog derivation: turns a ggml filename into a stable id/label pair.
 
 /// Strip the leading `ggml-` prefix and trailing `.bin` suffix, then strip a
@@ -16,8 +13,15 @@ pub fn derive_id(filename: &str) -> String {
             let (head, tail) = stripped.split_at(idx);
             let quant = &tail[1..]; // skip the '-'
             let is_quant = quant.len() > 1
-                && (quant.starts_with('q') || quant.starts_with('Q') || quant.starts_with('f') || quant.starts_with('F'))
-                && quant.chars().nth(1).map(|c| c.is_ascii_digit()).unwrap_or(false);
+                && (quant.starts_with('q')
+                    || quant.starts_with('Q')
+                    || quant.starts_with('f')
+                    || quant.starts_with('F'))
+                && quant
+                    .chars()
+                    .nth(1)
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false);
             if is_quant {
                 head.to_string()
             } else {
@@ -116,7 +120,10 @@ impl std::fmt::Display for PreloadError {
                 write!(f, "no models could be loaded from the configured catalog")
             }
             PreloadError::DefaultModelNotLoaded { requested } => {
-                write!(f, "configured default model '{requested}' was not successfully loaded")
+                write!(
+                    f,
+                    "configured default model '{requested}' was not successfully loaded"
+                )
             }
             PreloadError::DuplicateModelId { id } => {
                 write!(f, "duplicate derived model id '{id}' in catalog; filenames must produce unique ids")
@@ -159,7 +166,9 @@ pub async fn preload_models(config: &Config) -> Result<ModelRegistry, PreloadErr
         tasks.push(tokio::task::spawn_blocking(move || {
             let started = std::time::Instant::now();
             let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            let size_mb = size_bytes / (1024 * 1024);
+            const BYTES_PER_MB: u64 = 1024 * 1024;
+            let size_mb = size_bytes / BYTES_PER_MB
+                + u64::from(size_bytes % BYTES_PER_MB >= BYTES_PER_MB / 2);
 
             let mut params = WhisperContextParameters::default();
             params.use_gpu(effective_gpu);
@@ -237,7 +246,10 @@ pub async fn preload_models(config: &Config) -> Result<ModelRegistry, PreloadErr
         });
     }
 
-    Ok(ModelRegistry { entries, default_id })
+    Ok(ModelRegistry {
+        entries,
+        default_id,
+    })
 }
 
 #[cfg(test)]

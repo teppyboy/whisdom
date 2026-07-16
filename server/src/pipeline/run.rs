@@ -66,7 +66,11 @@ pub async fn run_pipeline(
             let mut j = job.lock().await;
             j.phase = JobPhase::Complete;
             j.progress = Some(100.0);
-            let text = segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(" ");
+            let text = segments
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
             j.text = Some(text);
             j.segments = Some(segments);
         }
@@ -108,21 +112,36 @@ async fn execute(
     config: &Config,
     queue: &Queue,
     model_registry: &Arc<crate::models::ModelRegistry>,
-    cancel_flag: &AtomicBool,
+    cancel_flag: &Arc<AtomicBool>,
 ) -> Result<Vec<crate::job::TranscriptSegment>, AppError> {
-    let ExecuteContext { id, input, language, model_id, work_dir } = *ctx;
+    let ExecuteContext {
+        id,
+        input,
+        language,
+        model_id,
+        work_dir,
+    } = *ctx;
     tokio::fs::create_dir_all(work_dir).await?;
 
     let media_path = match input {
         JobInput::File { filename } => {
             let path = work_dir.join(filename);
             if !path.exists() {
-                return Err(AppError::Internal("input file not found in work dir".into()));
+                return Err(AppError::Internal(
+                    "input file not found in work dir".into(),
+                ));
             }
             path
         }
         JobInput::Url { url } => {
-            update_phase(id, JobPhase::Downloading, Some(0.0), Some("downloading url...".into()), queue).await;
+            update_phase(
+                id,
+                JobPhase::Downloading,
+                Some(0.0),
+                Some("downloading url...".into()),
+                queue,
+            )
+            .await;
 
             let cancel_rx = {
                 let entry = queue.get(id).await.unwrap();
@@ -132,7 +151,14 @@ async fn execute(
 
             let path = download::download_url(url, work_dir, config, &cancel_rx).await?;
 
-            update_phase(id, JobPhase::Downloading, Some(100.0), Some("download complete".into()), queue).await;
+            update_phase(
+                id,
+                JobPhase::Downloading,
+                Some(100.0),
+                Some("download complete".into()),
+                queue,
+            )
+            .await;
 
             path
         }
@@ -147,7 +173,14 @@ async fn execute(
         "extracting pipeline media"
     );
 
-    update_phase(id, JobPhase::Extracting, Some(0.0), Some("extracting audio...".into()), queue).await;
+    update_phase(
+        id,
+        JobPhase::Extracting,
+        Some(0.0),
+        Some("extracting audio...".into()),
+        queue,
+    )
+    .await;
 
     {
         let cancel_rx = {
@@ -159,13 +192,27 @@ async fn execute(
         extract::extract_audio(&media_path, &audio_path, config, &cancel_rx).await?;
     }
 
-    update_phase(id, JobPhase::Extracting, Some(100.0), Some("extraction complete".into()), queue).await;
+    update_phase(
+        id,
+        JobPhase::Extracting,
+        Some(100.0),
+        Some("extraction complete".into()),
+        queue,
+    )
+    .await;
 
     if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(AppError::BadRequest("cancelled".into()));
     }
 
-    update_phase(id, JobPhase::Transcribing, Some(0.0), Some("transcribing...".into()), queue).await;
+    update_phase(
+        id,
+        JobPhase::Transcribing,
+        Some(0.0),
+        Some("transcribing...".into()),
+        queue,
+    )
+    .await;
 
     let (context, semaphore) = model_registry
         .get(model_id)
@@ -173,7 +220,9 @@ async fn execute(
 
     let options = TranscribeOptions {
         threads: config.threads(),
-        language: language.as_ref().and_then(|l| if l != "auto" { Some(l.clone()) } else { None }),
+        language: language
+            .as_ref()
+            .and_then(|l| if l != "auto" { Some(l.clone()) } else { None }),
     };
 
     tracing::debug!(model_id, threads = options.threads, language = ?options.language, "transcribe options resolved");
@@ -192,7 +241,7 @@ async fn execute(
         "starting transcription"
     );
 
-    let flag = Arc::new(AtomicBool::new(cancel_flag.load(std::sync::atomic::Ordering::Relaxed)));
+    let flag = Arc::clone(cancel_flag);
     let audio_clone = audio_path.clone();
     let context_clone = Arc::clone(&context);
 
@@ -204,14 +253,27 @@ async fn execute(
     .await
     .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))??;
 
-    update_phase(id, JobPhase::Transcribing, Some(100.0), Some("transcription complete".into()), queue).await;
+    update_phase(
+        id,
+        JobPhase::Transcribing,
+        Some(100.0),
+        Some("transcription complete".into()),
+        queue,
+    )
+    .await;
 
     cleanup(work_dir).await;
 
     Ok(segments)
 }
 
-async fn update_phase(id: &str, phase: JobPhase, progress: Option<f32>, message: Option<String>, queue: &Queue) {
+async fn update_phase(
+    id: &str,
+    phase: JobPhase,
+    progress: Option<f32>,
+    message: Option<String>,
+    queue: &Queue,
+) {
     tracing::debug!(
         job_id = id,
         phase = ?phase,

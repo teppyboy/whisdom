@@ -20,6 +20,7 @@ export async function analyzeMediaFile(
   const isVideo = VIDEO_TYPE_PATTERN.test(file.type)
   const isAudio = AUDIO_TYPE_PATTERN.test(file.type)
   const model = findModel(settings.modelId)
+  const isLocalMode = settings.mode === "local-webgpu" || settings.mode === "local-wasm"
   const needsFfmpeg = isVideo || (!isAudio && file.type !== "")
   const estimatedChunks = duration
     ? Math.max(1, Math.ceil(duration / settings.chunkSeconds))
@@ -29,17 +30,17 @@ export async function analyzeMediaFile(
   const estimatedDecodedMb = estimateDecodedMb(file, duration)
   const webGpuStatus = await getWebGpuStatus()
   const recommendedMode = recommendMode(settings.mode, needsFfmpeg, memoryRisk, webGpuStatus.available)
-  const requiredAssets: DownloadAsset[] = [
-    {
+  const requiredAssets: DownloadAsset[] = isLocalMode
+    ? [{
       id: model.id,
       label: model.label,
       sizeMb: model.sizeMb,
-      required: recommendedMode !== "cloudflare-ai",
+      required: true,
       status: "unknown",
-    },
-  ]
+    }]
+    : []
 
-  if (needsFfmpeg) {
+  if (needsFfmpeg && settings.mode !== "server") {
     requiredAssets.push({
       id: "@ffmpeg/core",
       label: "ffmpeg.wasm core",
@@ -78,6 +79,10 @@ function recommendMode(
   memoryRisk: MediaAnalysis["memoryRisk"],
   webGpuAvailable: boolean
 ): ProcessingMode {
+  if (requestedMode === "server") {
+    return "server"
+  }
+
   if (requestedMode === "local-wasm") {
     return "local-wasm"
   }
@@ -103,7 +108,11 @@ function buildWarnings(
   const warnings: string[] = []
   const copy = WARNING_COPY[settings.uiLanguage]
 
-  if (isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) && !modelMultilingual) {
+  if (
+    (settings.mode === "local-webgpu" || settings.mode === "local-wasm") &&
+    isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) &&
+    !modelMultilingual
+  ) {
     warnings.push(copy.englishOnly)
   }
 
@@ -126,7 +135,7 @@ function buildWarnings(
     warnings.push(copy.webGpuUnavailable(webGpuStatus.reason))
   }
 
-  if (needsFfmpeg) {
+  if (needsFfmpeg && settings.mode !== "server") {
     warnings.push(copy.needsFfmpeg)
   }
 

@@ -1,5 +1,32 @@
-import type { ServerCapabilities, ServerJobStatus, TranscribeInput } from "./types"
+import type { ServerCapabilities, ServerJobStatus, ServerModelInfo, TranscribeInput } from "./types"
 import { subscribeProgress, type SseConnection } from "./sse"
+
+function isServerModelInfo(value: unknown): value is ServerModelInfo {
+  if (typeof value !== "object" || value === null) return false
+  const model = value as Record<string, unknown>
+  return (
+    typeof model.id === "string" &&
+    typeof model.label === "string" &&
+    typeof model.size_mb === "number" &&
+    Number.isFinite(model.size_mb) &&
+    typeof model.quality === "string"
+  )
+}
+
+function isServerCapabilities(value: unknown): value is ServerCapabilities {
+  if (typeof value !== "object" || value === null) return false
+  const capabilities = value as Record<string, unknown>
+  return (
+    typeof capabilities.available === "boolean" &&
+    typeof capabilities.engine === "string" &&
+    Array.isArray(capabilities.input_types) &&
+    capabilities.input_types.every((inputType) => typeof inputType === "string") &&
+    typeof capabilities.cpu_optimized === "boolean" &&
+    Array.isArray(capabilities.models) &&
+    capabilities.models.every(isServerModelInfo) &&
+    typeof capabilities.default_model === "string"
+  )
+}
 
 export class ServerTranscriptionApi {
   private baseUrl: string
@@ -14,7 +41,8 @@ export class ServerTranscriptionApi {
     try {
       const response = await fetch(`${this.baseUrl}/api/capabilities`)
       if (!response.ok) return null
-      return (await response.json()) as ServerCapabilities
+      const capabilities: unknown = await response.json()
+      return isServerCapabilities(capabilities) ? capabilities : null
     } catch {
       return null
     }

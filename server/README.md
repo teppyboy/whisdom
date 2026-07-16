@@ -15,8 +15,7 @@ Server-side Whisper transcription backend using Rust, Axum, and whisper.cpp.
 ### Setup
 
 ```bash
-# Review and customize config
-cp config.toml.example config.toml   # or edit the provided config.toml
+# Review and customize the provided config.toml
 
 # Download a GGML model
 bash scripts/download-model.sh ./models ggml-base-q5_1.bin
@@ -43,7 +42,21 @@ allowed_emails = []  # e.g. ["user@example.com"]
 allowed_domains = [] # e.g. ["example.com"]
 
 [model]
-path = "./models/ggml-base-q5_1.bin"
+dir = "./models"
+default_model = "base"
+
+[[model.catalog]]
+filename = "ggml-base-q5_1.bin"
+quality = "balanced"
+
+[[model.catalog]]
+filename = "ggml-small-q5_1.bin"
+quality = "high"
+gpu = true
+
+[gpu]
+enabled = false
+device = 0
 
 [paths]
 temp_dir = "./tmp"
@@ -66,13 +79,20 @@ Environment variable overrides:
 | `WHISDOM_ALLOWED_ORIGIN` | `auth.allowed_origin` |
 | `WHISDOM_ALLOWED_EMAILS` | `auth.allowed_emails` (comma-separated) |
 | `WHISDOM_ALLOWED_DOMAINS` | `auth.allowed_domains` (comma-separated) |
-| `WHISDOM_MODEL_PATH` | `model.path` |
+| `WHISDOM_MODEL_DIR` | `model.dir` |
+| `WHISDOM_MODEL_DEFAULT` | `model.default_model` |
+| `WHISDOM_GPU_ENABLED` | `gpu.enabled` (`"1"` or `"true"`) |
+| `WHISDOM_GPU_DEVICE` | `gpu.device` |
 | `WHISDOM_TEMP_DIR` | `paths.temp_dir` |
 | `WHISDOM_YTDLP_PATH` | `paths.ytdlp_path` |
 | `WHISDOM_FFMPEG_PATH` | `paths.ffmpeg_path` |
 | `WHISDOM_MAX_UPLOAD_MB` | `limits.max_upload_mb` |
 | `TURNSTILE_SECRET_KEY` | `turnstile.secret_key` |
 | `TURNSTILE_ENABLED` | `turnstile.enabled` (`"1"` or `"true"`) |
+
+Each `[[model.catalog]]` entry names a model file inside `model.dir`. The server derives the request id from the filename, so `ggml-small-q5_1.bin` becomes `small`. At startup, the server preloads every catalog file that exists and exits if no model loads or `default_model` is unavailable. Missing non-default files are skipped. Preloading happens in parallel and can temporarily increase CPU, disk I/O, and memory use.
+
+All loaded models remain resident. The five-model example in `config.toml` needs roughly 2.8 GB for weights alone, plus per-request state. Trim the catalog for machines with limited RAM or VRAM. Requests using the same model are serialized; requests using different models may run concurrently.
 
 ## API
 
@@ -98,7 +118,8 @@ Authorization: Bearer <google-oauth-token>
 curl -X POST http://localhost:8788/api/transcribe \
   -H "Authorization: Bearer <token>" \
   -F "audio=@audio.mp3" \
-  -F "language=en"
+  -F "language=en" \
+  -F "model=base"
 ```
 
 ### Submit a URL
@@ -107,8 +128,36 @@ curl -X POST http://localhost:8788/api/transcribe \
 curl -X POST http://localhost:8788/api/transcribe \
   -H "Authorization: Bearer <token>" \
   -F "url=https://www.youtube.com/watch?v=..." \
-  -F "language=vi"
+  -F "language=vi" \
+  -F "model=small"
 ```
+
+The optional `model` field accepts an id reported by `GET /api/capabilities`. If omitted, the server uses `model.default_model`. Unknown or unloaded model ids return HTTP 400.
+
+### GPU acceleration
+
+GPU support is selected at compile time. Build with exactly one backend feature:
+
+```bash
+cargo build --release --features cuda
+cargo build --release --features vulkan
+cargo build --release --features hipblas  # AMD ROCm
+```
+
+Do not combine backend features because their native libraries can conflict at link time. Enable GPU use globally, then opt individual catalog entries in:
+
+```toml
+[gpu]
+enabled = true
+device = 0
+
+[[model.catalog]]
+filename = "ggml-large-v3-q5_0.bin"
+quality = "best"
+gpu = true
+```
+
+Effective GPU use is `gpu.enabled && model.catalog[].gpu`. This allows selected models to use VRAM while others remain on CPU. If GPU use is enabled in configuration but the binary lacks a matching backend feature, whisper.cpp can silently fall back to CPU; the server cannot reliably detect that fallback through whisper-rs.
 
 ### Stream progress
 
@@ -128,8 +177,11 @@ docker build -t whisdom-server .
 docker run -p 8788:8788 \
   -v $(pwd)/config.toml:/app/config.toml \
   -v $(pwd)/models:/data/models \
+  -e WHISDOM_MODEL_DIR=/data/models \
   whisdom-server
 ```
+
+The catalog filenames in the mounted `config.toml` must exist in the mounted model directory. The image sets `WHISDOM_MODEL_DIR=/data/models` by default.
 
 ### Bare metal with systemd
 
@@ -250,13 +302,14 @@ await fetch("/api/transcribe", {
 
 When Turnstile is disabled or the secret key is empty, the token check is skipped entirely — no frontend changes are required.
 
-## Recommended CPU Models
+## Recommended Models
 
 | Model | Size | Quality |
 |-------|------|---------|
 | ggml-tiny-q5_1.bin | ~40MB | Fastest |
 | ggml-base-q5_1.bin | ~140MB | Balanced |
 | ggml-small-q5_1.bin | ~460MB | High quality |
-| ggml-medium-q5_0.bin | ~1.1GB | Best quality |
+| ggml-medium-q5_0.bin | ~1.1GB | High quality |
+| ggml-large-v3-q5_0.bin | ~1.08GB | Best quality |
 
 Download via: `bash scripts/download-model.sh ./models <model-filename>`

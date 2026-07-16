@@ -69,6 +69,38 @@ describe("TranscribeInput", () => {
   })
 })
 
+describe("ServerTranscriptionApi.getCapabilities", () => {
+  it("returns a valid capabilities response", async () => {
+    const capabilities = {
+      available: true,
+      engine: "whisper.cpp",
+      input_types: ["file", "url"],
+      cpu_optimized: true,
+      models: [{ id: "base", label: "Base", size_mb: 140, quality: "balanced" }],
+      default_model: "base",
+    }
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => capabilities }))
+
+    const api = new ServerTranscriptionApi("https://example.test", () => null)
+
+    await expect(api.getCapabilities()).resolves.toEqual(capabilities)
+  })
+
+  it("rejects a malformed capabilities response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ available: true, models: [{ id: "base" }], default_model: "base" }),
+      }),
+    )
+
+    const api = new ServerTranscriptionApi("https://example.test", () => null)
+
+    await expect(api.getCapabilities()).resolves.toBeNull()
+  })
+})
+
 describe("ServerTranscriptionApi.submitJob", () => {
   it("appends model field to form data when modelId is provided", async () => {
     const fetchMock = vi.fn().mockResolvedValue({

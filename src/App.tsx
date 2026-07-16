@@ -149,6 +149,7 @@ type DriveStatus =
   | { type: "uploading-metadata" }
   | { type: "synced"; id: string }
   | { type: "error"; message: string }
+type ServerCapabilitiesState = ServerCapabilities | "loading" | "error" | null
 
 const UI_LANGUAGES: Array<{ value: UiLanguage; label: string }> = [
   { value: "en", label: "English" },
@@ -534,7 +535,7 @@ const SERVER_MODEL_STATIC_FALLBACK: Record<string, string> = {
 
 function resolveServerModelLabel(
   modelId: string,
-  capabilities: ServerCapabilities | "error" | null,
+  capabilities: ServerCapabilitiesState,
 ): string {
   if (typeof capabilities === "object" && capabilities?.models) {
     const found = capabilities.models.find((m) => m.id === modelId)
@@ -621,11 +622,19 @@ export function App() {
   const [driveAccessToken, setDriveAccessToken] = React.useState<string | null>(null)
   const [urlInput, setUrlInput] = React.useState("")
   const serverApiRef = React.useRef<ServerTranscriptionApi | null>(null)
-  const [serverCapabilities, setServerCapabilities] = React.useState<ServerCapabilities | "error" | null>(null)
+  const [serverCapabilities, setServerCapabilities] = React.useState<ServerCapabilitiesState>(null)
+  const [serverCapabilitiesKey, setServerCapabilitiesKey] = React.useState<string | null>(null)
   const settingsRef = React.useRef(settings)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const driveStatusText = getDriveStatusText(driveStatus, t)
   const driveStatusIcon = getDriveStatusIcon(driveStatus)
+  const serverUrl = import.meta.env.VITE_SERVER_URL as string | undefined
+  const serverAuthIdentity = driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : "signed-out")
+  const serverRequestKey = `${serverUrl ?? "missing"}\0${serverAuthIdentity}`
+  const activeServerCapabilities: ServerCapabilitiesState =
+    settings.mode === "server" && serverCapabilitiesKey !== serverRequestKey
+      ? "loading"
+      : serverCapabilities
 
   React.useEffect(() => {
     void loadSettings().then((storedSettings) => {
@@ -642,45 +651,78 @@ export function App() {
 
   React.useEffect(() => {
     if (settings.mode !== "server") return
-    const serverUrl = import.meta.env.VITE_SERVER_URL as string | undefined
-    if (!serverUrl) return
+    if (!serverUrl) {
+      let cancelled = false
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setServerCapabilitiesKey(serverRequestKey)
+          setServerCapabilities("error")
+        }
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+    if (serverCapabilitiesKey === serverRequestKey && typeof serverCapabilities === "object" && serverCapabilities) {
+      return
+    }
+    let cancelled = false
     const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : null))
     serverApiRef.current = api
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setServerCapabilitiesKey(serverRequestKey)
+        setServerCapabilities("loading")
+      }
+    })
     void api.getCapabilities().then((cap) => {
-      if (!cap?.available) {
+      if (cancelled) return
+      const models = cap?.models ?? []
+      const hasValidDefault = Boolean(cap?.default_model && models.some((model) => model.id === cap.default_model))
+      if (!cap?.available || models.length === 0 || !hasValidDefault) {
+        setServerCapabilitiesKey(serverRequestKey)
         setServerCapabilities("error")
         setToastMessage({
           id: createId("toast"),
           title: t.transcriptionFailed,
-          description: t.serverUnavailable,
+          description: t.serverModelsUnavailable,
           kind: "error",
         })
         return
       }
+      setServerCapabilitiesKey(serverRequestKey)
       setServerCapabilities(cap)
     })
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.mode, driveAccessToken])
 
   React.useEffect(() => {
-    if (typeof serverCapabilities !== "object" || !serverCapabilities?.models) return
-    const validIds = new Set(serverCapabilities.models.map((m) => m.id))
+    if (typeof activeServerCapabilities !== "object" || !activeServerCapabilities?.models) return
+    const validIds = new Set(activeServerCapabilities.models.map((m) => m.id))
     if (!settings.serverModelId || !validIds.has(settings.serverModelId)) {
-      if (serverCapabilities.default_model) {
-        updateSetting("serverModelId", serverCapabilities.default_model)
+      if (activeServerCapabilities.default_model) {
+        updateSetting("serverModelId", activeServerCapabilities.default_model)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverCapabilities])
+  }, [activeServerCapabilities])
 
   const model = findModel(settings.modelId)
+  const selectedServerModel =
+    typeof activeServerCapabilities === "object" && activeServerCapabilities?.models
+      ? activeServerCapabilities.models.find((item) => item.id === settings.serverModelId)
+      : undefined
+  const serverSelectionReady = Boolean(selectedServerModel)
   const canStart =
     file &&
     analysis &&
     !isBusy(jobState) &&
-    (settings.mode !== "server" ||
-      (typeof serverCapabilities === "object" && serverCapabilities !== null && Boolean(settings.serverModelId)))
-  const canStartAll = queue.length > 1 && !isBusy(jobState)
+    (settings.mode !== "server" || serverSelectionReady)
+  const canStartAll =
+    queue.length > 1 && !isBusy(jobState) && (settings.mode !== "server" || serverSelectionReady)
   const isEnglishOnlyMismatch = isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) && !model.multilingual
 
   function recordProgress(nextProgress: TranscriptionProgress) {
@@ -938,6 +980,13 @@ export function App() {
 
       const serverUrl = import.meta.env.VITE_SERVER_URL as string | undefined
       if (!serverUrl) throw new Error("Server URL not configured")
+      const serverModelId = runSettings.serverModelId
+      const modelIsAvailable =
+        typeof activeServerCapabilities === "object" &&
+        activeServerCapabilities?.models?.some((item) => item.id === serverModelId)
+      if (!serverModelId || !modelIsAvailable) {
+        throw new Error(t.serverModelsUnavailable)
+      }
 
       const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : null))
 
@@ -947,7 +996,7 @@ export function App() {
         const jobId = await api.submitJob(
           { type: "url", url: urlInput.trim() },
           runSettings.language,
-          runSettings.serverModelId ?? undefined,
+          serverModelId,
         )
 
         return new Promise<TranscriptDocument>((resolve, reject) => {
@@ -962,7 +1011,7 @@ export function App() {
                 title: urlInput.trim().split("/").pop()?.replace(/[?#].*$/, "") || t.untitledTranscript,
                 sourceName: urlInput.trim(),
                 language: runSettings.language,
-                modelId: runSettings.serverModelId ?? "base",
+                modelId: serverModelId,
                 mode: "server",
                 createdAt: now,
                 updatedAt: now,
@@ -996,7 +1045,7 @@ export function App() {
       const jobId = await api.submitJob(
         { type: "file", file: targetFile, filename: targetFile.name },
         runSettings.language,
-        runSettings.serverModelId ?? undefined,
+        serverModelId,
       )
 
       return new Promise<TranscriptDocument>((resolve, reject) => {
@@ -1011,7 +1060,7 @@ export function App() {
               title: targetFile.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
               sourceName: targetFile.name,
               language: runSettings.language,
-              modelId: runSettings.serverModelId ?? "base",
+              modelId: serverModelId,
               mode: "server",
               createdAt: now,
               updatedAt: now,
@@ -1414,7 +1463,7 @@ export function App() {
                 copy={t}
                 isEnglishOnlyMismatch={isEnglishOnlyMismatch}
                 updateSetting={updateSetting}
-                serverCapabilities={serverCapabilities}
+                serverCapabilities={activeServerCapabilities}
               />
 
               {settings.mode === "server" ? (
@@ -1484,7 +1533,11 @@ export function App() {
 
               <PreflightPanel
                 analysis={analysis}
-                model={model.label}
+                model={
+                  settings.mode === "server"
+                    ? selectedServerModel?.label ?? settings.serverModelId ?? "-"
+                    : model.label
+                }
                 copy={t}
                 progress={progress}
                 progressLog={progressLog}
@@ -1500,7 +1553,8 @@ export function App() {
             </div>
 
             <aside className="flex min-w-0 flex-col gap-4">
-              {isEnglishOnlyMismatch && settings.mode !== "server" ? (
+              {isEnglishOnlyMismatch &&
+              (settings.mode === "local-webgpu" || settings.mode === "local-wasm") ? (
                 <div className="animate-in fade-in slide-in-from-top-1 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive duration-200">
                   {t.englishOnlySidebar}
                 </div>
@@ -1569,11 +1623,15 @@ function MainControls({
   copy: Copy
   isEnglishOnlyMismatch: boolean
   updateSetting: <T extends keyof AppSettings>(key: T, value: AppSettings[T]) => void
-  serverCapabilities: ServerCapabilities | "error" | null
+  serverCapabilities: ServerCapabilitiesState
 }) {
   const modelDescription =
     copy.modelDescriptions[model.id as keyof typeof copy.modelDescriptions] ?? model.notes
   const usesQuantizedWeights = getLocalModelDtype(model) === "q4"
+  const selectedServerModel =
+    typeof serverCapabilities === "object" && serverCapabilities?.models
+      ? serverCapabilities.models.find((item) => item.id === settings.serverModelId)
+      : undefined
 
   return (
     <Card className="relative z-20 overflow-visible animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
@@ -1610,7 +1668,11 @@ function MainControls({
               <Select
                 value={settings.serverModelId ?? undefined}
                 onValueChange={(value) => updateSetting("serverModelId", value)}
-                disabled={serverCapabilities === "error" || serverCapabilities === null}
+                disabled={
+                  serverCapabilities === "loading" ||
+                  serverCapabilities === "error" ||
+                  serverCapabilities === null
+                }
               >
                 <SelectTrigger aria-label={copy.model} className="w-full">
                   <SelectValue />
@@ -1627,6 +1689,10 @@ function MainControls({
               </Select>
               {serverCapabilities === "error" ? (
                 <p className="text-xs leading-5 text-destructive">{copy.serverModelsUnavailable}</p>
+              ) : selectedServerModel ? (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {selectedServerModel.label} - {selectedServerModel.quality}
+                </p>
               ) : null}
             </>
           )}
@@ -1642,11 +1708,13 @@ function MainControls({
           <p className="text-xs leading-5 text-muted-foreground">{copy.spokenLanguage}</p>
         </div>
 
-        {isEnglishOnlyMismatch && settings.mode !== "server" ? (
+        {isEnglishOnlyMismatch &&
+        (settings.mode === "local-webgpu" || settings.mode === "local-wasm") ? (
           <p className="text-sm text-destructive md:col-span-2">{copy.englishOnlyWarning}</p>
         ) : null}
 
-        {usesQuantizedWeights && settings.mode !== "server" ? (
+        {usesQuantizedWeights &&
+        (settings.mode === "local-webgpu" || settings.mode === "local-wasm") ? (
           <p className="text-sm text-muted-foreground md:col-span-2">
             {copy.quantizedLargeModel(model.label)}
           </p>
@@ -2226,7 +2294,7 @@ function ResultDialog({
   onExport: (document: TranscriptDocument, format: ExportFormat) => void
   onRename: (id: string, title: string) => void
   copy: Copy
-  serverCapabilities: ServerCapabilities | "error" | null
+  serverCapabilities: ServerCapabilitiesState
 }) {
   const transcriptModel = transcript && transcript.mode !== "server" ? findModel(transcript.modelId) : null
   const transcriptModelLabel = transcript
@@ -2365,7 +2433,7 @@ function HistoryPanel({
   onSelect: (document: TranscriptDocument) => void
   onRemove: (id: string) => void
   copy: Copy
-  serverCapabilities: ServerCapabilities | "error" | null
+  serverCapabilities: ServerCapabilitiesState
 }) {
   return (
     <Card className="min-h-0 p-4">

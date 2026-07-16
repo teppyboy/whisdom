@@ -87,6 +87,44 @@ describe("analyzeMediaFile warnings in server mode", () => {
     const warningTexts = result.warnings.map((w) => w.toLowerCase())
     expect(warningTexts.some((w) => w.includes("q4 onnx weights"))).toBe(false)
     expect(warningTexts.some((w) => w.includes("webgpu"))).toBe(false)
+    expect(result.requiredAssets.some((asset) => asset.id === settings.modelId)).toBe(false)
+    expect(result.recommendedMode).toBe("server")
+  })
+
+  it("does not apply an English-only local model warning in server mode", async () => {
+    const element = {
+      preload: "",
+      duration: 12,
+      onloadedmetadata: null as (() => void) | null,
+      onerror: null,
+      src: "",
+      removeAttribute: vi.fn(),
+      load: vi.fn(),
+    }
+
+    vi.stubGlobal("document", { createElement: vi.fn(() => element) })
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:test"),
+      revokeObjectURL: vi.fn(),
+    })
+    vi.stubGlobal("window", { setTimeout: globalThis.setTimeout })
+    Object.defineProperty(element, "src", {
+      set() {
+        queueMicrotask(() => element.onloadedmetadata?.())
+      },
+    })
+
+    const result = await analyzeMediaFile(
+      new File([new Uint8Array(10)], "test.mp3", { type: "audio/mpeg" }),
+      {
+        ...DEFAULT_SETTINGS,
+        mode: "server",
+        language: "vi",
+        modelId: "onnx-community/whisper-tiny.en",
+      },
+    )
+
+    expect(result.warnings.some((warning) => warning.includes("English-only"))).toBe(false)
   })
 
   it("still includes quantized/webgpu warnings for local-webgpu mode", async () => {
