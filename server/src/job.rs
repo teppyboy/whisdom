@@ -57,6 +57,7 @@ pub struct Job {
     pub email: String,
     pub input: JobInput,
     pub language: Option<String>,
+    pub model_id: String,
     pub phase: JobPhase,
     pub progress: Option<f32>,
     pub message: Option<String>,
