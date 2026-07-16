@@ -22,6 +22,11 @@ toml = "0.8"
 whisper-rs = "0.16"
 hound = "3"
 
+[features]
+cuda = ["whisper-rs/cuda"]
+vulkan = ["whisper-rs/vulkan"]
+hipblas = ["whisper-rs/hipblas"]
+
 [profile.release]
 opt-level = 3
 lto = "fat"
