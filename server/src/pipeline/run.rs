@@ -51,7 +51,14 @@ pub async fn run_pipeline(
         });
     }
 
-    let result = execute(&id, &input, &language, &model_id, &work_dir, config, queue, model_registry, &cancel_flag).await;
+    let ctx = ExecuteContext {
+        id: id.as_str(),
+        input: &input,
+        language: &language,
+        model_id: model_id.as_str(),
+        work_dir: &work_dir,
+    };
+    let result = execute(&ctx, config, queue, model_registry, &cancel_flag).await;
 
     match result {
         Ok(segments) => {
@@ -85,17 +92,25 @@ pub async fn run_pipeline(
     queue.publish(&id, status).await;
 }
 
+/// Groups the per-job fields that `execute` needs, keeping the function's
+/// argument count low (job-scoped data here, shared server handles as
+/// separate params below).
+struct ExecuteContext<'a> {
+    id: &'a str,
+    input: &'a JobInput,
+    language: &'a Option<String>,
+    model_id: &'a str,
+    work_dir: &'a PathBuf,
+}
+
 async fn execute(
-    id: &str,
-    input: &JobInput,
-    language: &Option<String>,
-    model_id: &str,
-    work_dir: &PathBuf,
+    ctx: &ExecuteContext<'_>,
     config: &Config,
     queue: &Queue,
     model_registry: &Arc<crate::models::ModelRegistry>,
     cancel_flag: &AtomicBool,
 ) -> Result<Vec<crate::job::TranscriptSegment>, AppError> {
+    let ExecuteContext { id, input, language, model_id, work_dir } = *ctx;
     tokio::fs::create_dir_all(work_dir).await?;
 
     let media_path = match input {
