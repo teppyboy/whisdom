@@ -268,4 +268,28 @@ mod tests {
         let body = String::from_utf8(body.to_vec()).expect("response body should be UTF-8");
         assert!(!body.contains("audio' file or 'url' field required"));
     }
+
+    #[tokio::test]
+    async fn capabilities_includes_models_and_default_model_fields() {
+        let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/capabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("models").is_some());
+        assert!(json.get("default_model").is_some());
+        assert_eq!(json["models"].as_array().unwrap().len(), 0); // empty test registry
+    }
 }
