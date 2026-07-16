@@ -109,12 +109,13 @@ function buildWarnings(
 
   const model = findModel(settings.modelId)
 
-  if (getLocalModelDtype(model) === "q4" && settings.mode !== "cloudflare-ai") {
+  if (getLocalModelDtype(model) === "q4" && settings.mode !== "cloudflare-ai" && settings.mode !== "server") {
     warnings.push(copy.quantizedLargeModel)
   }
 
   if (
     settings.mode !== "cloudflare-ai" &&
+    settings.mode !== "server" &&
     requiresWebGpuForLocalModel(model) &&
     recommendedModeFromStatus(settings.mode, needsFfmpeg, webGpuStatus.available) !== "local-webgpu"
   ) {
