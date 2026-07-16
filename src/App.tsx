@@ -99,7 +99,7 @@ import { createId } from "@/lib/id"
 import { clearLocalWorkerState, convertWithFfmpeg, transcribeLocally } from "@/lib/transcription-worker-client"
 import { transcribeChunkWithServer } from "@/features/server-transcription/client"
 import { ServerTranscriptionApi } from "@/features/server-transcription/api"
-import type { ServerJobPhase, ServerJobStatus } from "@/features/server-transcription/types"
+import type { ServerCapabilities, ServerJobPhase, ServerJobStatus } from "@/features/server-transcription/types"
 import type {
   AppSettings,
   JobState,
@@ -180,6 +180,7 @@ const COPY = {
     serverUrl: "Enter video/audio URL",
     serverModeDesc: "Server-side transcription via whisper.cpp. Sign in required.",
     serverUnavailable: "Transcription server unavailable",
+    serverModelsUnavailable: "Could not load available models from the server. Check server status and try again.",
     quantizedLargeModel: (label: string) =>
       `${label} will run with q4 browser weights to avoid multi-gigabyte buffer allocation.`,
     largeModelNeedsWebGpu: (label: string) =>
@@ -346,6 +347,7 @@ const COPY = {
     serverUrl: "Nhập URL video/âm thanh",
     serverModeDesc: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
     serverUnavailable: "Máy chủ chuyển ngữ không khả dụng",
+    serverModelsUnavailable: "Không thể tải danh sách mô hình từ máy chủ. Kiểm tra trạng thái máy chủ và thử lại.",
     quantizedLargeModel: (label: string) =>
       `${label} sẽ dùng trọng số q4 trong trình duyệt để tránh cấp phát bộ nhớ nhiều GB.`,
     largeModelNeedsWebGpu: (label: string) =>
@@ -522,6 +524,25 @@ function getDriveStatusIcon(status: DriveStatus) {
   }
 }
 
+const SERVER_MODEL_STATIC_FALLBACK: Record<string, string> = {
+  tiny: "Tiny",
+  base: "Base",
+  small: "Small",
+  medium: "Medium",
+  "large-v3": "Large V3",
+}
+
+function resolveServerModelLabel(
+  modelId: string,
+  capabilities: ServerCapabilities | "error" | null,
+): string {
+  if (typeof capabilities === "object" && capabilities?.models) {
+    const found = capabilities.models.find((m) => m.id === modelId)
+    if (found) return found.label
+  }
+  return SERVER_MODEL_STATIC_FALLBACK[modelId] ?? modelId
+}
+
 function localizeProgressMessage(message: string, copy: Copy) {
   if (message === "Decoded audio for Whisper") {
     return copy.decodedAudio
@@ -600,6 +621,7 @@ export function App() {
   const [driveAccessToken, setDriveAccessToken] = React.useState<string | null>(null)
   const [urlInput, setUrlInput] = React.useState("")
   const serverApiRef = React.useRef<ServerTranscriptionApi | null>(null)
+  const [serverCapabilities, setServerCapabilities] = React.useState<ServerCapabilities | "error" | null>(null)
   const settingsRef = React.useRef(settings)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const driveStatusText = getDriveStatusText(driveStatus, t)
@@ -626,19 +648,38 @@ export function App() {
     serverApiRef.current = api
     void api.getCapabilities().then((cap) => {
       if (!cap?.available) {
+        setServerCapabilities("error")
         setToastMessage({
           id: createId("toast"),
           title: t.transcriptionFailed,
           description: t.serverUnavailable,
           kind: "error",
         })
+        return
       }
+      setServerCapabilities(cap)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.mode, driveAccessToken])
 
+  React.useEffect(() => {
+    if (typeof serverCapabilities !== "object" || !serverCapabilities?.models) return
+    const validIds = new Set(serverCapabilities.models.map((m) => m.id))
+    if (!settings.serverModelId || !validIds.has(settings.serverModelId)) {
+      if (serverCapabilities.default_model) {
+        updateSetting("serverModelId", serverCapabilities.default_model)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverCapabilities])
+
   const model = findModel(settings.modelId)
-  const canStart = file && analysis && !isBusy(jobState)
+  const canStart =
+    file &&
+    analysis &&
+    !isBusy(jobState) &&
+    (settings.mode !== "server" ||
+      (typeof serverCapabilities === "object" && serverCapabilities !== null && Boolean(settings.serverModelId)))
   const canStartAll = queue.length > 1 && !isBusy(jobState)
   const isEnglishOnlyMismatch = isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) && !model.multilingual
 
@@ -903,7 +944,11 @@ export function App() {
       if (urlInput.trim()) {
         setJobState("downloading-assets")
         recordProgress({ phase: "downloading-assets", message: "Submitting URL...", progress: 0.1 })
-        const jobId = await api.submitJob({ type: "url", url: urlInput.trim() }, runSettings.language)
+        const jobId = await api.submitJob(
+          { type: "url", url: urlInput.trim() },
+          runSettings.language,
+          runSettings.serverModelId ?? undefined,
+        )
 
         return new Promise<TranscriptDocument>((resolve, reject) => {
           api.subscribeProgress(jobId, (status: ServerJobStatus) => {
@@ -917,7 +962,7 @@ export function App() {
                 title: urlInput.trim().split("/").pop()?.replace(/[?#].*$/, "") || t.untitledTranscript,
                 sourceName: urlInput.trim(),
                 language: runSettings.language,
-                modelId: "whisper.cpp",
+                modelId: runSettings.serverModelId ?? "base",
                 mode: "server",
                 createdAt: now,
                 updatedAt: now,
@@ -951,6 +996,7 @@ export function App() {
       const jobId = await api.submitJob(
         { type: "file", file: targetFile, filename: targetFile.name },
         runSettings.language,
+        runSettings.serverModelId ?? undefined,
       )
 
       return new Promise<TranscriptDocument>((resolve, reject) => {
@@ -965,7 +1011,7 @@ export function App() {
               title: targetFile.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
               sourceName: targetFile.name,
               language: runSettings.language,
-              modelId: "whisper.cpp",
+              modelId: runSettings.serverModelId ?? "base",
               mode: "server",
               createdAt: now,
               updatedAt: now,
@@ -1368,6 +1414,7 @@ export function App() {
                 copy={t}
                 isEnglishOnlyMismatch={isEnglishOnlyMismatch}
                 updateSetting={updateSetting}
+                serverCapabilities={serverCapabilities}
               />
 
               {settings.mode === "server" ? (
@@ -1453,7 +1500,7 @@ export function App() {
             </div>
 
             <aside className="flex min-w-0 flex-col gap-4">
-              {isEnglishOnlyMismatch ? (
+              {isEnglishOnlyMismatch && settings.mode !== "server" ? (
                 <div className="animate-in fade-in slide-in-from-top-1 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive duration-200">
                   {t.englishOnlySidebar}
                 </div>
@@ -1464,6 +1511,7 @@ export function App() {
                 onSelect={openTranscriptResult}
                 onRemove={(id) => void removeTranscript(id)}
                 copy={t}
+                serverCapabilities={serverCapabilities}
               />
             </aside>
           </section>
@@ -1476,6 +1524,7 @@ export function App() {
         onExport={downloadTranscript}
         onRename={(id, title) => void renameTranscriptTitle(id, title)}
         copy={t}
+        serverCapabilities={serverCapabilities}
       />
       <AppToast
         message={toastMessage}
@@ -1513,12 +1562,14 @@ function MainControls({
   copy,
   isEnglishOnlyMismatch,
   updateSetting,
+  serverCapabilities,
 }: {
   settings: AppSettings
   model: ReturnType<typeof findModel>
   copy: Copy
   isEnglishOnlyMismatch: boolean
   updateSetting: <T extends keyof AppSettings>(key: T, value: AppSettings[T]) => void
+  serverCapabilities: ServerCapabilities | "error" | null
 }) {
   const modelDescription =
     copy.modelDescriptions[model.id as keyof typeof copy.modelDescriptions] ?? model.notes
@@ -1531,29 +1582,55 @@ function MainControls({
         <CardDescription>{copy.quickSetupDescription}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 md:grid-cols-2">
-        {settings.mode !== "server" ? (
-          <div className="grid gap-2">
-            <Label>{copy.model}</Label>
-            <Select
-              value={settings.modelId}
-              onValueChange={(value) => updateSetting("modelId", value)}
-            >
-              <SelectTrigger aria-label={copy.model} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="start">
-                {WHISPER_MODELS.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs leading-5 text-muted-foreground">
-              {copy.downloadDescription(modelDescription, model.sizeMb)}
-            </p>
-          </div>
-        ) : null}
+        <div className="grid gap-2">
+          <Label>{copy.model}</Label>
+          {settings.mode !== "server" ? (
+            <>
+              <Select
+                value={settings.modelId}
+                onValueChange={(value) => updateSetting("modelId", value)}
+              >
+                <SelectTrigger aria-label={copy.model} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="start">
+                  {WHISPER_MODELS.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs leading-5 text-muted-foreground">
+                {copy.downloadDescription(modelDescription, model.sizeMb)}
+              </p>
+            </>
+          ) : (
+            <>
+              <Select
+                value={settings.serverModelId ?? undefined}
+                onValueChange={(value) => updateSetting("serverModelId", value)}
+                disabled={serverCapabilities === "error" || serverCapabilities === null}
+              >
+                <SelectTrigger aria-label={copy.model} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="start">
+                  {typeof serverCapabilities === "object" && serverCapabilities?.models
+                    ? serverCapabilities.models.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.label}
+                        </SelectItem>
+                      ))
+                    : null}
+                </SelectContent>
+              </Select>
+              {serverCapabilities === "error" ? (
+                <p className="text-xs leading-5 text-destructive">{copy.serverModelsUnavailable}</p>
+              ) : null}
+            </>
+          )}
+        </div>
 
         <div className="grid gap-2">
           <Label>{copy.language}</Label>
@@ -1565,11 +1642,11 @@ function MainControls({
           <p className="text-xs leading-5 text-muted-foreground">{copy.spokenLanguage}</p>
         </div>
 
-        {isEnglishOnlyMismatch ? (
+        {isEnglishOnlyMismatch && settings.mode !== "server" ? (
           <p className="text-sm text-destructive md:col-span-2">{copy.englishOnlyWarning}</p>
         ) : null}
 
-        {usesQuantizedWeights ? (
+        {usesQuantizedWeights && settings.mode !== "server" ? (
           <p className="text-sm text-muted-foreground md:col-span-2">
             {copy.quantizedLargeModel(model.label)}
           </p>
@@ -2141,6 +2218,7 @@ function ResultDialog({
   onExport,
   onRename,
   copy,
+  serverCapabilities,
 }: {
   transcript: TranscriptDocument | null
   open: boolean
@@ -2148,8 +2226,14 @@ function ResultDialog({
   onExport: (document: TranscriptDocument, format: ExportFormat) => void
   onRename: (id: string, title: string) => void
   copy: Copy
+  serverCapabilities: ServerCapabilities | "error" | null
 }) {
-  const transcriptModel = transcript ? findModel(transcript.modelId) : null
+  const transcriptModel = transcript && transcript.mode !== "server" ? findModel(transcript.modelId) : null
+  const transcriptModelLabel = transcript
+    ? transcript.mode === "server"
+      ? resolveServerModelLabel(transcript.modelId, serverCapabilities)
+      : (transcriptModel?.label ?? transcript.modelId)
+    : ""
 
   return (
     <Dialog open={open && Boolean(transcript)} onOpenChange={onOpenChange}>
@@ -2166,7 +2250,7 @@ function ResultDialog({
                 copy={copy}
               />
               <div className="flex flex-wrap gap-2 pt-1" aria-label={copy.transcriptDetails}>
-                <Badge variant="secondary">{transcriptModel?.label ?? transcript.modelId}</Badge>
+                <Badge variant="secondary">{transcriptModelLabel}</Badge>
                 <Badge variant="outline">{copy.modeLabels[transcript.mode]}</Badge>
                 <Badge variant="outline">
                   {getLanguageLabel(transcript.language, copy.languageLabels.auto)}
@@ -2275,11 +2359,13 @@ function HistoryPanel({
   onSelect,
   onRemove,
   copy,
+  serverCapabilities,
 }: {
   history: TranscriptDocument[]
   onSelect: (document: TranscriptDocument) => void
   onRemove: (id: string) => void
   copy: Copy
+  serverCapabilities: ServerCapabilities | "error" | null
 }) {
   return (
     <Card className="min-h-0 p-4">
@@ -2302,7 +2388,7 @@ function HistoryPanel({
                 <span className="block truncate font-medium">{item.title}</span>
                 <span className="mt-1 flex flex-wrap gap-1.5">
                   <Badge variant="secondary" className="max-w-full truncate">
-                    {findModel(item.modelId).label}
+                    {item.mode === "server" ? resolveServerModelLabel(item.modelId, serverCapabilities) : findModel(item.modelId).label}
                   </Badge>
                   <Badge variant="outline" className="max-w-full truncate">
                     {getLanguageLabel(item.language, copy.languageLabels.auto)}
