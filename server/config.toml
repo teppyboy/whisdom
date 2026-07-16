@@ -15,8 +15,41 @@ allowed_domains = []
 dev_auth_bypass = true
 
 [model]
-# Path to GGML quantized whisper model
-path = "./models/ggml-base-q5_1.bin"
+# Directory model files resolve against
+dir = "./models"
+# Bare model id used when a request omits a model selection (not a filename, e.g. "base")
+default_model = "base"
+
+# Catalog array order has no special significance; selection is by id lookup, not position.
+# filename must be a real file inside [model].dir.
+# quality is a free-form, operator-facing label (not used for selection logic).
+# gpu is optional (defaults false); marks whether this model may run on GPU when [gpu].enabled = true.
+[[model.catalog]]
+filename = "ggml-tiny-q5_1.bin"
+quality = "fast"
+
+[[model.catalog]]
+filename = "ggml-base-q5_1.bin"
+quality = "balanced"
+
+[[model.catalog]]
+filename = "ggml-small-q5_1.bin"
+quality = "high"
+
+[[model.catalog]]
+filename = "ggml-medium-q5_0.bin"
+quality = "high"
+
+[[model.catalog]]
+filename = "ggml-large-v3-q5_0.bin"
+quality = "best"
+
+[gpu]
+# Master switch for GPU acceleration. Requires a GPU-feature build
+# (cargo build --features cuda|vulkan|hipblas); otherwise silently falls back to CPU.
+enabled = false
+# GPU device index
+device = 0
 
 [paths]
 # Temporary working directory for job artifacts
