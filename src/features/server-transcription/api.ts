@@ -20,7 +20,7 @@ export class ServerTranscriptionApi {
     }
   }
 
-  async submitJob(input: TranscribeInput, language?: string): Promise<string> {
+  async submitJob(input: TranscribeInput, language?: string, modelId?: string): Promise<string> {
     const token = this.getToken()
     if (!token) throw new Error("Not authenticated")
 
@@ -38,6 +38,10 @@ export class ServerTranscriptionApi {
 
     if (language) {
       form.set("language", language)
+    }
+
+    if (modelId) {
+      form.set("model", modelId)
     }
 
     const response = await fetch(`${this.baseUrl}/api/transcribe`, {

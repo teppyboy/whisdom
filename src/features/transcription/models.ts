@@ -71,6 +71,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   chunkSeconds: 30,
   overlapSeconds: 1,
   persistMediaBlobs: false,
+  serverModelId: null,
 }
 
 export function findModel(modelId: string) {

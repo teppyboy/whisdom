@@ -96,4 +96,5 @@ export type AppSettings = {
   chunkSeconds: number
   overlapSeconds: number
   persistMediaBlobs: boolean
+  serverModelId: string | null
 }

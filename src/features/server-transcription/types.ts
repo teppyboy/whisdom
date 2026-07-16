@@ -24,11 +24,20 @@ export interface ServerJobStatus {
   filename?: string
 }
 
+export interface ServerModelInfo {
+  id: string
+  label: string
+  size_mb: number
+  quality: string
+}
+
 export interface ServerCapabilities {
   available: boolean
   engine: string
   input_types: string[]
   cpu_optimized: boolean
+  models?: ServerModelInfo[]
+  default_model?: string
 }
 
 export type TranscribeInput =

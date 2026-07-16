@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import type { ServerJobStatus, ServerJobPhase, ServerSegment } from "@/features/server-transcription/types"
+import { ServerTranscriptionApi } from "@/features/server-transcription/api"
 
 describe("ServerJobStatus", () => {
   it("parses a queued status", () => {
@@ -65,5 +66,37 @@ describe("TranscribeInput", () => {
     expect(urlInput.type).toBe("url")
     expect("url" in urlInput).toBe(true)
     expect("file" in fileInput).toBe(true)
+  })
+})
+
+describe("ServerTranscriptionApi.submitJob", () => {
+  it("appends model field to form data when modelId is provided", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ job_id: "job-1" }),
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const api = new ServerTranscriptionApi("https://example.test", () => "token")
+    await api.submitJob({ type: "url", url: "https://media.test/a.mp3" }, "en", "small")
+
+    const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const formData = requestInit.body as FormData
+    expect(formData.get("model")).toBe("small")
+  })
+
+  it("omits model field when modelId is not provided", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ job_id: "job-2" }),
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const api = new ServerTranscriptionApi("https://example.test", () => "token")
+    await api.submitJob({ type: "url", url: "https://media.test/a.mp3" }, "en")
+
+    const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const formData = requestInit.body as FormData
+    expect(formData.get("model")).toBeNull()
   })
 })
