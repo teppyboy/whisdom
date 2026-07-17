@@ -193,7 +193,7 @@ test.describe("Whisdom", () => {
     await expect(page.getByText("Large local models use q4 ONNX weights")).toBeVisible()
     await page.getByRole("button", { name: /Confirm downloads and transcribe/i }).click()
 
-    await expect(page.getByText("requires WebGPU in the browser")).toBeVisible()
+    await expect(page.getByText("requires WebGPU in the browser")).first().toBeVisible()
   })
 
   test("searches and selects many transcription languages on the main page", async ({ page }) => {
@@ -245,7 +245,7 @@ test.describe("Whisdom", () => {
     await chooseAudio(page)
     await page.getByRole("button", { name: /Confirm downloads and transcribe/i }).click()
 
-    await expect(page.locator(".text-destructive").getByText(/Server transcription requires Google sign-in/i)).toBeVisible()
+    await expect(page.locator(".text-destructive").getByText(/Server transcription requires Google sign-in/i)).first().toBeVisible()
   })
 
   test("shows recent transcript metadata and removes items", async ({ page }) => {
