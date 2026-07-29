@@ -289,7 +289,7 @@ Mobile-specific requirements:
 
 ### 9.1 First run and returning users
 
-First run means there is no valid explicit stored model choice. No other persisted state participates in first-run detection. On first Workbench load:
+First run means there is no valid explicit stored model choice. No other persisted state participates in first-run detection. Local and server recommendations are separate. On first Workbench load:
 
 1. Detect secure context and WebGPU availability through current preflight capability logic.
 2. Read UI language and saved transcription language.
@@ -297,7 +297,7 @@ First run means there is no valid explicit stored model choice. No other persist
 4. Show one sentence: model name, local runtime, and plain reason.
 5. Expose “Change model.” Advanced details show download size, multilingual support, dtype, and runtime requirement.
 
-An explicit user choice is persisted. Recommendation explanations are derived on every evaluation from current language, runtime capability, catalog, and stored choice; recommendation metadata is not persisted. Re-evaluate when the choice is missing, its catalog model was removed, transcription language changes, or runtime capability changes. Preserve a valid compatible explicit choice. Replace an English-only choice when the resolved language requires multilingual support, and replace a choice whose runtime is unavailable. If no safe compatible model exists, block Transcribe and show recovery rather than persisting an invalid fallback.
+An explicit user choice is persisted. Recommendation explanations are derived on every evaluation from current language, runtime capability, catalog, and stored choice; recommendation metadata is not persisted. Re-evaluate when the choice is missing, its catalog model was removed, transcription language changes, or runtime capability changes. Preserve a valid compatible explicit choice. Replace an English-only choice when the resolved language requires multilingual support, and replace a choice whose runtime is unavailable only when a beginner-safe replacement exists. If no beginner-safe candidate exists but other compatible models do—including the required Small/q4-only case—block automatic start and require explicit model choice with plain-language speed, memory, and runtime trade-offs. If no compatible model exists, block with runtime recovery. Never persist an invalid fallback.
 
 ### 9.2 Source switch
 
@@ -352,39 +352,44 @@ Blocking messages disable Transcribe and include a recovery action. Informationa
 
 ### 10.1 Inputs
 
-Recommendation may use only:
+Local recommendation may use only:
 
 - secure-context status;
 - successful WebGPU adapter availability;
-- catalog fields: model ID, size, quality, multilingual, notes;
+- catalog fields: model ID, size, quality, multilingual, notes, and local weight dtype/format needed to identify q4;
 - `requiresWebGpuForLocalModel` derived from current dtype threshold;
 - UI language and selected transcription language;
 - explicit persisted user choice and whether that choice remains runnable.
 
 It must not infer RAM, GPU tier, expected speed, accuracy, battery, device class, or language-specific quality from user agent or model labels.
 
-### 10.2 Policy
+### 10.2 Local policy
 
-“Safe compatible recommendation” means multilingual Base when it satisfies runtime/language constraints; otherwise use the deterministic catalog fallback in row 6. “Safe multilingual recommendation” applies the same ordering after filtering to multilingual models.
+A **beginner-safe local candidate** is narrowly defined as a compatible multilingual Tiny or Base catalog variant that supports the resolved language and uses non-q4 weights. Base is preferred over Tiny. Small, English-only variants, and every q4 model always require explicit user choice and are never an automatic recommendation or fallback.
 
 Evaluate these rules in exact order and stop at the first match:
 
 | Precedence | Condition | Decision | Reason code |
 | --- | --- | --- | --- |
-| 1 | No catalog model is safe and compatible with the available local runtime and resolved language | Block local start and offer runtime/catalog/language recovery | `no_safe_compatible_model` |
-| 2 | Resolved language requires multilingual support and the stored model is English-only | Select the safe multilingual recommendation | `language_requires_multilingual` |
-| 3 | Stored model requires an unavailable runtime | Select the safe compatible recommendation | `stored_choice_runtime_unavailable` |
+| 1 | No catalog model is compatible with the available local runtime and resolved language | Block local start and offer runtime/catalog/language recovery | `no_compatible_model` |
+| 2 | Resolved language requires multilingual support and the stored model is English-only, and a beginner-safe candidate exists | Select the beginner-safe candidate | `language_requires_multilingual` |
+| 3 | Stored model requires an unavailable runtime, and a beginner-safe candidate exists | Select the beginner-safe candidate | `stored_choice_runtime_unavailable` |
 | 4 | Stored explicit choice exists in the catalog, supports the resolved language, and can run | Preserve that model and runtime | `stored_choice_valid` |
-| 5 | No valid explicit stored choice and multilingual Base is compatible | Select multilingual Base on WebGPU when available, otherwise WASM | `first_run_base_webgpu` or `first_run_base_wasm` |
-| 6 | Base is unavailable/incompatible but another safe model exists | Select by multilingual requirement, then ascending catalog size, then catalog order | `deterministic_catalog_fallback` |
+| 5 | No valid explicit stored choice and compatible non-q4 multilingual Base exists | Select that Base on WebGPU when available, otherwise WASM | `first_run_base_webgpu` or `first_run_base_wasm` |
+| 6 | Base is unavailable/incompatible but another beginner-safe candidate exists | Filter to compatible multilingual non-q4 Tiny/Base variants, prefer Base, then catalog order | `deterministic_catalog_fallback` |
+| 7 | Compatible models exist but no beginner-safe candidate exists | Do not select or start automatically; require explicit choice and explain speed, memory, and runtime requirements in plain language | `explicit_model_choice_required` |
 
-Base multilingual is the first-run default when compatible because current metadata supports “balanced,” multilingual, 145 MB, and local-run eligibility; it does not justify recommending larger models automatically. Tiny remains an explicit speed/download trade-off. Small and all q4 models require user choice under “Change model.” A missing choice, removed model, or invalid stored value follows first-run default then deterministic fallback. Language and runtime changes re-run the full precedence from current inputs.
+Base multilingual is the first-run default when compatible because current metadata supports “balanced,” multilingual, 145 MB, and local-run eligibility; it does not justify recommending larger models automatically. Row 6 may choose only a beginner-safe candidate and prefers Base before Tiny. Small and all q4 models require user choice under “Change model.” A missing choice, removed model, or invalid stored value follows first-run default then beginner-safe fallback. Language and runtime changes re-run the full precedence from current inputs.
 
 `auto` language continues to resolve to UI language under current behavior. Recommendation evaluates the resolved language, not literal `auto`.
 
-### 10.3 Output
+### 10.3 Server-mode policy
 
-Recommendation returns either a blocking decision or a structured model decision containing model ID, runtime, reason code, whether it replaced a stored choice, and explanation parameters. UI localizes the derived reason code at the boundary. Only explicit user selection updates persisted model choice; an automatic recommendation does not become an explicit choice until the user starts with or confirms it under the existing settings contract. Unit tests cover precedence, no-compatible-model blocking, missing/removed choices, language/runtime changes, and catalog fallback ordering.
+Server recommendations use a separate capability-derived catalog. The server default capability may be selected automatically because the server controls model/runtime compatibility. Local dtype, q4, Small, WebGPU, and WASM recommendation restrictions do not apply to server catalogs. UI must still identify server processing and derive its explanation from advertised server capabilities; it must never present a server recommendation as local.
+
+### 10.4 Output
+
+Recommendation returns a blocking decision, an explicit-choice-required decision, or a structured model decision containing mode, model ID, runtime, reason code, whether it replaced a stored choice, and explanation parameters. UI localizes the derived reason code at the boundary. Only explicit user selection updates persisted model choice; an automatic recommendation does not become an explicit choice until the user starts with or confirms it under the existing settings contract. Unit tests cover local precedence, no-compatible-model blocking, Small/q4-only explicit choice, missing/removed choices, language/runtime changes, beginner-safe fallback ordering, and separate server-default selection.
 
 ## 11. Queue model and behavior
 
@@ -489,7 +494,7 @@ Cancellation is not an error. It uses neutral status, no destructive toast, and 
 
 Ordered transcript segments are the source of truth. Segment order is array order; timestamps never reorder the array. Normalize each segment’s text by replacing every run of Unicode whitespace with one ASCII space (`U+0020`) and trimming leading/trailing whitespace. Derived raw text is the non-empty normalized segment texts joined with exactly one ASCII space.
 
-Canonical subtitle timing is valid only when every segment satisfies all of these invariants: `start` is finite and at least `0`; `end` is finite and at least `start`; and each segment after the first has `start >= previous.end`. Empty normalized text may remain in editor state but is omitted from derived raw text and subtitle cues. Subtitle export is eligible only when every emitted cue’s source segment satisfies the timing invariants.
+Canonical subtitle timing is valid only when every segment, including a segment whose normalized text is empty, satisfies all of these invariants: `start` is finite and at least `0`; `end` is finite and at least `start`; and each segment after the first has `start >= previous.end`. Subtitle eligibility first validates timing globally across the complete ordered segment array. Only after that validation may emission omit normalized-empty segments. If no non-empty cues remain, SRT/VTT export is unavailable and the UI gives the explicit localized reason “No non-empty subtitle cues.” Validating emitted cues alone is prohibited.
 
 Persistence may retain `text` for backward compatibility and fast display, but every write must regenerate it from canonical segments in the same transaction. TXT uses regenerated document text. SRT and VTT use the same current segments. JSON contains both and must satisfy this invariant.
 
@@ -500,7 +505,7 @@ On migration or first repository read:
 1. Process segments in array order. Normalize each text under Section 13.1 and regenerate `text`.
 2. For each existing segment, let `previousEnd` be `0` for the first segment and the migrated prior segment’s end thereafter. Set migrated start to `max(previousEnd, max(0, originalStart))` when `originalStart` is finite, otherwise `previousEnd`. Set migrated end to `max(migratedStart, originalEnd)` when `originalEnd` is finite, otherwise `migratedStart`. This forward clamp is deterministic and establishes every timing invariant without reordering.
 3. If segments are empty and normalized legacy `text` is non-empty, create one segment with deterministic ID `legacy:<transcript-id>:0`, start `0`, end `0`, and normalized text. It is subtitle-eligible as a deterministic zero-length cue.
-4. If both are empty, create no segment and derive empty text; subtitle export produces no cues.
+4. If both are empty, create no segment and derive empty text; SRT/VTT export is unavailable because no non-empty cues exist.
 5. If a segment ID is missing or duplicates an earlier ID, assign deterministic `legacy:<transcript-id>:<index>` in array order, incrementing the index until unique.
 6. Preserve original records in migration fixtures, not in production shadow storage.
 
@@ -569,11 +574,12 @@ Every item exposes Open, Rename, Export, Delete. Desktop may use a visible overf
 
 Delete flow:
 
-1. Transactionally set `deletedAt`, increment revision, write compact tombstone, and enqueue remote deletion state.
+1. Transactionally set `deletedAt`, generate a new `deletionId`, clear `restoredFromDeletionId`, increment revision, write the compact tombstone, and enqueue remote deletion state. Every later deletion generates a different `deletionId`.
 2. Remove item from default list immediately.
 3. Show confirmation toast with Undo for 10 seconds.
-4. Undo clears deletion with a newer revision and enqueues upsert. It remains available after toast expiry through recovery only when product exposes a deleted filter; remote tombstone remains authoritative until newer restored revision syncs.
-5. Tombstone auxiliary metadata is compacted only under the retention policy in Section 15.10, never merely because remote deletion succeeded; ordering identity remains permanent.
+4. Undo/Restore may act only on a tombstone the user action observed. It clears deletion, sets `restoredFromDeletionId` to that exact tombstone’s `deletionId`, writes a greater revision, and enqueues upsert. No background or stale live mutation may create, copy, or guess this field. Undo remains available after toast expiry through recovery only when product exposes a deleted filter.
+5. A restored live record remains subordinate to any later tombstone with a different `deletionId`, even if it restored an older deletion.
+6. Tombstone auxiliary metadata is compacted only under the retention policy in Section 15.10, never merely because remote deletion succeeded; causal deletion identity remains permanent.
 
 ### 14.3 Sync summary
 
@@ -591,7 +597,7 @@ Request exactly:
 - `https://www.googleapis.com/auth/drive.file`
 - `https://www.googleapis.com/auth/drive.appdata`
 
-Use identity scopes for name, email, and avatar. Use Drive scopes only for Whisdom-created transcript records in `appDataFolder`. Never upload source media or settings. Explain that `appDataFolder` content is app-private but stored in the user’s Google Drive account.
+Use identity scopes for available optional name, verified email, and optional avatar. Use Drive scopes only for Whisdom-created transcript records in `appDataFolder`. Never upload source media or settings. Explain that `appDataFolder` content is app-private but stored in the user’s Google Drive account.
 
 ### 15.2 Authentication state machine
 
@@ -614,37 +620,45 @@ Access tokens and `expires_in`-derived expiry remain memory-only. While the same
 
 Sign out clears in-memory credentials and pauses sync; local transcripts remain. Revoke success is shown only after Google’s revoke callback confirms success. On callback failure/timeout, clear local credential/session state but report that revocation is unconfirmed and link to Google Account permissions at `https://myaccount.google.com/permissions`. If no usable token exists, do not claim or simulate revocation: clear local state, state that revocation is unconfirmed, and provide the same link. Revocation does not erase existing backup files. A separate “Delete Drive backup” operation is out of scope.
 
-Reconnect preserves local records, pending operations, tombstones, account-neutral drafts, and conflict candidates. On a different-account connection, sync defaults to paused and no transcript is uploaded. Present exactly: Cancel; Reconcile without upload; or Sync local transcripts to new account. Reconcile without upload may list/download and stage conflicts but may not enqueue or push account-neutral local transcripts. Only the explicit Sync choice associates/enqueues local transcripts for the new account. Never silently disclose local transcripts to a different account.
+Reconnect preserves local records, pending operations, tombstones, account-neutral drafts, and conflict candidates. On a different-account connection, sync defaults to paused and no transcript is uploaded. Present exactly: Cancel; Reconcile without upload; or Sync local transcripts to new account. Reconcile without upload may fetch, strictly validate, and stage remote candidates for preview, but it must not apply a remote winner over account-neutral local transcript or draft state without explicit user confirmation; it may not enqueue or push local transcripts. “Sync local transcripts to new account” requires a separate explicit disclosure confirmation naming that transcript JSON—not media or settings—will be uploaded. Only that confirmed choice associates/enqueues local transcripts for the new account. Never silently disclose local transcripts to a different account.
 
 ### 15.3 Identity presentation
 
-- After token acquisition, fetch OIDC UserInfo with the access token. Cap the response at 64 KiB before parsing; require a plain object, non-empty string `sub` up to 255 code points, name up to 256 code points, email up to 320 code points with `email_verified === true`, optional picture URL up to 2,048 code points, and expected types. The normalized issuer is fixed as `https://accounts.google.com`. Encode stable account key as the unambiguous length-prefixed pair `<issuer-code-point-length>:<issuer><sub-code-point-length>:<sub>`; email is display metadata and never an identity key. Reject identity activation when UserInfo validation fails.
-- Header control displays avatar or initials, name, and concise sync indicator. Account menu shows verified name/email, connection state, last sync, pending count, Sync now, Sign out, and Revoke access.
-- For avatar, allow only an HTTPS UserInfo `picture` URL on `lh3.googleusercontent.com`, fetch with a five-second timeout and 1 MiB streamed byte cap, require an `image/*` response, then render a revocable Blob URL. Never place the remote picture URL directly in `img src`. Failure falls back to initials.
-- Broken avatar falls back to initials without hiding identity.
+- After token acquisition, fetch OIDC UserInfo with the access token. Cap the response at 64 KiB before parsing; require a plain object, non-empty string `sub` up to 255 code points, optional `name` as a string up to 256 code points, optional `email` as a string up to 320 code points, optional `email_verified` as a boolean, optional `picture` URL up to 2,048 code points, and expected types. Email may be displayed only when non-empty and `email_verified === true`. The normalized issuer is fixed as `https://accounts.google.com`. Encode stable account key as the unambiguous length-prefixed pair `<issuer-code-point-length>:<issuer><sub-code-point-length>:<sub>`; email is display metadata and never an identity key. Reject identity activation when required UserInfo validation fails.
+- Header control displays avatar or initials/generic glyph, display label, and concise sync indicator. Display label fallback order is non-empty bounded name, verified email, then localized “Google account.” Initials derive from name, then verified email; when neither yields initials, use a generic account glyph. Account menu shows available bounded name and verified email, connection state, last sync, pending count, Sync now, Sign out, and Revoke access.
+- For avatar, allow only HTTPS URLs whose host is in the explicit avatar allowlist, initially exactly `lh3.googleusercontent.com`. Validate both the initial URL and final `response.url`; reject any redirect hop or final URL outside the allowlist, and cap redirects at three. Fetch with a five-second timeout and 1 MiB streamed byte cap, require an `image/*` MIME type, then render a revocable Blob URL. Never place the remote picture URL directly in `img src`. Redirect widening, CORS failure, timeout, invalid MIME, oversize response, or any validation failure falls back to initials or the generic account glyph.
+- Broken avatar falls back to initials or the generic account glyph without hiding identity.
 - Signed-out UI says “Not connected”; it never says Guest when a stale or failed connection is the relevant state.
 
-Static-host CSP must enumerate narrow endpoints: `script-src https://accounts.google.com/gsi/client`; `frame-src https://accounts.google.com`; `connect-src https://accounts.google.com https://openidconnect.googleapis.com https://oauth2.googleapis.com https://www.googleapis.com https://lh3.googleusercontent.com`; and `img-src 'self' blob: data:`. Keep the project’s required self directives. Do not add Google wildcards. Calls are limited to GIS under `https://accounts.google.com/gsi/`, UserInfo `https://openidconnect.googleapis.com/v1/userinfo`, revoke `https://oauth2.googleapis.com/revoke`, Drive `https://www.googleapis.com/drive/v3/` and `https://www.googleapis.com/upload/drive/v3/`, and bounded avatar fetch on `https://lh3.googleusercontent.com/`.
+Static-host CSP must enumerate narrow endpoints: `script-src https://accounts.google.com/gsi/client`; `frame-src https://accounts.google.com`; `connect-src https://accounts.google.com https://openidconnect.googleapis.com https://oauth2.googleapis.com https://www.googleapis.com https://lh3.googleusercontent.com`; and `img-src 'self' blob: data:`. Keep the project’s required self directives. Do not add wildcard hosts. Calls are limited to GIS under `https://accounts.google.com/gsi/`, UserInfo `https://openidconnect.googleapis.com/v1/userinfo`, revoke `https://oauth2.googleapis.com/revoke`, Drive `https://www.googleapis.com/drive/v3/` and `https://www.googleapis.com/upload/drive/v3/`, and bounded avatar fetch on the exact allowlisted origin `https://lh3.googleusercontent.com/`.
 
 ### 15.4 Remote record
 
-Each remote file is versioned JSON in `appDataFolder`, uses MIME type `application/vnd.whisdom.transcript+json`, and has deterministic display name `whisdom-transcript-<percent-encoded transcriptId>.json`. Its Drive `appProperties` contain `whisdomTranscriptId=<transcriptId>` and `whisdomSchemaVersion=<schemaVersion>`. Logical record fields:
+Each remote file is a versioned envelope in `appDataFolder` and uses MIME type `application/vnd.whisdom.transcript+json`. Let `remoteKey = base64url(SHA-256(UTF-8(transcriptId)))`, using the RFC 4648 URL-safe alphabet without padding. It is exactly 43 ASCII characters and must be recomputed from the parsed JSON `transcriptId` before accepting a file. The deterministic display name is `whisdom-transcript-<remoteKey>.json`. Drive `appProperties` contain `whisdomTranscriptKey=<remoteKey>` and a separate bounded decimal `whisdomSchemaVersion=<schemaVersion>`. Raw `transcriptId` must never appear in a filename or appProperty; it remains inside JSON.
+
+The current envelope schema version is `2`; the supported lower and upper version bounds are therefore both `2`. Numeric JSON values are accepted only as JSON numbers satisfying the stated integer and safe-integer bounds; numeric strings are rejected. Every envelope and canonical transcript timestamp is a finite JavaScript safe integer representing UTC epoch milliseconds from `946684800000` (`2000-01-01T00:00:00.000Z`) through `4102444800000` (`2100-01-01T00:00:00.000Z`), inclusive. Zero is never a timestamp. Nullable timestamp fields use JSON `null` to mean absent; omission is rejected where the versioned schema requires the field.
 
 | Field | Rule |
 | --- | --- |
-| `schemaVersion` | Required positive integer |
-| `transcriptId` | Stable Whisdom transcript ID |
-| `revision` | Monotonic non-negative integer per accepted mutation |
-| `updatedAt` | Valid bounded UTC timestamp from local mutation or accepted remote record |
-| `deletedAt` | Optional valid bounded UTC timestamp; presence is a tombstone |
-| `deviceId` | Stable random local installation ID used only for tie-break |
-| `transcript` | Omitted for tombstone; otherwise canonical transcript payload |
+| `schemaVersion` | Required positive JavaScript safe integer; accept supported value `2`, reject zero, negatives, fractions, values above `Number.MAX_SAFE_INTEGER`, and unsupported positive versions |
+| `transcriptId` | Non-empty string of at most 512 UTF-8 bytes; never truncate |
+| `revision` | Monotonic non-negative JavaScript safe integer per accepted mutation |
+| `updatedAt` | Required bounded epoch-millisecond timestamp |
+| `deletedAt` | Required field: bounded epoch-millisecond timestamp for a tombstone, otherwise `null` |
+| `deviceId` | Exactly `d_` plus the canonical unpadded base64url encoding of 128 random bits: 24 ASCII characters matching `^d_[A-Za-z0-9_-]{22}$`, decoding to exactly 16 bytes and re-encoding identically; generated once and persisted per browser profile, never derived from email or fingerprinting |
+| `deletionId` | Required field: for a tombstone, exactly `x_` plus the canonical unpadded base64url encoding of fresh 128 random bits, with the same exact-length/decode/re-encode rules and regex `^x_[A-Za-z0-9_-]{22}$`; otherwise `null` |
+| `restoredFromDeletionId` | Required field: for an explicit restored live record, the exact observed tombstone `deletionId` in the same bounded format; otherwise `null`; always `null` on tombstones |
+| `transcript` | Required field: `null` for tombstone; otherwise canonical transcript payload |
+
+`deletionId` is stable for that tombstone across retries, duplicate files, reconcile, and idempotent upserts. It is generated only for a new delete event, never regenerated while rewriting the same tombstone. A valid live mutation descended from an explicit restore preserves its `restoredFromDeletionId`; unrelated or stale live state cannot synthesize or change it. A later delete replaces that live lineage with a fresh `deletionId` and null `restoredFromDeletionId`.
 
 Remote Drive file IDs are implementation metadata only. Store them locally for update/delete efficiency; never expose them in copy, logs, URLs, exports, or analytics.
 
-Discovery calls Drive files list with `spaces=appDataFolder`, `trashed=false`, the transcript-ID `appProperties` predicate, pagination, and explicit fields only: `nextPageToken` plus file `id,name,mimeType,modifiedTime,appProperties,size`. Update a known file with `PATCH`. On a known-file `404`, clear the mapping and rediscover once before create/update. Tombstones update the remote JSON record through this same upsert path; they never trash the Drive file.
+Discovery calls Drive files list with `spaces=appDataFolder`, `trashed=false`, the `whisdomTranscriptKey=<remoteKey>` appProperties predicate, pagination, and explicit fields only: `nextPageToken` plus file `id,name,mimeType,modifiedTime,appProperties,size`. After bounded JSON parsing, recompute the candidate’s remote key from its `transcriptId` and require exact equality with the requested key, filename key, and appProperty key. Retain the opaque HTTP ETag from each downloaded candidate in `syncMetadata` only when it is non-empty ASCII of at most 512 bytes. Update a known file with `PATCH` plus `If-Match` for the exact downloaded ETag; a missing/invalid ETag forces rediscovery instead of an unconditional PATCH. A precondition failure must relist, download, validate, and resolve again before any retry, so a tombstone created after the earlier read cannot be overwritten by stale live state. On a known-file `404`, clear the mapping and rediscover once before create/update. Tombstones update the remote JSON record through this same upsert path; they never trash the Drive file.
 
 Concurrent clients can race and create duplicate Drive files; absolute remote uniqueness is not promised. Eventual uniqueness uses this protocol: discover all logical duplicates, validate each, select canonical content by Section 15.8 conflict order and then ascending Drive file ID as the deterministic tie-break when content order is identical, write/verify the canonical file, relist after the write, and enqueue a bounded cleanup job for noncanonical duplicate file IDs. After canonical verification, cleanup deletes at most 20 noncanonical files per reconcile and retries safely; failure leaves duplicates but not ambiguous canonical selection.
+
+Legacy Drive migration recognizes existing Whisdom `TranscriptDocument` files named `{id}.json` only through a bounded legacy discovery pass; raw names are never copied into new metadata. Cap the pass by normal Drive pagination, the 25 MiB body limit, and the same transcript field/string/array/timestamp bounds except for an isolated legacy-ID intake cap of 16 KiB UTF-8. The isolated legacy parser accepts only the current legacy timestamp representation, parses it to a finite instant, requires it within the accepted range, and converts it exactly to integer epoch milliseconds; these legacy exceptions never enter the schema-2 parser. Validate each legacy body and import it locally without truncating its ID. IDs from 1 through 512 UTF-8 bytes may derive `remoteKey` and write a schema-2 envelope on the first migration sync. IDs from 513 bytes through 16 KiB are preserved locally, marked Needs attention, and never uploaded until explicit safe-ID remediation creates a valid stable ID. Empty IDs, IDs above 16 KiB, and otherwise invalid legacy bodies remain bounded remote quarantine metadata only. Verify every new file body, recomputed key, appProperties, and canonical hash before enqueueing cleanup of the old file. Cleanup remains bounded to 20 old files per reconcile and never runs before verified envelope persistence. Never truncate an ID. Locally migrated IDs over 512 bytes follow the same preserve-local/Needs-attention/no-upload rule without an artificial local truncation cap.
 
 ### 15.5 Local-first mutation path
 
@@ -657,6 +671,8 @@ All local, Cloudflare, and server transcription results enter one path:
 5. Let background sync process the operation when authenticated and online.
 
 Drive failure cannot fail or roll back transcription completion. Local save failure is blocking and must not claim completion.
+
+Before enqueue, validate the transcript ID byte bound and all envelope fields. A locally preserved legacy ID over 512 UTF-8 bytes remains usable locally but its operation is durably blocked as Needs attention until explicit safe-ID remediation. No upload path truncates, percent-encodes into a filename, or exposes the raw ID in Drive metadata.
 
 ### 15.6 Reconcile triggers
 
@@ -674,37 +690,44 @@ Use one coalescing sync service. Triggers while active set a rerun flag instead 
 ### 15.7 Reconcile sequence
 
 1. Validate account and token freshness.
-2. Push pending tombstones and upserts idempotently, with writes serialized per logical transcript.
-3. List Whisdom remote records, using pagination.
-4. Download changed/unknown records with at most four concurrent downloads.
-5. Stream-cap and validate remote schema/canonical payload under Section 15.8 before it enters transcript storage.
-6. Resolve each local/remote pair under Section 15.8.
-7. Apply incoming winners and sync metadata transactionally.
+2. List Whisdom remote records, using pagination, before any pending write.
+3. Download every changed/unknown record and every current remote candidate for a pending logical transcript with at most four concurrent downloads.
+4. Stream-cap and validate remote schema/canonical payload under Section 15.8 before it enters transcript storage.
+5. Resolve each local/remote pair under Section 15.8, including the causal tombstone rule, before deciding an outbound winner. A pending stale live mutation may never overwrite an unseen remote tombstone merely because it was queued first or has a higher revision.
+6. Persist candidates, incoming winners, and sync metadata transactionally.
+7. Push only resolved local-winning tombstones/upserts idempotently, with writes serialized per logical transcript; cancel or supersede pending operations that lost.
 8. Requeue any local winner not confirmed remotely.
 9. Mark reconcile success time only after all non-permanent operations finish or are durably classified.
 
-Remote create/update uses retained file IDs, one-time 404 rediscovery, post-write verification, and eventual-uniqueness cleanup from Section 15.4. Writes remain serialized per logical transcript even while downloads run at concurrency four.
+Remote create/update uses retained file IDs and ETags, conditional PATCH, 404/412 rediscovery, post-write verification, and eventual-uniqueness cleanup from Section 15.4. Writes remain serialized per logical transcript even while downloads run at concurrency four.
 
 ### 15.8 Conflict order
 
-Compare records by this exact descending precedence:
+Apply the causal tombstone rule before normal ordering whenever exactly one candidate is a tombstone:
+
+1. The tombstone wins regardless of the live record’s revision or timestamp.
+2. The only exception is a live record whose `restoredFromDeletionId` exactly equals that tombstone’s `deletionId` and whose revision is greater than the tombstone revision. That explicit observed restore wins.
+3. Only an explicit user Undo/Restore action that observed that exact tombstone may originate the exception. Valid later mutations descended from that restored live record preserve the field; stale live mutations and merge/sync code cannot synthesize, substitute, or guess `restoredFromDeletionId`.
+4. A later tombstone always receives a new `deletionId`. A live record restored from an older deletion does not match and therefore loses to the later tombstone, regardless of revision or timestamp.
+
+When both candidates are live or both are tombstones, compare by this exact descending precedence:
 
 1. `revision` numeric value.
 2. Valid `updatedAt` instant when revisions are equal; a valid timestamp sorts above an invalid legacy timestamp.
-3. `deviceId` lexicographic Unicode code-point order.
+3. `deviceId` lexicographic ASCII code-point order.
 4. Payload hash lexicographic ASCII order.
 
-Revision precedence preserves causal safety: clock skew cannot let an older revision override a causally newer accepted state. Equal revisions are treated as concurrent for tie-breaking. Timestamp selects newest change among those candidates; it does not independently solve clock skew. A valid timestamp is a canonical UTC RFC 3339 string parseable to a finite instant from `2000-01-01T00:00:00.000Z` through `2100-01-01T00:00:00.000Z`, inclusive. New local timestamps outside the bound are rejected; invalid legacy local timestamps remain below valid timestamps and proceed to deterministic tie-breaks, while invalid remote timestamps fail parser validation.
+The tombstone special rule, not revision ordering alone, prevents resurrection. Within two-live or two-tombstone comparisons, revision precedes clocks so clock skew cannot let a lower revision win. Equal revisions are treated as concurrent for tie-breaking. `updatedAt` selects among those candidates; it does not independently establish causality. Remote `updatedAt` must be a bounded epoch-millisecond safe integer under Section 15.4. Invalid legacy local timestamps remain below valid timestamps and proceed to deterministic tie-breaks until migrated; invalid remote timestamps fail parser validation. Competing tombstones therefore converge deterministically by revision, `updatedAt`, `deviceId`, payload hash, and finally ascending Drive file ID only when their content order is identical.
 
-`deviceId` compares Unicode code points, not locale collation. Payload hash is lowercase ASCII hexadecimal SHA-256 over RFC 8785 canonical JSON of exactly `{ "deletedAt": <timestamp-or-null>, "transcript": <canonical-payload-or-null> }`. Tombstones participate identically and therefore prevent resurrection. After accepting a remote winner, the next local mutation revision is `max(local revision, remote revision) + 1`.
+`deviceId` compares ASCII code points, not locale collation. Payload hash is lowercase ASCII hexadecimal SHA-256 over RFC 8785 canonical JSON of exactly `{ "deletedAt": <epoch-ms-or-null>, "deletionId": <id-or-null>, "restoredFromDeletionId": <id-or-null>, "transcript": <canonical-payload-or-null> }`, with keys and nulls present exactly as shown. After accepting a remote winner, the next local mutation revision is `max(local revision, remote revision) + 1`; if that increment would exceed `Number.MAX_SAFE_INTEGER`, mutation is blocked as Needs attention rather than rounded or wrapped.
 
 #### Untrusted remote parser and durable candidates
 
-Treat every Drive body as untrusted. Stream bytes and abort above 25 MiB before `JSON.parse`. Accept only a non-array plain object with a supported schema version and strict allowlisted fields for that version; reject unknown envelope or transcript fields. Future/unknown schema versions are unsupported rather than partially interpreted. Validate enum membership, finite bounded timestamps, canonical segment timing/text invariants, and globally unique non-empty segment IDs within the record.
+Treat every Drive body as untrusted. Stream bytes and abort above 25 MiB before `JSON.parse`. Accept only a non-array plain object with exactly the schema-2 allowlisted fields; reject unknown or missing envelope/transcript fields. Require `schemaVersion` to be a positive safe integer and reject every unsupported value rather than partially interpreting it. Validate revision safe-integer bounds; transcript ID non-empty/512-byte bound; recomputed `remoteKey`; exact canonical `deviceId`, `deletionId`, and `restoredFromDeletionId` formats and legal tombstone/live combinations; enum membership; bounded epoch-millisecond timestamps; canonical segment timing/text invariants; and globally unique non-empty segment IDs within the record.
 
 Schema-version maxima are: title 512 Unicode code points; source display name/reference 2,048 code points; language/model/runtime/enum strings 128 code points; derived transcript text 16 MiB UTF-8; at most 100,000 segments; each segment ID 255 code points; each normalized segment text 1 MiB UTF-8; at most 100 diagnostic entries with code and bounded string parameters of 1,024 code points each; and at most 256 bounded metadata entries. The total 25 MiB cap remains authoritative. Require derived text to equal canonical segment derivation and reject rather than repair an incoming remote record.
 
-Persist every validated incoming winner/non-winner needed for dirty-editor or conflict handling in the dedicated account-neutral `conflictCandidates` store before presenting or applying it. The Drive layer associates a candidate with account key and Drive file metadata in `syncMetadata`; editor draft/candidate payloads remain account-neutral. Invalid records never enter `transcripts` or `conflictCandidates`. Store only bounded metadata: Drive file ID up to 255 code points, stable error code up to 128 code points, and lowercase SHA-256 of streamed body bytes; never store arbitrary body, provider response text, or parsed transcript fragments.
+Persist every validated incoming winner/non-winner needed for dirty-editor, account-switch preview, or conflict handling in the dedicated account-neutral `conflictCandidates` store before presenting or applying it. Candidate comparison data includes revision, updatedAt, deviceId, deletedAt, deletionId, restoredFromDeletionId, transcript/null, and canonical payload hash; it excludes account identity and Drive identifiers. The Drive layer associates a candidate with account key, remoteKey, and Drive file metadata in `syncMetadata`; editor draft/candidate payloads remain account-neutral. Invalid records never enter `transcripts` or `conflictCandidates`. Store only bounded quarantine metadata: Drive file ID up to 255 code points, remoteKey when valid, stable error code up to 128 code points, and lowercase SHA-256 of streamed body bytes; never store arbitrary body, provider response text, or parsed transcript fragments.
 
 If an incoming winner targets a dirty open editor, do not overwrite in-memory content. Persist the validated candidate, save/protect the account-neutral local draft, then recompute conflict order. If local persistence fails, mark Needs attention and retain the durable candidate plus last durable transcript until user action.
 
@@ -715,6 +738,7 @@ If an incoming winner targets a dirty open editor, do not overwrite in-memory co
 | Offline/network/408/429/5xx | Retry with bounded exponential backoff and jitter |
 | 401/403 caused by auth | Pause queue; refresh once; then Needs reconnect |
 | 400/404 for stale remote file ID | Clear mapping and re-discover once |
+| 412 conditional write conflict | Relist/download/validate and rerun conflict resolution; never retry the stale body blindly |
 | Invalid remote JSON/schema | Store bounded file-ID/error-code/body-hash metadata only; mark item Needs attention; never store body or overwrite local transcript |
 | Other permanent 4xx | Stop retrying item; mark Needs attention with safe details |
 
@@ -722,7 +746,7 @@ Backoff schedule uses base 1 second, doubles to maximum 60 seconds, adds 0-25% j
 
 ### 15.10 Tombstone retention
 
-Remote tombstones and local ordering identity are permanent for this redesign. After 180 days following a confirmed reconcile, and only when no known operation is pending, compaction may remove payload, retry history, and error/diagnostic auxiliary metadata. It must retain transcript ID, revision, updatedAt, deletedAt, device ID, payload hash, account association/confirmation needed for ordering, and the remote tombstone JSON. Do not compact while signed out or auth-paused. Physical local or remote tombstone deletion is out of scope until a future replica-watermark protocol can prove every replica observed the deletion.
+Remote tombstones and local causal ordering identity are permanent for this redesign. After 180 days following a confirmed reconcile, and only when no known operation is pending, compaction may remove retry history and error/diagnostic auxiliary metadata. It must retain transcript ID, remoteKey, revision, updatedAt, deletedAt, deletionId, `restoredFromDeletionId` null state, device ID, payload hash, account association/confirmation needed for ordering, and the complete remote tombstone JSON. Do not compact while signed out or auth-paused. Physical local or remote tombstone deletion is out of scope until a future replica-watermark protocol can prove every replica observed the deletion.
 
 ## 16. IndexedDB schema and migration
 
@@ -737,10 +761,10 @@ Version 2 contains every required logical store:
 | Store | Key | Purpose |
 | --- | --- | --- |
 | `settings` | Existing singleton key | Preserve current `AppSettings`; add only validated fields through defaults |
-| `transcripts` | Transcript ID | Canonical transcript, revision, device ID, deletion marker, timestamps |
+| `transcripts` | Transcript ID | Canonical transcript, safe-integer revision, device ID, deletion timestamp/ID, restored-from lineage, timestamps, local ID-remediation state |
 | `drafts` | Transcript ID | Account-neutral durable editor draft, base durable revision, dirty/save state |
-| `conflictCandidates` | Candidate ID | Validated account-neutral incoming transcript/tombstone candidate and comparison fields |
-| `syncMetadata` | Account key + transcript ID | Remote file ID, confirmed revision/order, item state, last error code |
+| `conflictCandidates` | Candidate ID | Validated account-neutral incoming transcript/tombstone candidate including causal deletion lineage and comparison fields; no account/Drive identifiers |
+| `syncMetadata` | Account key + transcript ID | Derived remoteKey, remote file ID/ETag, candidate/account association, confirmed revision/order/lineage, item state, last error code |
 | `pendingOperations` | Operation ID | Durable coalesced upsert/tombstone work, attempts, next attempt time |
 | `syncState` | Account key | Last reconcile, cursor/page token if safe, auth-paused marker, account metadata |
 | `meta` | Named key | Schema version helpers, stable device ID, migration completion data |
@@ -750,7 +774,7 @@ Pending operations require indexes for account, transcript ID, and next attempt 
 ### 16.3 Transaction boundaries
 
 - Transcript create/edit/rename: write transcript revision and coalesced pending upsert together.
-- Delete/Undo: write transcript deletion state, tombstone, and pending operation together.
+- Delete/Undo/Restore: write transcript deletion state, fresh `deletionId` or exact observed `restoredFromDeletionId`, and pending operation together.
 - Editor save/discard: write or clear account-neutral draft and update transcript revision in one serialized repository operation.
 - Incoming merge: persist candidate first, then write transcript winner, sync metadata, resolved pending-operation state, and candidate disposition together.
 - Sync success: update confirmed metadata and delete matching pending operation together.
@@ -763,14 +787,14 @@ Migration ships in two deployment-safe phases:
 
 1. **Slice 1A compatibility opener (rollback floor).** Open the named database without passing a lower explicit version. Omitting the version lets IndexedDB open the existing version; passing `1` against a v2 database would raise `VersionError` and is prohibited. Inspect `db.version`, use a version-aware repository for supported v1/v2 layouts, and close with a localized unsupported-data-version state if the version is above the client’s maximum supported version. A brand-new omitted-version open creates the platform’s initial version; initialize only the Slice 1A-compatible layout through its controlled creation path.
 2. **Slice 1B transactional v1→v2 upgrade.** Request version 2 and create `drafts`, `conflictCandidates`, `syncMetadata`, `pendingOperations`, `syncState`, and `meta`, plus every required index, in the single `versionchange` transaction. Upgrade existing `settings` and `transcripts` in that same transaction; abort leaves the v1 database intact.
-3. For each v1 transcript, apply Section 13.2 normalization and forward-clamp exactly, preserve ID/title/source/language/model/mode/createdAt/updatedAt, set revision `0`, assign stable device ID, and regenerate canonical `text`.
+3. For each v1 transcript, apply Section 13.2 normalization and forward-clamp exactly, preserve ID/title/source/language/model/mode, set revision `0`, assign one parser-valid generated device ID persisted in `meta`, set deletion-lineage fields to null, and regenerate canonical `text`. Convert valid current legacy `createdAt`/`updatedAt` representations to integer epoch milliseconds within the accepted range. Preserve an invalid/out-of-range legacy timestamp locally as Needs attention and prohibit its upload until explicit timestamp remediation; in local conflict comparison it sorts below a valid timestamp. Preserve a legacy transcript ID over 512 UTF-8 bytes locally, mark it Needs attention for safe-ID remediation, and prohibit upload; never truncate it.
 4. Preserve settings by merging only missing defaults. Validate numeric values: chunk seconds finite integer 15-60; overlap finite number 0-5 and less than chunk seconds. Invalid values fall back to current defaults 30 and 1.
 5. Initialize empty drafts/candidate/sync stores. Create no pending Drive upload merely from migration while signed out. Slice 5 associates/enqueues records only after account consent.
-6. The upgrade is idempotent under interrupted open attempts and never deletes a valid transcript.
+6. The upgrade is idempotent under interrupted open attempts and never deletes a valid transcript. It validates or replaces malformed legacy local device metadata with one newly generated parser-valid profile device ID; it never derives identity from account data or a fingerprint.
 
 After any deployed client opens/upgrades a database to v2, no production rollback may go below Slice 1A. Operational rollback must deploy Slice 1A-compatible or newer code, because older code that explicitly opens version 1 will fail on v2 and code assuming v1 stores may misbehave. Slice 4 consumes the migrated v2 repository; it performs no schema migration.
 
-Migration fixtures must include: default v1 settings, `NaN`-equivalent invalid persisted numbers, text-only transcript, valid segmented transcript, overlapping/out-of-order/non-finite timing, Unicode whitespace, duplicate/missing segment IDs, unknown model ID, empty transcript, and multiple timestamps. Tests reopen migrated data and verify semantic equality plus canonical invariants, all v2 stores/indexes, interrupted-transaction rollback, Slice 1A opening v1 and v2 without requesting a downgrade, and deterministic rejection of unsupported versions above 2.
+Migration fixtures must include: default v1 settings, `NaN`-equivalent invalid persisted numbers, text-only transcript, valid segmented transcript, overlapping/out-of-order/non-finite timing, Unicode whitespace, duplicate/missing segment IDs, unknown model ID, empty transcript, timestamp lower/upper boundaries and out-of-range values, transcript IDs at 512 UTF-8 bytes and 513 UTF-8 bytes including multibyte text, and malformed legacy device metadata. Tests reopen migrated data and verify semantic equality plus canonical invariants, local preservation plus Needs-attention/no-upload for oversized IDs, parser-valid persisted device identity, null initial deletion lineage, all v2 stores/indexes, interrupted-transaction rollback, Slice 1A opening v1 and v2 without requesting a downgrade, and deterministic rejection of unsupported versions above 2.
 
 ### 16.5 Clear-data semantics
 
@@ -851,7 +875,7 @@ Batch completion emits one summary confirmation. Failed items retain contextual 
 
 | Error | Primary recovery |
 | --- | --- |
-| WebGPU unavailable for selected model | Use recommended Base/WASM |
+| WebGPU unavailable for selected model | Use a beginner-safe non-q4 Base/Tiny fallback when available; otherwise choose another compatible model explicitly or recover runtime |
 | Unsupported/failed media analysis | Choose another file |
 | Model asset download failed | Retry download |
 | Runtime failed | Retry item |
@@ -944,7 +968,7 @@ Exit: addressable Workbench/Settings; v1 data preserved in v2; rollback-floor te
 - Make URL-only server flow reachable.
 - Keep advanced model/language controls accessible.
 
-Exit: recommendation scenario tests cover first run, preserved explicit choice, missing/removed model, language/runtime change, and no-compatible-model recovery; file append/link submit plus cross-cutting baseline pass.
+Exit: recommendation scenario tests cover first run, preserved explicit choice, missing/removed model, language/runtime change, beginner-safe row-6 fallback, Small/q4-only explicit choice, no-compatible-model recovery, and separate server default selection; file append/link submit plus cross-cutting baseline pass.
 
 ### 22.3 Slice 3: progress, cancel, errors, queue
 
@@ -966,9 +990,9 @@ Exit: canonical fixture outputs match across TXT/JSON/SRT/VTT/hash; dirty-naviga
 
 ### 22.5 Slice 5: Google identity and sync
 
-- **Checkpoint A — identity/transport:** approved scopes, attempt IDs/watchdogs, UserInfo identity, bounded avatar Blob fetch, CSP, same-page token renewal, user-initiated reload reconnect, sign-out/revoke, Drive discovery/upsert.
-- **Checkpoint B — durable outbound:** account consent/association, durable queue, serialized writes, local-save-first path for every transcription mode, tombstone JSON updates, retry, post-write verification, eventual-uniqueness cleanup.
-- **Checkpoint C — inbound reconciliation/conflicts:** four-download concurrency, untrusted parser, durable candidates, restore, deterministic conflict order/hash, dirty-editor protection, account switch, offline/auth recovery.
+- **Checkpoint A — identity/transport:** approved scopes, attempt IDs/watchdogs, optional UserInfo display fields and fallbacks, bounded no-widening avatar Blob fetch, exact-host CSP, same-page token renewal, user-initiated reload reconnect, sign-out/revoke, remoteKey Drive discovery/upsert.
+- **Checkpoint B — durable outbound:** account consent/association, durable queue, serialized writes, local-save-first path for every transcription mode, causal tombstone/restore JSON, safe-ID upload gate, legacy Drive migration, retry, post-write verification, eventual-uniqueness cleanup.
+- **Checkpoint C — inbound reconciliation/conflicts:** four-download concurrency, strict bounded envelope parser, durable account-neutral candidates, causal restore rule, deterministic regular ordering/hash, dirty-editor protection, account-switch preview confirmation, offline/auth recovery.
 
 Exit: all three checkpoints and cross-cutting baseline pass; request inspection proves no source-media/settings upload, no broad Google CSP wildcard, and no silent cross-account disclosure.
 
@@ -992,13 +1016,14 @@ Exit: all observable acceptance scenarios, deployment rollback checks, and repos
 
 ### 23.1 Unit tests
 
-- Recommendation precedence, no-compatible blocking, catalog fallback, missing/removed choice, language mismatch, capability changes, explicit-choice persistence, and derived explanation.
+- Local recommendation precedence, no-compatible blocking, beginner-safe Base-before-Tiny fallback, fixture where only Small/q4 remains and no automatic selection occurs, missing/removed choice, language mismatch, capability changes, explicit-choice persistence, derived explanation, and separate server-capability default selection unaffected by local q4 rules.
 - Progress event normalization, phase completion, indeterminate behavior, rolling-30-second ETA sample/span/CV eligibility, and stage/item reset.
 - Workbench queue reducer and editor reducer.
 - Runtime cancellation idempotency, cooperative acknowledgement, forced per-type worker termination/recreation, persistent-cache retention, singleton-at-most-one invariant, and late-event rejection.
-- Unicode-whitespace normalization, forward timing clamp, split/merge/multiline paste/spanning-selection behavior, raw derivation, and byte-identical canonical inputs for TXT/SRT/VTT/JSON/hash.
-- Revision-first conflict ordering, bounded timestamp validity, Unicode code-point device tie-break, RFC 8785 lowercase SHA-256, next-revision rule, tombstone precedence, Drive-ID duplicate tie-break, and bounded cleanup.
-- Untrusted parser byte cap/plain-object/schema/unknown-field/enum/string/array/timestamp/segment-ID/invariant rejection; invalid-record metadata bounds; durable candidate storage.
+- Unicode-whitespace normalization, forward timing clamp, split/merge/multiline paste/spanning-selection behavior, raw derivation, all-segment subtitle timing validation, invalid normalized-empty segment rejection, all-empty no-cue unavailability, and byte-identical canonical inputs for TXT/SRT/VTT/JSON/hash.
+- Causal tombstone-before-ordering rule; reconcile discovery/read-before-write preventing a queued stale live record with arbitrarily high revision from overwriting an unseen tombstone; exact observed restore with greater revision winning; restore against an older deletion losing to a newer deletion ID; duplicate/competing tombstones converging by revision/updatedAt/device/hash/Drive ID; two-live regular ordering; bounded timestamp validity; ASCII device tie-break; RFC 8785 lowercase SHA-256 including deletion lineage; safe next-revision overflow handling; and bounded cleanup.
+- Untrusted parser byte cap/plain-object/exact-field/schema/unknown-field/enum/string/array/segment-ID/invariant rejection; exact lower/upper acceptance and outside/fraction/unsafe rejection fixtures for schemaVersion and revision; transcript ID at 512 UTF-8 bytes and rejection at 513; remoteKey recomputation mismatch; canonical and malformed deviceId/deletionId/restoredFromDeletionId; timestamp lower/upper acceptance plus zero/null/type/out-of-range rejection; legal live/tombstone lineage combinations; invalid-record metadata bounds; and account-neutral durable candidate storage.
+- Legacy Drive `{id}.json` bounded import, 512-byte upload boundary, 513-byte and 16-KiB local-preservation boundaries, over-16-KiB metadata-only quarantine, derived remoteKey envelope write/verify-before-cleanup, bounded old-file cleanup, invalid body quarantine, and no-truncation behavior.
 - Backoff bounds/jitter range, auth pause, transient/permanent classification.
 - Slice 1A versionless compatibility open for v1/v2, unsupported-version rejection, complete v1→v2 store/index migration, and transaction rollback.
 - Settings numeric validation.
@@ -1010,22 +1035,22 @@ Exit: all observable acceptance scenarios, deployment rollback checks, and repos
 - One-error rendering, retry clearing, confirmation toast queue/timers.
 - Autosave debounce/serialization, app-navigation await, save-failure Retry/Discard, popstate restoration/replay guard, best-effort visibility/pagehide, conditional beforeunload registration, save states, and incoming dirty-editor protection.
 - Queue reorder alternatives, drawer/sheet focus, cancel choices.
-- Identity menu, auth attempt-ID timeout/late callback rejection, GIS error callback, same-page renewal, reload reconnect requirement, revoke confirmed/unconfirmed states, bounded UserInfo/avatar parsing, and three-choice account switch consent.
+- Identity menu, auth attempt-ID timeout/late callback rejection, GIS error callback, same-page renewal, reload reconnect requirement, revoke confirmed/unconfirmed states, optional name/picture and display/initial/glyph fallbacks, avatar initial/final URL allowlist and redirect/CORS/MIME/byte/timeout rejection, and account-switch paused/preview/apply/disclosure confirmation behavior.
 - Library visible item actions and responsive editor controls.
 
 ### 23.3 E2E tests
 
 Required named scenarios:
 
-1. `REC-01`: first run with WebGPU available/unavailable selects compatible multilingual Base; missing/removed choice follows fallback; `REC-02`: multilingual language and runtime changes follow exact precedence; `REC-03`: no compatible model blocks with recovery; `REC-04`: valid explicit choice persists and recommendation explanation remains derived from current inputs.
+1. `REC-01`: first run with WebGPU available/unavailable selects compatible non-q4 multilingual Base and missing/removed choice follows beginner-safe fallback; `REC-02`: multilingual language and runtime changes follow exact precedence; `REC-03`: no compatible model blocks with runtime recovery; `REC-04`: valid explicit choice persists and recommendation explanation remains derived from current inputs; `REC-05`: only Small/q4 compatible models remain, so no model is selected and explicit choice with plain-language trade-offs is required; `REC-06`: server mode selects its advertised default capability independently of local q4 policy.
 2. `WB-01`: file select, append, remove, reorder, review, and start; `WB-02`: URL-only server submission without file.
 3. `RUN-01`: cooperative local cancel acknowledges before terminal state; `RUN-02`: noninterruptible ASR/ffmpeg cancel terminates only active worker, retains Cache Storage, recreates lazily, and never has two live workers of one type; `RUN-03`: Cloudflare/server cancel and cancelled retry; `RUN-04`: ETA eligibility/reset boundaries.
 4. `QUEUE-01`: sequential batch covers success, failure, cancel/pause, continue choice, and retry; `ERR-01`: one contextual error and stale-error removal after success.
-5. `EDIT-01`: Document/Timeline split, merge, multiline paste, timestamps, undo/redo, and canonical TXT/JSON/SRT/VTT/hash fixture outputs; `EDIT-02`: search traversal/wrap/persistence/reset/no-result focus/announcement; `SAVE-01`: autosave survives refresh; `SAVE-02`: app navigation and Back/Forward save failure exercise Retry and Discard against last durable revision; `SAVE-03`: unload warning exists only while dirty/saving without asserting guaranteed async unload save.
+5. `EDIT-01`: Document/Timeline split, merge, multiline paste, timestamps, undo/redo, and canonical TXT/JSON/SRT/VTT/hash fixture outputs; `EDIT-02`: search traversal/wrap/persistence/reset/no-result focus/announcement; `EDIT-03`: a normalized-empty segment with invalid timing blocks SRT/VTT before cue omission, while all timing-valid empty segments leave subtitle export unavailable with the explicit no-non-empty-cues reason; `SAVE-01`: autosave survives refresh; `SAVE-02`: app navigation and Back/Forward save failure exercise Retry and Discard against last durable revision; `SAVE-03`: unload warning exists only while dirty/saving without asserting guaranteed async unload save.
 6. `MIG-01`: Slice 1A opens v1 and v2 without lower-version request and rejects unsupported version; `MIG-02`: transactional v1→v2 fixtures produce every store/index and canonical forward clamps; `MIG-03`: simulated rollback never deploys a pre-1A opener after v2 exposure.
 7. `LIB-01`: search, filter, rename, export, delete, Undo, deep link, 1,000-row threshold, and visible actions.
-8. `GIS-01`: sign-in dismissal/error/timeout/late callback; `GIS-02`: UserInfo stable sub identity and bounded avatar Blob/fallback; `GIS-03`: same-page expiry renewal and reload user reconnect; `GIS-04`: confirmed and unconfirmed revoke copy/link; `GIS-05`: different-account Cancel/Reconcile-without-upload/explicit-upload choices.
-9. `DRV-01`: deterministic MIME/name/appProperties discovery pagination, PATCH, 404 rediscovery, and post-write verification; `DRV-02`: duplicate race selects conflict winner then Drive ID and bounded cleanup; `DRV-03`: restore, revision-first conflict, equal-revision timestamp/device/hash ties, next local revision, and permanent tombstone JSON; `DRV-04`: 25 MiB/parser boundary, durable valid candidate, bounded invalid metadata, offline queue/retry/auth pause, four-download cap, and serialized per-transcript writes.
+8. `GIS-01`: sign-in dismissal/error/timeout/late callback; `GIS-02`: UserInfo stable sub identity, optional name/picture fallbacks, and bounded no-redirect-widening avatar Blob/fallback; `GIS-03`: same-page expiry renewal and reload user reconnect; `GIS-04`: confirmed and unconfirmed revoke copy/link; `GIS-05`: different-account Cancel, Reconcile-without-upload preview without apply, explicit apply confirmation, and separate disclosure confirmation before upload.
+9. `DRV-01`: deterministic MIME/remoteKey filename/appProperties discovery pagination, raw-ID absence, JSON key recomputation, ETag-conditioned PATCH, 404/412 rediscovery, and post-write verification; `DRV-02`: duplicate race selects conflict winner then Drive ID and bounded cleanup; `DRV-03`: reconcile reads current remote state before writes, stale arbitrarily-high-revision live loses without overwriting an unseen or raced tombstone, exact observed higher-revision restore wins, old-deletion restore loses to newer tombstone, duplicate/competing tombstones converge, two-live regular ties converge, next local revision is safe, and causal tombstone JSON remains permanent; `DRV-04`: 25 MiB and every numeric/identity/timestamp/parser boundary, durable account-neutral valid candidate, bounded invalid metadata, offline queue/retry/auth pause, four-download cap, and serialized per-transcript writes; `DRV-05`: legacy `{id}.json` migration verifies new envelope before bounded cleanup, uploads IDs only through 512 UTF-8 bytes, preserves 513-byte through 16-KiB IDs locally as Needs attention, quarantines larger IDs as bounded metadata, and never truncates.
 10. `PRIV-01`: no source-media/settings request to Drive under any mode; CSP contains only documented Google hosts; account switch performs no upload without explicit consent.
 11. `NAV-01`: Back/Forward/refresh/deep-link and route focus; `I18N-01`: every named flow runs in EN and VI with no hardcoded English leakage.
 12. `PERF-01`: initial route/chunk requests exclude Library/editor/Settings/model/ffmpeg heavy assets; `PERF-02`: 100 progress updates produce zero profiler commits in mounted header/nav/Library subtrees; `PERF-03`: 1,000-row/5,000-segment fixtures verify thresholds and 8 ms yielding with scheduler and fallback paths.
@@ -1051,7 +1076,7 @@ Focused screenshot regression `VIS-01` runs at desktop, 390, and 320 in Light an
 
 ### 24.1 Product flow
 
-- [ ] `REC-01` shows model, local runtime, and localized reason without opening advanced details; `REC-02` through `REC-04` pass exact precedence and persistence assertions.
+- [ ] `REC-01` shows a beginner-safe non-q4 Base/Tiny model, local runtime, and localized reason without opening advanced details; `REC-02` through `REC-06` pass exact local precedence, Small/q4 explicit-choice blocking, persistence, and separate server-default assertions.
 - [ ] File additions append to queue.
 - [ ] Link source starts configured server transcription without a local file or media analysis.
 - [ ] Review names model, language, downloads, conversion, processing location, and privacy behavior.
@@ -1067,28 +1092,29 @@ Focused screenshot regression `VIS-01` runs at desktop, 390, and 320 in Light an
 - [ ] One issue renders once per scope; no duplicate error toast/dialog/detail.
 - [ ] Success clears stale errors.
 - [ ] Document and Timeline edits update one canonical segment state.
-- [ ] `EDIT-01` fixtures produce expected canonical normalized text, timing, TXT, JSON, SRT, VTT, and payload hash bytes after split/merge/paste.
+- [ ] `EDIT-01` fixtures produce expected canonical normalized text, timing, TXT, JSON, SRT, VTT, and payload hash bytes after split/merge/paste; `EDIT-03` proves every segment is timing-valid before empty-cue omission and all-empty transcripts disable SRT/VTT with an explicit reason.
 - [ ] `SAVE-02` holds route on failed save; Retry and Discard produce specified durable outcomes for app and browser history navigation.
 - [ ] `MIG-01` through `MIG-03` prove v1 preservation, complete v2 stores/indexes, transactional rollback, supported-version behavior, and deployment rollback floor.
 - [ ] Legacy text-only records produce one `[0,0]` deterministic segment and an eligible non-empty subtitle cue.
 
 ### 24.3 Drive
 
-- [ ] Identity shows verified name/email/avatar fallback and explicit connection state.
+- [ ] Identity shows optional bounded name, verified-email, localized account-label, initials/glyph, and bounded avatar fallbacks in the defined order, plus explicit connection state.
 - [ ] `GIS-01` proves popup dismissal/error/timeout settles, invalidates attempt ID, and ignores late callbacks.
 - [ ] Access/expiry remain memory-only; `GIS-03` permits `prompt: ''` only on the connected page and requires user reconnect after reload.
-- [ ] Account key equals normalized Google issuer plus verified UserInfo `sub`; email is never used as key; avatar renders only from bounded fetched Blob URL or initials.
+- [ ] Account key equals normalized Google issuer plus UserInfo `sub`; email is never used as key; avatar renders only from a bounded fetched Blob URL whose initial and final origins pass the exact allowlist, or falls back to initials/generic glyph.
 - [ ] Revoke success appears only after confirmed callback; absent/failing token reports unconfirmed revocation and links Google Account permissions.
 - [ ] Local save always completes before Drive work and Drive failure never loses local transcript.
 - [ ] All transcription modes enqueue the same sync path.
-- [ ] `DRV-01` and `DRV-02` prove deterministic metadata/upsert, post-write verification, race-tolerant canonical selection, and bounded eventual duplicate cleanup without claiming absolute uniqueness.
-- [ ] `DRV-03` proves revision-first ordering, valid-timestamp/device/hash ties, next-revision rule, JSON tombstone updates, and no resurrection.
-- [ ] `DRV-04` proves 25 MiB cap, strict parser bounds, durable valid candidates, bounded invalid metadata, four-download maximum, and per-transcript write serialization.
+- [ ] `DRV-01` and `DRV-02` prove deterministic remoteKey filename/appProperties/upsert, no raw transcript ID in Drive metadata, transcriptId-to-key verification, bounded ETag-conditioned PATCH with 404/412 rediscovery, post-write verification, race-tolerant canonical selection, and bounded eventual duplicate cleanup without claiming absolute uniqueness.
+- [ ] `DRV-03` proves reconcile reads current remote state before writes and the causal tombstone special rule precedes regular ordering: stale live state loses without overwriting the unseen tombstone regardless of revision, only an exact observed higher-revision restore wins, an old-deletion restore loses to a later deletion, and competing tombstones converge deterministically. It also proves safe next-revision handling and permanent lineage-bearing tombstone JSON.
+- [ ] `DRV-04` proves the 25 MiB cap; exact schemaVersion/revision/transcript UTF-8/remoteKey/device/deletion/restore/timestamp boundaries; strict field and lineage parser rules; durable account-neutral valid candidates; bounded invalid metadata; four-download maximum; and per-transcript write serialization.
+- [ ] `DRV-05` proves bounded legacy Drive JSON import, derived remoteKey envelope write and verification before old-file cleanup, 512-byte upload acceptance, 513-byte/16-KiB local-preservation boundaries, over-16-KiB metadata-only quarantine, invalid-record quarantine, and no truncation.
 - [ ] UI states Local only, Pending, Syncing, Synced, Needs attention, last sync, and pending count equal repository/sync-service fixture state.
 - [ ] No raw Drive file ID appears.
 - [ ] No source media or settings are uploaded.
 - [ ] Revoke copy states that existing backup remains.
-- [ ] `GIS-05` starts different-account sync paused and uploads local transcripts only after explicit Sync choice.
+- [ ] `GIS-05` starts different-account sync paused; Reconcile without upload stages preview only and requires explicit confirmation before applying a remote winner; local transcript upload occurs only after separate disclosure confirmation.
 
 ### 24.4 Responsive and accessibility
 
@@ -1132,19 +1158,22 @@ Run worker typecheck for worker/shared contract changes and server build for `se
 | Product-slice rebuild creates old/new state divergence | Lost queue or inconsistent routes | Introduce repositories/contracts first; one durable source; remove old path per completed slice |
 | Cooperative local cancellation unsupported deep in inference/ffmpeg | UI says cancelled while compute continues or live state is lost | Use cooperation only when proven; otherwise terminate active per-type worker, preserve persistent cache, confirm termination, and lazily recreate singleton |
 | Segment-backed Document editing feels fragmented | Poor writing experience | Style blocks as continuous document; preserve caret and selection in reducer tests |
-| Legacy data violates new invariants | Migration loss or empty exports | Idempotent normalization, v1 fixtures, transactional upgrade, no destructive fallback |
+| Legacy data violates new invariants or ID bounds | Migration loss, empty exports, or unsafe Drive metadata | Idempotent normalization, v1/legacy-Drive fixtures, preserve oversized IDs locally as Needs attention, explicit safe-ID remediation, transactional upgrade, no truncation/destructive fallback |
 | Drive races create duplicate files | Ambiguous remote state | Conflict-order canonical content, Drive-ID tie-break, post-write verification, and bounded eventual cleanup; never promise absolute uniqueness |
-| Device clocks skew | Older state could appear newer | Revision precedes bounded timestamp; device/hash complete equal-revision ordering; do not treat timestamps as causal clocks |
+| Device clocks skew | Older state could appear newer | Causal tombstone lineage precedes regular ordering; revision then bounded epoch milliseconds/device/hash order same-kind candidates; do not treat timestamps as causal clocks |
 | Popup/renewal browser behavior varies | Silent auth failure | Attempt IDs, GIS error callback, bounded watchdog, same-page `prompt: ''` only, explicit reload reconnect |
 | Revoke cannot be confirmed without a usable token/callback | UI overstates removed access | Clear local session, label revocation unconfirmed, and link Google Account permissions |
 | Remote JSON is oversized or hostile | Memory pressure, corruption, or transcript overwrite | 25 MiB stream cap, strict bounded parser, durable validated candidates, metadata-only invalid quarantine |
+| Stale live record has a high revision | Deleted transcript resurrects | Tombstone wins before revision unless a user-observed exact deletionId restore has a greater revision; later deletions use new IDs |
+| Raw or oversized transcript ID reaches Drive metadata | Metadata leakage, invalid query/name, or collisions | Derive fixed 43-character remoteKey, recompute after parse, preserve oversized legacy IDs locally as Needs attention, never truncate |
+| Avatar redirects widen allowed origin | Identity fetch reaches unapproved host | Validate initial and final URL against exact HTTPS allowlist, cap redirects/bytes/MIME/time, use Blob URL, fall back locally |
 | Sync overwrites active edits | User data loss | Dirty-editor protection, local save first, transactional incoming merge |
 | Navigation/unload occurs during dirty save | Lost edits or false persistence promise | Await app navigation, restore popstate, Retry/Discard against durable revision, conditional beforeunload; pagehide remains best effort |
 | High-frequency progress harms rendering/a11y | Jank and announcement spam | Normalizer, narrow subscriptions, visual throttle, live-region throttle |
 | Mobile sheets/editor collide with keyboard | Hidden actions | Natural-height page editor, safe areas, visual viewport testing at 320/390 |
 | Copy extraction leaves English in adapters | Broken VI parity | Stable codes, typed feature copy, hardcoded-string lint/test scan |
-| Recommendation overclaims device capability | Misleading guidance | Use only current catalog/runtime facts; Base fallback; larger models remain explicit |
-| Permanent tombstone ordering state grows storage | Long-term metadata accumulation | After confirmed 180-day reconcile, compact payload/retry/error auxiliaries only; retain ordering identity until future replica-watermark protocol |
+| Recommendation overclaims device capability | Misleading guidance | Auto-select only compatible multilingual non-q4 Base/Tiny locally; require explicit choice whenever no beginner-safe candidate exists; treat server capability defaults separately |
+| Permanent tombstone ordering state grows storage | Long-term metadata accumulation | After confirmed 180-day reconcile, compact retry/error auxiliaries only; retain deletionId, lineage, hash, remoteKey, and ordering identity until future replica-watermark protocol |
 | Rollback client requests IndexedDB v1 after v2 exposure | `VersionError` or unusable app | Ship Slice 1A version-aware opener first and prohibit production rollback below that floor |
 
 ## 26. Explicit resolved decisions
@@ -1155,32 +1184,34 @@ Run worker typecheck for worker/shared contract changes and server build for `se
 4. Navigation uses query parameters for static-host compatibility.
 5. Mobile uses bottom navigation and queue bottom sheet.
 6. Transcript uses a full workspace, never a centered result modal.
-7. First run means no valid explicit stored model choice. Recommendation follows exact safety, language, runtime, stored-choice, Base, then catalog-fallback precedence; explanation is derived from current inputs.
-8. Larger models are never auto-recommended from unsupported device assumptions.
+7. First run means no valid explicit stored model choice. Automatic local recommendation can select only compatible multilingual non-q4 Base or Tiny variants, preferring Base; explanation is derived from current inputs.
+8. Small, English-only, and every q4 model always require explicit local choice. Whenever compatible models exist but no beginner-safe candidate remains—including the Small/q4-only fixture—automatic start blocks with plain-language trade-offs; if none are compatible, runtime recovery blocks start. Server capability defaults are evaluated separately and may be selected by the server.
 9. File and Link are distinct source types; Link has no local-file prerequisite.
 10. Progress phases are Prepare, Load model, Transcribe, Save. No synthetic global percentage.
 11. ETA is conditional on stable measured throughput.
 12. Every runtime reaches cancelled only after acknowledgement, abort completion, or worker termination. Cooperative local cancel is conditional; forced cancel may discard live worker state but retains persistent model Cache Storage and permits lazy singleton recreation.
 13. Queue remains sequential and supports accessible reorder alternatives.
 14. Errors are contextual and singular. Toasts confirm; they do not report failures.
-15. Ordered segments are canonical; Unicode whitespace normalization and one-space joining derive document text; valid subtitle timing is finite, nonnegative, nonoverlapping array order.
+15. Ordered segments are canonical; Unicode whitespace normalization and one-space joining derive document text. Every segment, including normalized-empty segments, must pass finite, nonnegative, nonoverlapping timing before SRT/VTT is eligible; empty cues are omitted only afterward, and zero remaining non-empty cues disables subtitle export with an explicit reason.
 16. Migration forward-clamps timing; legacy text-only transcripts become one deterministic subtitle-eligible zero-time segment; split/merge/paste rules produce deterministic exports and hash input.
 17. Autosave is local-first, debounced at 600 ms, and serialized. App navigation awaits save; dirty Back/Forward restores editor state; Retry/Discard is explicit; unload persistence is best effort only.
-18. Library delete uses Undo plus durable tombstone.
+18. Library delete uses Undo plus a durable tombstone with fresh stable deletionId; only a user action observing that exact tombstone may write a greater-revision restoredFromDeletionId.
 19. Drive sync is two-way for transcript JSON only.
 20. Approved Google scopes are exactly `openid email profile drive.file drive.appdata` with full scope URIs for Drive.
 21. GIS access tokens/expiry remain memory-only and no browser refresh token exists. Same-page `prompt: ''` may be attempted; reload requires user reconnect.
-22. Identity comes from bounded OIDC UserInfo; account key is normalized issuer plus verified `sub`; avatar uses a bounded fetched Blob URL; revoke is confirmed only by callback and never erases backup.
-23. Conflict order is revision, valid bounded `updatedAt`, Unicode code-point device ID, then lowercase RFC 8785/SHA-256 payload hash. Timestamp is a concurrent tie selector, not a causal clock.
+22. Identity comes from bounded OIDC UserInfo; name/picture are optional, verified email is display-only, account key is normalized issuer plus `sub`, and avatar uses exact-host no-widening bounded fetch plus local fallback. Revoke is confirmed only by callback and never erases backup.
+23. When exactly one candidate is a tombstone, it wins before normal ordering unless the live candidate is an exact observed greater-revision restore of that deletionId. Two-live and two-tombstone candidates use revision, bounded epoch-millisecond `updatedAt`, ASCII device ID, then lowercase RFC 8785/SHA-256 hash including deletion lineage. Revision alone does not prevent resurrection.
 24. Drive never blocks or precedes local save.
 25. All runtimes use one normalized save/sync path.
-26. IndexedDB v2 receives transcripts, account-neutral drafts/conflict candidates, sync metadata, pending operations, revision/device/tombstone state, sync state, and meta through Slice 1B transactional migration. Slice 1A is the permanent rollback floor.
+26. IndexedDB v2 receives transcripts, account-neutral drafts/conflict candidates, sync metadata, pending operations, safe-integer revision/device/causal-tombstone state, sync state, and meta through Slice 1B transactional migration. Slice 1A is the permanent rollback floor.
 27. React presentation state stays local; workflow state uses reducers; Drive sync is an external service with snapshot subscriptions.
 28. Runtime and issue localization uses stable codes, never string matching.
 29. EN/VI copy parity is compile-time enforced.
 30. Library, editor, and Settings are separate lazy chunks; model/ffmpeg assets wait for explicit user action; exact virtualization, yielding, Drive concurrency, and profiler-isolation thresholds apply.
 31. WCAG 2.2 AA, zero automated critical/serious violations, all named EN/VI manual checks, 320 px completeness, both themes, and reduced motion are release requirements in every slice.
 32. No source-media upload, concurrent batch, fake dashboard, PWA expansion, or broad backend refactor is included.
-33. Drive uses deterministic MIME/name/appProperties and PATCH/discovery semantics. Concurrent races may duplicate files; conflict-order plus Drive-ID tie-break, verification, and bounded cleanup provide eventual—not absolute—uniqueness.
-34. Remote tombstones and local ordering identity are permanent; only auxiliary metadata compacts after the confirmed 180-day gate.
-35. Different-account connection starts paused and requires explicit consent before any local transcript upload.
+33. Drive uses deterministic MIME, 43-character SHA-256 remoteKey filename/appProperties, read-before-write discovery, and ETag-conditioned PATCH semantics; JSON retains bounded transcriptId and must hash back to the same key. Raw transcript IDs never enter filenames/appProperties. Concurrent creates may duplicate files; conflict-order plus Drive-ID tie-break, verification, and bounded cleanup provide eventual—not absolute—uniqueness.
+34. Schema/revision are bounded safe integers; deviceId and deletion IDs use exact canonical 128-bit base64url formats; timestamps are bounded UTC epoch-millisecond safe integers. Strict parsing rejects unsupported versions, malformed lineage, mismatched keys, and out-of-bound values.
+35. Legacy Drive `{id}.json` documents migrate through bounded validation, local import, verified new-envelope write, then bounded cleanup. Oversized IDs remain local Needs attention until explicit safe-ID remediation and are never truncated/uploaded.
+36. Remote tombstones and local causal ordering identity are permanent; only retry/error/diagnostic auxiliary metadata compacts after the confirmed 180-day gate.
+37. Different-account connection starts paused. Reconcile without upload stages preview but applies no remote winner without explicit confirmation; local upload requires separate disclosure confirmation.
