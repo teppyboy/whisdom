@@ -1,0 +1,1126 @@
+# Precision Studio UI Redesign
+
+## 1. Status and decision summary
+
+| Field | Decision |
+| --- | --- |
+| Status | Approved for implementation |
+| Date | 2026-07-29 |
+| Product | Whisdom local-first speech-to-text web app |
+| Audience | Product, design, frontend, storage, sync, and test implementers |
+| Delivery strategy | Product-slice rebuild across complete workflows |
+| Visual direction | Precision Studio |
+| Default processing | Local, in-browser transcription |
+| Batch policy | Sequential |
+| Primary transcript representation | Ordered segments; document text is derived |
+| Cloud scope | Two-way transcript sync through Google Drive `appDataFolder` |
+| Media sync | Prohibited |
+| Settings sync | Out of scope |
+| Hosting constraint | Static-host compatible, including GitHub Pages |
+
+This specification replaces the current UI structure and interaction model while preserving proven transcription workers, runtime APIs, storage semantics, exports, and model caches where their contracts remain sound. It is not a visual reskin. Each delivery slice must leave a usable product flow.
+
+The redesign resolves these product decisions:
+
+1. Workbench, Library, transcript workspace, and Settings become addressable views.
+2. First run recommends a safe local model instead of asking users to understand model internals.
+3. Progress reports real phases and real measurements; it never fabricates a global percentage.
+4. Every processing runtime supports cancellation and retry.
+5. Errors appear once, beside the failed action, with a recovery path.
+6. Transcript editing uses one canonical segment model across Document and Timeline views.
+7. Google Drive becomes visible, identity-aware, two-way transcript sync.
+8. Mobile receives a complete purpose-built flow, not a compressed desktop layout.
+
+## 2. Goals and non-goals
+
+### 2.1 Goals
+
+1. Make first transcription understandable without prior Whisper knowledge.
+2. Make privacy, processing location, downloads, conversion, and sync behavior explicit at decision points.
+3. Keep current task, queue state, progress, recovery, and cancellation legible during long work.
+4. Make transcripts editable, searchable, exportable, and recoverable on desktop and mobile.
+5. Provide dependable Drive identity, reconnect, backup, restore, conflict, and deletion behavior.
+6. Preserve local-first operation when Drive or optional transcription servers are unavailable.
+7. Reach WCAG 2.2 AA and complete EN/VI copy coverage.
+8. Keep startup light: no model, ffmpeg, editor, Library, or Settings heavy assets before needed.
+9. Preserve existing settings and transcripts through a transactional storage migration.
+10. Create feature boundaries that prevent another application-shell monolith.
+
+### 2.2 Non-goals
+
+1. No backend requirement for core transcription.
+2. No concurrent batch processing. Queue execution remains sequential.
+3. No source-media upload to Google Drive or transcript sync storage.
+4. No Google Drive settings sync.
+5. No Drive permissions beyond `openid email profile`, `drive.file`, and `drive.appdata`.
+6. No broad server or Cloudflare Worker refactor. Existing APIs remain compatible unless an additive capability is required.
+7. No replacement of singleton ASR or ffmpeg workers, model Cache Storage, or static-host deployment.
+8. No PWA expansion or new offline media-transcription guarantee beyond current behavior.
+9. No fake analytics, dashboard metrics, model benchmarks, or device-performance claims unsupported by runtime data.
+10. No Settings feature expansion. Settings work is limited to consistency, validation, accessibility, and navigation.
+11. No decorative gradients, glass, neon, generic AI imagery, or ornamental waveform data presented as real audio analysis.
+
+## 3. Users and jobs
+
+### 3.1 Primary users
+
+Students, researchers, journalists, creators, and other knowledge workers transcribe lectures, interviews, meetings, videos, and voice notes. Many handle sensitive media. They care about a dependable result more than model taxonomy, execution-provider details, or AI operations.
+
+### 3.2 Core jobs
+
+| Job | Success condition |
+| --- | --- |
+| Transcribe a local recording privately | User sees that media remains on device, accepts any required download, and reaches an editable transcript |
+| Transcribe a server-supported link | User can submit a URL without selecting a local file |
+| Process several recordings | New selections append; queue runs sequentially; each item exposes state, retry, remove, and reorder |
+| Understand a long-running job | Current phase, activity, elapsed time, measured progress, and cancel action remain visible |
+| Recover from failure | One error explains what happened in plain language and offers a relevant action |
+| Correct and export text | Document and Timeline edits stay synchronized; TXT, JSON, SRT, and VTT reflect current content |
+| Find prior work | Library search and filters expose metadata, sync state, rename, export, delete, and Undo |
+| Continue across devices | Drive reconnects, reconciles transcript JSON, resolves conflicts deterministically, and never blocks local saves |
+
+### 3.3 Trust requirements
+
+- At source selection, state: local files stay in this browser unless user explicitly selects a server transcription mode. Drive sync stores transcript data only.
+- Before work starts, name processing location and any network transfer.
+- Never describe server or cloud processing as local.
+- Never show “Synced” until remote persistence is confirmed.
+- Never imply revoking app access deletes the Drive backup.
+
+## 4. Current-state problem inventory
+
+Line references describe the repository state reviewed for this specification.
+
+### 4.1 Structure and navigation
+
+- `src/App.tsx` is 2,563 lines and owns shell, bilingual copy, setup, source input, queue, progress, settings, history, result dialog, errors, toast, Drive, server capability loading, and runtime orchestration. Its main component holds 24 `useState`/`useRef` atoms at `src/App.tsx:600-627`; inline product components continue through `src/App.tsx:2563`.
+- Navigation is local state (`View = "home" | "settings"` at `src/App.tsx:123` and `setView` at `src/App.tsx:601`). It has no addressable Workbench, Library, editor, or Settings URL, and cannot preserve Back, Forward, refresh, or deep links.
+- The current desktop layout combines setup cards, drop zone, preflight, queue, and Recent panel (`src/App.tsx:1455-1571`). Product hierarchy depends on repeated cards rather than task structure.
+
+### 4.2 Source and runtime defects
+
+- `canStart` requires both `file` and `analysis` at `src/App.tsx:719-723`. The server URL input exists at `src/App.tsx:1481-1496`, but `startTranscription` exits when either file or analysis is absent at `src/App.tsx:1178-1181`. The server URL branch at `src/App.tsx:993-1041` is therefore unreachable without an unrelated local file.
+- `ServerTranscriptionApi.cancelJob` exists at `src/features/server-transcription/api.ts:99-116` but the UI never invokes it. Local and Cloudflare paths also expose no cancel control.
+- `subscribeProgress` returns an aborting `unsubscribe` handle at `src/features/server-transcription/sse.ts:60-62`. Both subscriptions created at `src/App.tsx:1002-1040` and `src/App.tsx:1051-1089` discard that handle, creating leak and late-update risk after completion, cancellation, navigation, or unmount.
+- Cloudflare progress includes hardcoded English chunk detail at `src/App.tsx:936-938`. Server progress uses hardcoded “Submitting URL...” and “Uploading...” at `src/App.tsx:995` and `src/App.tsx:1044`.
+- Progress maps unrelated operations into manually weighted global values, including `0.08`, `0.18`, `0.35`, `0.4`, `0.5-0.9`, and `0.95` at `src/App.tsx:793-803`, `src/App.tsx:904-915`, `src/App.tsx:931-939`, and `src/App.tsx:960-966`. These values do not share a measured denominator.
+- Initial progress uses English copy before stored UI language loads (`src/App.tsx:609-613`). Runtime messages are localized by matching mutable English strings at `src/App.tsx:547-597`, which is brittle and lets unknown English pass through.
+
+### 4.3 Error and notification defects
+
+- Failures can populate contextual `error`, a destructive toast, and a detail dialog (`src/App.tsx:619-620`, `src/App.tsx:1187-1199`, `src/App.tsx:1544-1551`, `src/App.tsx:1583-1608`). Analysis and cleanup failures repeat the same pattern at `src/App.tsx:804-813` and `src/App.tsx:1290-1298`.
+- Batch completion writes a success toast and then overwrites it with an error toast when any item fails (`src/App.tsx:1222-1243`). `AppToast` accepts one nullable message, has no queue, and has no auto-dismiss timer (`src/App.tsx:2487-2532`).
+- Current E2E tests work around duplicate strict locators with `.first()` at `tests/e2e/whisdom.spec.ts:196` and `tests/e2e/whisdom.spec.ts:248`. These workarounds must be removed when the duplicate rendering is fixed.
+- Successful retries do not centrally clear all previous error channels, allowing stale failure state.
+
+### 4.4 Drive defects
+
+- Drive requests only `drive.file` and `drive.appdata` (`src/features/google-drive/drive.ts:3`). It receives only an access token and has no identity fetch, sign-out, revoke, expiry model, or durable sync state.
+- Popup closure or dismissal is not handled. `requestDriveAccess` resolves only through the token callback (`src/features/google-drive/drive.ts:44-59`), so the opening state can hang.
+- The token lives in React memory at `src/App.tsx:622`; expiry is not tracked. Silent refresh is attempted only immediately before a local-mode upload at `src/App.tsx:1149-1169`.
+- Drive performs one blind multipart create into `appDataFolder` (`src/features/google-drive/drive.ts:62-101`). It cannot list, download, update, restore, reconcile, detect conflicts, or preserve deletion.
+- Drive upload occurs only in the local runtime branch. Cloudflare and server results save locally but bypass Drive at `src/App.tsx:960-967`, `src/App.tsx:1026-1033`, and `src/App.tsx:1075-1082`.
+- UI identity remains “Guest”; connected state is a buried menu status (`src/App.tsx:1372-1413`). A successful upload displays the raw Drive file ID via `synced(id)` (`src/App.tsx:173`, `src/App.tsx:505`, `src/App.tsx:1161-1163`).
+
+### 4.5 Setup, settings, and control defects
+
+- First run presents model and language controls before explaining a recommendation (`src/App.tsx:1636-1723`). Users must interpret seven model choices from size, quality, and prose.
+- Model metadata supports only `sizeMb`, coarse `quality`, `multilingual`, and notes (`src/features/transcription/types.ts:20-27`; catalog at `src/features/transcription/models.ts:7-64`). It does not support claims about measured speed, device RAM, GPU class, accuracy, or language-specific performance.
+- Large-model labels and history can use stale or raw capability data: server fallback labels are static at `src/App.tsx:528-545`, while History and result receive non-keyed `serverCapabilities` at `src/App.tsx:1568`, `src/App.tsx:1581`, and render labels at `src/App.tsx:2299-2304` and `src/App.tsx:2458-2460`.
+- Numeric Settings inputs directly persist `Number(event.target.value)` (`src/App.tsx:1909-1929`). Empty, non-finite, or out-of-range values can become `NaN` or invalid settings despite HTML min/max attributes.
+- The language picker is a hand-rolled listbox (`src/App.tsx:1727-1850`). It lacks roving active-option state, Arrow/Home/End navigation, `aria-activedescendant`, selection-on-Enter behavior, and focus restoration. Its `min-w-[18rem]` panel at `src/App.tsx:1796` can overflow narrow screens.
+- Main setup depends on `overflow-visible` card escape behavior (`src/App.tsx:1637`), coupling layout and popover correctness.
+- Preflight warnings are rendered as untyped strings (`src/App.tsx:2205-2209`) generated by a second embedded copy table (`src/features/media/preflight.ts:101-172`). English-only mismatch can also render in setup and sidebar (`src/App.tsx:1711-1714`, `src/App.tsx:1555-1561`), producing duplicate warnings.
+
+### 4.6 Transcript and Library defects
+
+- Result opens in a fixed-height dialog (`src/App.tsx:2307-2385`). The raw text area is read-only (`src/App.tsx:2334-2340`); timestamp rows are also read-only. Mobile uses two `32svh` panes with `min-h-72`, causing cramped or clipped content (`src/App.tsx:2329-2359`).
+- `TranscriptDocument` stores both `text` and `segments` (`src/features/transcription/types.ts:67-78`), while exports read TXT from `text` and subtitle formats from `segments` (`src/features/transcription/exports.ts:17-30`). Editing either independently would make exports diverge.
+- Cloudflare results save an empty segment array (`src/App.tsx:946-958`). Existing seeded and legacy records may also have text with no segments (`tests/e2e/whisdom.spec.ts:90-101`).
+- Recent history is a small capped panel, not a Library (`src/App.tsx:2425-2485`). It has no search, filters, sync states, export action, Undo, recovery, or explicit conflict state.
+- History delete is visually hover-dependent on larger screens through `sm:opacity-0` (`src/App.tsx:2469-2478`). Touch and keyboard users need permanently discoverable actions.
+- Deletion immediately removes the IndexedDB record (`src/features/storage/indexed-db.ts:40-43`), so it cannot be undone or propagated as a durable tombstone.
+
+### 4.7 Storage and test gaps
+
+- IndexedDB is version 1 with only `settings` and `transcripts` stores (`src/features/storage/indexed-db.ts:6-21`). There are no transactions spanning transcript mutation and sync enqueue, revisions, device identity, pending operations, tombstones, or migration normalization.
+- Current E2E coverage validates shell, preflight, queue append, model selection, language, theme-era settings navigation, limited mobile fit, Recent CRUD, and cache cleanup (`tests/e2e/whisdom.spec.ts`). It does not cover cancellation, URL-only input, editor consistency, Drive restore/conflict/offline behavior, or 320 px layouts.
+- Real local ASR coverage is correctly gated by `WHISDOM_REAL_ASR` and `WHISDOM_REAL_WEBGPU` (`tests/e2e/real-transcription.spec.ts:12-14`, `108-149`) and must remain available after navigation changes.
+- Server-mode coverage only asserts the option is hidden without configuration (`tests/e2e/server-mode.spec.ts:3-18`).
+
+## 5. Product and design principles
+
+1. **Local-first trust.** Explain where work runs and what leaves the browser before processing starts.
+2. **Task before technology.** Lead with source, language, and a recommendation. Place model internals under “Change model” and advanced details.
+3. **Honest state.** Show measured phase progress or an indeterminate state. Never turn elapsed time or arbitrary weights into apparent completion.
+4. **Transcript as product.** Give editing, search, export, autosave, and sync full-page space.
+5. **Recovery in context.** Place one problem and one primary recovery action where failure occurred.
+6. **Calm density.** Use rules, spacing, type, and alignment before containers. Avoid card soup.
+7. **Mobile completeness.** Every core action must remain visible, reachable, and understandable at 320 px.
+8. **Bilingual parity.** EN and VI are equal product surfaces, not a translation pass.
+9. **Deterministic behavior.** Recommendation, normalization, retry, merge, migration, and legacy conversion must be pure and testable.
+
+## 6. Precision Studio visual system
+
+### 6.1 Character
+
+Precision Studio feels like a quiet audio workbench: warm, exact, capable, and tailored to long-form transcription. Audio ruler ticks, restrained waveform traces, and stage markers may communicate structure. They must derive from real media data when presented as content; decorative motifs remain abstract and unlabeled.
+
+### 6.2 Color and themes
+
+| Token role | Light | Dark | Use |
+| --- | --- | --- | --- |
+| Canvas | Warm off-white | Deep graphite | Main page |
+| Primary text | Graphite | Warm near-white | Headings and body |
+| Secondary text | Neutral graphite | Cool neutral gray | Metadata |
+| Rules | Warm gray | Mid-graphite | Structure and boundaries |
+| Accent | Restrained cobalt | Clear cobalt | Primary action, active stage, focus |
+| Critical | Accessible restrained red | Accessible warm red | Blocking errors and destructive actions |
+| Success | Muted green | Clear muted green | Confirmed saved/synced states |
+| Warning | Ochre | Warm amber | Non-blocking attention |
+
+Implementation must define semantic tokens, not scatter literal colors. Text, controls, focus indicators, status combinations, and disabled states must meet WCAG 2.2 AA contrast. Color never carries state alone.
+
+Theme options are Light, Dark, and System. Preserve the provider’s current three-state support (`src/components/theme-provider.tsx:4-5`, `102-149`) rather than reducing it to the current binary menu switch. Dark mode receives deliberate deep-graphite surfaces and equivalent hierarchy, not inverted light colors.
+
+### 6.3 Typography
+
+- Geist remains primary sans and heading family, matching `src/index.css:4` and `src/index.css:83-85`.
+- Define a mono family token for timestamps, durations, file sizes, progress values, revisions, and technical details. Use a bundled or system-safe monospace stack; do not trigger a remote font request.
+- Page title: compact, high-contrast, sentence case.
+- Section title: one step below page title; avoid oversized marketing type.
+- Body: readable line length of roughly 60-75 characters in editor document view.
+- Metadata: smaller but never below a legible 12 CSS px equivalent.
+
+### 6.4 Shape, spacing, and motion
+
+- Use crisp one-pixel rules, small radii, and few elevation levels.
+- Reserve contained surfaces for popovers, sheets, dialogs, selection groups, and status panels. Main page sections use alignment and separators.
+- Desktop composition is asymmetric, approximately 70/30, with task canvas dominant.
+- Motion communicates opening, stage change, reorder, save, and recovery. Keep transitions short and interruptible.
+- Under `prefers-reduced-motion: reduce`, remove spatial motion and nonessential animation; preserve immediate state indication.
+- No gradient, blur-based glass surface, glow, neon, or parallax.
+
+## 7. Information architecture and navigation
+
+### 7.1 Global shell
+
+Header contains:
+
+1. Whisdom wordmark.
+2. “Local by default” indicator with an accessible explanation.
+3. Desktop navigation: Workbench and Library.
+4. Drive identity/status control.
+5. Theme and menu control containing Settings and interface language.
+
+Use semantic `header`, `nav`, `main`, and supporting landmarks. Add a first-focus skip link to main content.
+
+### 7.2 Address model
+
+Static hosting requires query-based navigation:
+
+| View | Address |
+| --- | --- |
+| Workbench | `/?view=workbench` or `/` as canonical alias |
+| Library | `/?view=library` |
+| Transcript | `/?view=transcript&id=<encoded transcript id>` |
+| Settings | `/?view=settings` |
+
+Rules:
+
+- Parse only known `view` values. Unknown values return to Workbench and replace invalid history state.
+- Missing or unknown transcript IDs show a localized not-found state with “Back to Library”; they do not crash or silently open another document.
+- Navigation updates `history.pushState`; replace only canonicalization or invalid-state correction.
+- `popstate` restores the view, selected transcript, scroll policy, and focus.
+- On view change, focus the page `h1` through a temporary programmatic target. Returning from overlays restores trigger focus.
+- Refreshing an editor URL loads the transcript from IndexedDB before rendering editable content.
+- Unsaved editor state is flushed before app-driven navigation. Browser navigation follows the page-hide flush policy in Section 13.
+
+### 7.3 Workbench
+
+Workbench contains complete source, setup, review, queue, progress, and completion flow. A stage rail provides orientation:
+
+`Add media → Review → Transcribe → Edit`
+
+The rail is not a blocking wizard. Users may return to source or setup when no active job makes a change unsafe. Completed stages remain selectable when their content is available. Edit opens the completed transcript workspace.
+
+Desktop uses a dominant task canvas and a context rail. Source/setup/review/current task occupy the canvas. Recommendation rationale, privacy, downloads, batch summary, or queue drawer occupies the rail according to state. Do not render empty cards to preserve the ratio.
+
+### 7.4 Library
+
+Library owns transcript search, filters, metadata list, item actions, sync summary, and recovery states. It does not display aggregate “minutes transcribed,” model usage charts, or other dashboard analytics.
+
+### 7.5 Transcript workspace
+
+Transcript opens as a full addressable page. Header contains title, source metadata, local/sync state, search, copy, export, and overflow actions. Main area switches between Document and Timeline views over the same canonical segments.
+
+### 7.6 Settings
+
+Settings remains secondary and familiar. Keep processing, chunking, storage, model-cache cleanup, and transcript cleanup concepts. Add validation, helper/error association, three-state theme access, and consistent destructive confirmation. Do not add unrelated preferences.
+
+### 7.7 Mobile navigation
+
+- At widths below the desktop navigation breakpoint, use bottom navigation with Workbench and Library.
+- Account, Drive state, interface language, theme, and Settings remain in the header menu.
+- Bottom navigation and sheets include `env(safe-area-inset-bottom)` padding.
+- Hide bottom navigation only when the virtual keyboard would otherwise cover editor controls; preserve an accessible way back.
+
+## 8. Responsive behavior
+
+| Width/context | Required behavior |
+| --- | --- |
+| 320-389 px | Single column; 16 px outer gutter where possible; controls wrap or fill width; no fixed minimum popover width; critical action remains above keyboard/safe area |
+| 390-767 px | Same mobile structure with room for paired secondary actions where labels remain intact |
+| 768-1023 px | Single primary column plus optional inline context sections; no forced 70/30 split |
+| 1024 px and above | Approximately 70/30 Workbench canvas/context rail; persistent desktop header navigation |
+
+Mobile-specific requirements:
+
+1. Queue opens as a bottom sheet with current item summarized on Workbench.
+2. Bottom sheet supports full-height scrolling, safe-area padding, focus trap, Escape, close button, and focus restoration.
+3. Transcript editor is a page. Document and Timeline views occupy natural height; no nested fixed-height modal panes.
+4. Item actions use visible buttons or an always-available menu. No hover-only controls.
+5. Touch targets are at least 44 by 44 CSS px, including reorder, dismiss, tabs, and icon buttons.
+6. Combobox popovers use available viewport width and collision handling.
+7. At 200% zoom and 320 CSS px, content has no horizontal page overflow.
+8. Virtual keyboard must not hide Save state, active editor field, error recovery, or primary completion action. Use visual viewport-aware positioning only where sticky layout cannot satisfy this.
+
+## 9. Workbench behavior
+
+### 9.1 First run and returning users
+
+First run is defined as no persisted valid model choice plus no completed recommendation record. On first Workbench load:
+
+1. Detect secure context and WebGPU availability through current preflight capability logic.
+2. Read UI language and saved transcription language.
+3. Select the deterministic recommendation in Section 10.
+4. Show one sentence: model name, local runtime, and plain reason.
+5. Expose “Change model.” Advanced details show download size, multilingual support, dtype, and runtime requirement.
+
+Returning users keep an explicit valid model selection. Re-run safety validation when runtime capability changes. If the stored model is unsafe for the available local runtime, select the safe fallback and explain why. Never silently retain a q4-required model on WASM.
+
+### 9.2 Source switch
+
+Source control has two options: File and Link.
+
+#### File
+
+- Accept supported audio/video through picker and drag/drop.
+- Selection appends to the existing queue. It never replaces the queue unless user explicitly clears it.
+- Analyze the first newly added item only when no selected item exists; otherwise preserve current selection.
+- State privacy promise beside selection, not in a distant Settings page.
+- File metadata timeout and cleanup behavior from `readMediaDuration` must remain intact.
+
+#### Link
+
+- Available only for configured server mode whose capabilities include URL input.
+- Link input can start without a local file or file analysis.
+- Validate URL syntax and supported protocol before submit. Accept only `http:` and `https:`.
+- A Link queue item stores the original URL as source reference; do not fetch media in the browser solely for preflight.
+- If server is unavailable, show one contextual error and retry action. Do not retain a stale blocking file requirement.
+- Privacy copy states that the server will retrieve/process the linked media.
+
+Switching sources preserves valid draft input in each source tab during the session. Active processing locks only unsafe source mutations; users may inspect the queue and Library.
+
+### 9.3 Review
+
+Review summarizes:
+
+- selected source and metadata known with confidence;
+- spoken language;
+- recommended or explicitly selected model;
+- processing runtime/location;
+- model and ffmpeg downloads, including catalog sizes and cache state when known;
+- conversion requirement;
+- media transfer/privacy behavior;
+- blocking issues and informational notices.
+
+Messages use stable issue codes. Dedupe by code and affected item, then order: blocking, actionable warning, informational. Render one canonical message per issue. An English-only mismatch must not appear in setup, rail, and review simultaneously.
+
+Blocking messages disable Transcribe and include a recovery action. Informational messages do not use destructive styling or `role="alert"`.
+
+### 9.4 Start behavior
+
+- Single item: primary action names the item when ambiguity exists.
+- Batch: primary action starts all eligible pending/retry items sequentially. A secondary action starts only selected item.
+- Snapshot runtime, model, language, and conversion settings per started item. Later setting changes apply only to pending items after explicit confirmation.
+- No model or ffmpeg request occurs until user starts transcription.
+- A completed single item offers “Open transcript” and “Next item” when applicable.
+- Batch completion shows a queued confirmation toast; it does not automatically open a transcript.
+
+## 10. Deterministic recommendation algorithm
+
+### 10.1 Inputs
+
+Recommendation may use only:
+
+- secure-context status;
+- successful WebGPU adapter availability;
+- catalog fields: model ID, size, quality, multilingual, notes;
+- `requiresWebGpuForLocalModel` derived from current dtype threshold;
+- UI language and selected transcription language;
+- explicit persisted user choice and whether that choice remains runnable.
+
+It must not infer RAM, GPU tier, expected speed, accuracy, battery, device class, or language-specific quality from user agent or model labels.
+
+### 10.2 Policy
+
+| Condition | Recommendation | Reason code |
+| --- | --- | --- |
+| Valid explicit stored local model and it can run on available runtime | Keep choice | `stored_choice_valid` |
+| Stored model requires WebGPU but WebGPU is unavailable | Whisper Base multilingual on WASM | `stored_choice_requires_webgpu` |
+| First run, WebGPU available | Whisper Base multilingual on WebGPU | `safe_balanced_webgpu` |
+| First run, WebGPU unavailable | Whisper Base multilingual on WASM | `safe_balanced_wasm` |
+| Selected/effective language is not English and current model is English-only | Whisper Base multilingual on current safe runtime | `language_requires_multilingual` |
+| Catalog is missing configured Base | First multilingual model with size at or below 466 MB, ascending size then catalog order | `catalog_base_missing` |
+| No eligible multilingual model exists | Block local start; show catalog configuration error | `no_safe_local_model` |
+
+Base multilingual is the beginner fallback regardless of WebGPU because current metadata supports “balanced,” multilingual, 145 MB, and local-run eligibility; it does not justify recommending larger models automatically. Tiny remains an explicit speed/download trade-off. Small and all q4 models require user choice under “Change model.”
+
+`auto` language continues to resolve to UI language under current behavior. Recommendation evaluates the resolved language, not literal `auto`.
+
+### 10.3 Output
+
+Recommendation returns a structured decision containing model ID, runtime, reason code, whether it replaced a stored choice, and explanation parameters. UI localizes reason code at the boundary. Unit tests cover every row and catalog fallback ordering.
+
+## 11. Queue model and behavior
+
+### 11.1 Item shape
+
+Each queue item has stable ID, source kind, display name, source reference, order, captured settings, status, current stage, measured stage progress if available, transcript ID if complete, and one current issue if failed/cancelled. Local `File` objects remain session-only unless existing media persistence is explicitly enabled.
+
+### 11.2 Statuses
+
+| Status | Allowed next states | User actions |
+| --- | --- | --- |
+| Draft | Ready, Blocked, Removed | Review, remove, reorder |
+| Ready | Running, Removed | Start, remove, reorder |
+| Blocked | Ready, Removed | Apply recovery, remove |
+| Running | Completed, Failed, Cancelling | Cancel, inspect details |
+| Cancelling | Cancelled, Failed | Wait; no duplicate cancel |
+| Cancelled | Ready, Removed | Retry, remove, reorder |
+| Failed | Ready, Removed | Retry, remove, inspect details, reorder |
+| Completed | Removed | Open transcript, export, remove queue entry |
+
+Cancellation stops only the active item. In batch mode, user chooses “Cancel current and continue” or “Stop batch.” Default cancel action stops current and pauses the batch, preventing unexpected next-item uploads or compute.
+
+### 11.3 Drawer
+
+- Desktop: contextual drawer or rail panel; current task remains central.
+- Mobile: bottom sheet.
+- Show per-item stage, real progress if measurable, retry, remove, and reorder.
+- Drag reorder is optional enhancement. Always provide Move earlier and Move later buttons with disabled boundary states.
+- Running item cannot move. Reordering affects pending/retry items only.
+- Removing a completed queue entry does not delete its transcript.
+
+## 12. Normalized runtime, progress, and cancellation
+
+### 12.1 Adapter contract
+
+Local WebGPU, local WASM, Cloudflare, and server runtimes implement one adapter contract:
+
+| Operation | Requirement |
+| --- | --- |
+| `start` | Accept normalized source and captured options; return run handle immediately |
+| `events` | Emit typed events with stable codes, phase, activity parameters, and optional measured progress |
+| `result` | Resolve one normalized transcript result or reject one typed runtime error |
+| `cancel` | Idempotent; transition toward cancelled; reject/resolve completion consistently |
+| `dispose` | Remove listeners and abort run-scoped resources without discarding reusable caches |
+
+Run handles own request IDs, abort controllers, SSE subscriptions, and job IDs. React components never call provider-specific APIs.
+
+### 12.2 Event model
+
+Events use codes, not English strings. Minimum events:
+
+- `prepare.started`, `prepare.media_metadata`, `prepare.converting`, `prepare.complete`;
+- `model.cache_check`, `model.downloading_asset`, `model.loading`, `model.reused`, `model.complete`;
+- `transcribe.queued`, `transcribe.chunk`, `transcribe.running`, `transcribe.complete`;
+- `save.local`, `save.complete`;
+- `run.cancel_requested`, `run.cancelled`, `run.failed`.
+
+Each event may carry safe parameters such as asset name, bytes loaded/total, chunk index/count, server message code, or filename. UI copy maps code and parameters to EN/VI. Unknown codes render a localized generic activity plus technical code in expanded details; raw provider strings never become primary UI copy.
+
+### 12.3 User-visible phases
+
+The fixed phase sequence is:
+
+`Prepare → Load model → Transcribe → Save`
+
+Rules:
+
+1. Mark a phase complete only after its work finishes.
+2. Omit Load model only for a runtime with no model-loading step visible to this client; label omission in technical details.
+3. Show stage percentage only with a real numerator and denominator from that stage.
+4. Use indeterminate presentation when denominator is absent.
+5. Never combine phase percentages into a synthetic global percent.
+6. Show elapsed time from monotonic run start.
+7. Show ETA only after at least three useful samples spanning at least 10 seconds, with positive throughput and low enough variance to remain stable. Reset ETA on phase change, pause, retry, or throughput discontinuity. Otherwise show “Estimating…” for a phase expected to become measurable, or omit ETA.
+8. Throttle visual progress updates to avoid whole-app rerenders; retain latest event for completion.
+
+### 12.4 Active-file and batch progress
+
+- Active file shows phase rail, activity, optional stage percent, elapsed, optional ETA, and cancel.
+- Batch shows completed count over total eligible items plus current filename. This count is not presented as processing percentage.
+- Failed and cancelled items remain in denominator and receive explicit status.
+- Advanced logs are collapsed by default, chronological, bounded, copyable, and free of access tokens or private response bodies.
+
+### 12.5 Cancellation implementation requirements
+
+| Runtime | Required cancellation behavior |
+| --- | --- |
+| Local ASR | Send run-scoped cancel to worker/inference path; stop current inference while retaining singleton worker and loaded model when runtime supports cooperative cancellation |
+| Local conversion | Cancel current ffmpeg operation without clearing model worker; preserve singleton policy where safe |
+| Server CPU | Call existing `POST /api/cancel/:jobId`, then unsubscribe/abort SSE in all terminal paths |
+| Cloudflare | Abort current fetch and prevent subsequent chunks from starting |
+
+Local cancellation must not call `clearLocalWorkerState`, because that terminates workers and discards loaded state. If underlying inference cannot stop cooperatively, add a run-scoped cancellation mechanism to the existing worker protocol; do not represent UI cancellation as complete while inference continues consuming resources. Late events with old run IDs are ignored.
+
+Cancellation is not an error. It uses neutral status, no destructive toast, and leaves item retryable.
+
+## 13. Transcript canonical model and editor
+
+### 13.1 Canonical representation
+
+Ordered transcript segments are the source of truth. Each segment contains stable ID, finite non-negative start, finite end not earlier than start, and editable text. Document text is derived by normalizing segment text boundaries and joining non-empty segments with one space.
+
+Persistence may retain `text` for backward compatibility and fast display, but every write must regenerate it from canonical segments in the same transaction. TXT uses regenerated document text. SRT and VTT use the same current segments. JSON contains both and must satisfy this invariant.
+
+### 13.2 Legacy records without segments
+
+On migration or first repository read:
+
+1. If segments are non-empty and valid, preserve their IDs/timestamps/text and regenerate `text`.
+2. If segments are empty and trimmed `text` is non-empty, create one segment with deterministic ID `legacy:<transcript-id>:0`, start `0`, end `0`, and trimmed text.
+3. If both are empty, create no segment and derive empty text.
+4. If a segment ID is missing/duplicate, assign deterministic `legacy:<transcript-id>:<index>` in order.
+5. Clamp invalid start to `0`; clamp invalid end to normalized start. Preserve original record in migration fixtures, not in production shadow storage.
+
+This conversion is idempotent. It prevents empty subtitle exports from legacy text-only and current Cloudflare documents.
+
+### 13.3 Document view
+
+Document view provides continuous prose editing. To preserve segment ownership:
+
+- Render segment-backed editable blocks with document typography and minimal timestamp chrome, not one uncontrolled textarea detached from segments.
+- Editing a block updates that segment text.
+- Enter splits the current segment at caret. New segment inherits the prior end as both start and end until timeline timing is explicitly adjusted; original segment retains its timing.
+- Backspace at the start of a segment merges it into the previous segment; merged segment uses previous start and later end.
+- Paste distributes content only within selected segment unless line breaks explicitly create new segments.
+
+### 13.4 Timeline view
+
+Timeline shows each segment with editable start, end, and text. Validate finite, non-negative, ordered times. Invalid timing remains a local editor issue, blocks subtitle export and sync enqueue for that draft, and provides a focused correction action; TXT copy/export remains available from valid text.
+
+Changing segment text or structure immediately updates both views through one reducer. Switching views never reparses raw text.
+
+### 13.5 Editing functions
+
+- Search highlights matches in current transcript and supports next/previous, case-insensitive by default.
+- Undo/redo covers text, title, segment split/merge, and timestamp changes. Keep a bounded session history; persisted revisions are not the undo stack.
+- Copy defaults to current document text. Secondary copy options may include current segment or timestamped text.
+- Export supports TXT, JSON, SRT, and VTT. Library can export without opening.
+- Rename is inline, validated, and autosaved through the same mutation path.
+
+### 13.6 Autosave and unsaved input protection
+
+1. Update in-memory editor state immediately.
+2. Debounce local save after 600 ms of inactivity.
+3. Serialize one save at a time. If edits arrive during save, schedule another save using the newest revision.
+4. Flush pending changes on app navigation, `visibilitychange` to hidden, and `pagehide`. Do not rely solely on asynchronous work during `beforeunload`.
+5. Local save commits transcript, revision, and pending sync operation atomically.
+6. Incoming Drive merges never replace a transcript with an active dirty editor. Stage incoming winner as a conflict candidate, save local draft first, then apply deterministic merge or show Needs attention if assumptions changed.
+
+Visible save states:
+
+| State | Meaning |
+| --- | --- |
+| Saved locally | IndexedDB contains current editor revision; Drive not active or no remote confirmation yet |
+| Syncing | Current local revision has an active Drive operation |
+| Synced | Current revision confirmed remotely and no pending operation exists |
+| Needs attention | Local save failed, auth paused sync, conflict requires protection, or permanent remote error occurred |
+
+## 14. Library behavior
+
+### 14.1 List and search
+
+- Default sort: `updatedAt` descending, then transcript ID ascending for deterministic ties.
+- Search title, source name, and transcript text. Normalize case and Vietnamese diacritics for discovery while preserving displayed text.
+- Filters: All, Local only, Pending, Syncing, Synced, Needs attention, Deleted/recovery when Undo window or recovery state applies.
+- Metadata per row: title, source, updated time, language, model/runtime label, duration when known, and sync state.
+- Do not show raw Drive file IDs.
+
+### 14.2 Item actions
+
+Every item exposes Open, Rename, Export, Delete. Desktop may use a visible overflow button; mobile uses the same visible control. No action depends on hover.
+
+Delete flow:
+
+1. Transactionally set `deletedAt`, increment revision, write compact tombstone, and enqueue remote deletion state.
+2. Remove item from default list immediately.
+3. Show confirmation toast with Undo for 10 seconds.
+4. Undo clears deletion with a newer revision and enqueues upsert. It remains available after toast expiry through recovery only when product exposes a deleted filter; remote tombstone remains authoritative until newer restored revision syncs.
+5. Permanent tombstones are compacted only under the retention policy in Section 16, never merely because remote deletion succeeded.
+
+### 14.3 Sync summary
+
+Library header shows identity, last successful reconcile time, pending operation count, and Sync now. “Last sync” means completed reconcile, not attempted sync. Auth or network failure remains visible until recovered.
+
+## 15. Google identity and Drive sync
+
+### 15.1 Scope and privacy
+
+Request exactly:
+
+- `openid`
+- `email`
+- `profile`
+- `https://www.googleapis.com/auth/drive.file`
+- `https://www.googleapis.com/auth/drive.appdata`
+
+Use identity scopes for name, email, and avatar. Use Drive scopes only for Whisdom-created transcript records in `appDataFolder`. Never upload source media or settings. Explain that `appDataFolder` content is app-private but stored in the user’s Google Drive account.
+
+### 15.2 Authentication state machine
+
+| State | Event | Next state |
+| --- | --- | --- |
+| Signed out | Connect | Opening |
+| Opening | Token + identity success | Connected |
+| Opening | Popup dismissed | Signed out with contextual dismissal message |
+| Opening | Auth error | Needs reconnect |
+| Connected | Near expiry | Refreshing |
+| Refreshing | Silent success | Connected |
+| Refreshing | Interaction required | Needs reconnect |
+| Connected/Needs reconnect | Sign out | Signed out |
+| Connected/Needs reconnect | Revoke | Signed out after revoke attempt result |
+
+Popup dismissal must settle the request. Use Google Identity Services error callback where available plus a bounded opening watchdog. Never leave “Opening Google” indefinitely.
+
+Access tokens remain memory-only. Store expiry timestamp in memory from token response and refresh before expiry with a safety margin. Never persist access token, authorization header, or ID token. Persist only non-secret account display metadata when needed for continuity, marked stale until revalidated.
+
+Sign out clears in-memory credentials and pauses sync; local transcripts remain. Revoke calls Google’s revoke flow and then clears credentials. Revocation removes Whisdom’s access but does not erase existing backup files. Provide a separate, explicit “Delete Drive backup” operation only if implemented later; it is not part of this redesign.
+
+Reconnect preserves local records, pending operations, tombstones, and account-neutral transcript data. If a different Google account connects, require explicit confirmation before reconciling against that account; never silently mix account sync metadata.
+
+### 15.3 Identity presentation
+
+- Header control displays avatar or initials, name, and concise sync indicator.
+- Account menu shows verified name/email, connection state, last sync, pending count, Sync now, Sign out, and Revoke access.
+- Broken avatar falls back to initials without hiding identity.
+- Signed-out UI says “Not connected”; it never says Guest when a stale or failed connection is the relevant state.
+
+### 15.4 Remote record
+
+Each remote file is versioned JSON in `appDataFolder`. Logical record fields:
+
+| Field | Rule |
+| --- | --- |
+| `schemaVersion` | Required positive integer |
+| `transcriptId` | Stable Whisdom transcript ID |
+| `revision` | Monotonic non-negative integer per accepted mutation |
+| `updatedAt` | ISO timestamp from local mutation or accepted remote record |
+| `deletedAt` | Optional ISO timestamp; presence is a tombstone |
+| `deviceId` | Stable random local installation ID used only for tie-break |
+| `transcript` | Omitted for tombstone; otherwise canonical transcript payload |
+
+Remote Drive file IDs are implementation metadata only. Store them locally for update/delete efficiency; never expose them in copy, logs, URLs, exports, or analytics.
+
+### 15.5 Local-first mutation path
+
+All local, Cloudflare, and server transcription results enter one path:
+
+1. Normalize result into canonical transcript.
+2. Save to IndexedDB.
+3. Increment revision and enqueue pending upsert in the same transaction.
+4. Update UI to Saved locally.
+5. Let background sync process the operation when authenticated and online.
+
+Drive failure cannot fail or roll back transcription completion. Local save failure is blocking and must not claim completion.
+
+### 15.6 Reconcile triggers
+
+Run reconcile on:
+
+- successful sign-in;
+- recoverable launch when credentials can be silently reacquired;
+- local transcript mutation;
+- browser `online`;
+- window focus when last attempt is stale;
+- periodic foreground interval;
+- manual Sync now.
+
+Use one coalescing sync service. Triggers while active set a rerun flag instead of starting concurrent reconciles. Pause interval while document is hidden. A practical foreground interval is five minutes; focus recheck threshold is one minute.
+
+### 15.7 Reconcile sequence
+
+1. Validate account and token freshness.
+2. Push pending tombstones and upserts idempotently.
+3. List Whisdom remote records, using pagination.
+4. Download changed/unknown records.
+5. Validate schema and canonical payload.
+6. Resolve each local/remote pair under Section 15.8.
+7. Apply incoming winners and sync metadata transactionally.
+8. Requeue any local winner not confirmed remotely.
+9. Mark reconcile success time only after all non-permanent operations finish or are durably classified.
+
+Remote create/update must avoid duplicate logical records. Use locally retained file ID when known. When unknown, query Whisdom-created appData records and collapse duplicates by conflict order; retain one canonical remote file and record cleanup as bounded maintenance.
+
+### 15.8 Conflict order
+
+Compare records by this exact descending precedence:
+
+1. `updatedAt` instant.
+2. `revision` numeric value.
+3. `deviceId` lexicographic Unicode code-point order.
+4. Canonical payload hash lexicographic order as final corruption/legacy tie-break.
+
+Newest winner replaces older state. Tombstones participate identically and therefore prevent resurrection. Equal timestamps do not produce nondeterministic last-writer behavior.
+
+If incoming winner targets a dirty open editor, do not overwrite in-memory content. Persist/protect the local draft as a newer local revision when possible, recompute conflict order, then reconcile. If local persistence fails or remote schema is incompatible, mark Needs attention and retain both durable representations until user action.
+
+### 15.9 Retry and failure policy
+
+| Failure | Behavior |
+| --- | --- |
+| Offline/network/408/429/5xx | Retry with bounded exponential backoff and jitter |
+| 401/403 caused by auth | Pause queue; refresh once; then Needs reconnect |
+| 400/404 for stale remote file ID | Clear mapping and re-discover once |
+| Invalid remote JSON/schema | Quarantine metadata; mark item Needs attention; never overwrite local record |
+| Other permanent 4xx | Stop retrying item; mark Needs attention with safe details |
+
+Backoff schedule uses base 1 second, doubles to maximum 60 seconds, adds 0-25% jitter, and stops automatic per-operation attempts after 7 failures. New online/focus/manual triggers may resume transient failures. Auth failures do not consume destructive retries.
+
+### 15.10 Tombstone retention
+
+Keep compact local tombstones for at least 180 days after last confirmed reconcile and while any known device/account operation remains pending. Do not compact when signed out or auth-paused because remote state cannot be verified. Compaction removes transcript payload but retains transcript ID, deletion order fields, account key, and confirmation metadata needed to prevent resurrection.
+
+## 16. IndexedDB schema and migration
+
+### 16.1 Source of truth
+
+IndexedDB is durable source of truth. React state is a view/edit cache. Drive is a replicated backup, not primary storage.
+
+### 16.2 Stores
+
+Upgrade from current version 1 to a new version in one version-change transaction. Required logical stores:
+
+| Store | Key | Purpose |
+| --- | --- | --- |
+| `settings` | Existing singleton key | Preserve current `AppSettings`; add only validated fields through defaults |
+| `transcripts` | Transcript ID | Canonical transcript, revision, device ID, deletion marker, timestamps |
+| `syncMetadata` | Account key + transcript ID | Remote file ID, confirmed revision/order, item state, last error code |
+| `pendingOperations` | Operation ID | Durable coalesced upsert/tombstone work, attempts, next attempt time |
+| `syncState` | Account key | Last reconcile, cursor/page token if safe, auth-paused marker, account metadata |
+| `meta` | Named key | Schema version helpers, stable device ID, migration completion data |
+
+Pending operations require indexes for account, transcript ID, and next attempt time. Transcript listing requires updated-time and deletion-state indexes. Exact physical names may match this table; changing them requires a documented migration test in the implementation PR.
+
+### 16.3 Transaction boundaries
+
+- Transcript create/edit/rename: write transcript revision and coalesced pending upsert together.
+- Delete/Undo: write transcript deletion state, tombstone, and pending operation together.
+- Incoming merge: write transcript winner, sync metadata, and resolved pending-operation state together.
+- Sync success: update confirmed metadata and delete matching pending operation together.
+
+No UI may show Saved locally until its mutation transaction completes.
+
+### 16.4 Migration
+
+1. Open current database without clearing stores.
+2. Create new stores and indexes inside `upgrade`.
+3. For each current transcript, normalize legacy segments under Section 13.2, preserve ID/title/source/language/model/mode/createdAt/updatedAt, set revision `0`, and assign stable device ID.
+4. Preserve current settings by merging only missing defaults. Validate numeric values: chunk seconds finite integer 15-60; overlap finite number 0-5 and less than chunk seconds. Invalid values fall back to current defaults 30 and 1.
+5. Create no pending Drive upload merely from migration while user is signed out. On first connection/reconcile, enqueue local-only records deliberately.
+6. Migration is idempotent under interrupted open attempts and never deletes a valid current transcript.
+
+Migration fixtures must include: default v1 settings, `NaN`-equivalent invalid persisted numbers, text-only transcript, valid segmented transcript, duplicate/missing segment IDs, unknown model ID, empty transcript, and multiple timestamps. Tests reopen migrated data and verify semantic equality plus canonical invariants.
+
+### 16.5 Clear-data semantics
+
+- Clear downloaded models still calls `clearLocalWorkerState()` first and remains disabled during active conversion/transcription.
+- Clear saved transcripts becomes a destructive bulk tombstone operation when Drive is connected or known remote records exist. It must not silently clear local records and allow remote resurrection.
+- Clearing local app data and deleting Drive backup are distinct actions with distinct consequences.
+- Media blobs remain disabled by default and are never included in Drive sync.
+
+## 17. Feature and component architecture
+
+### 17.1 Target structure
+
+| Area | Responsibility |
+| --- | --- |
+| `src/app/` | Shell, query navigation, providers, route focus, shared copy contracts |
+| `src/features/workbench/` | Source, recommendation, review, queue reducer, progress presentation |
+| `src/features/transcript-editor/` | Canonical reducer, Document/Timeline views, autosave, search, undo/redo |
+| `src/features/library/` | Repository queries, filters, list, item actions, recovery |
+| `src/features/google-drive/` | Identity client, Drive transport, sync service, conflict/retry policies |
+| `src/features/storage/` | DB opening/migration, transcript repository, sync repositories, transactions |
+| `src/features/transcription/` | Shared domain types, models, language, exports, normalized runtime contracts |
+| `src/components/ui/` | Low-level reusable primitives only |
+
+Product components live above `components/ui`; they may compose existing Radix/shadcn primitives but must express Whisdom-specific hierarchy and states.
+
+### 17.2 State ownership
+
+- Local component state: popover open state, draft input, selected tab, disclosure state.
+- Feature reducer: queue workflow, editor operations, Workbench stage state.
+- IndexedDB repositories: transcripts, settings, sync metadata, operations, tombstones.
+- Drive sync service: external store with immutable snapshot subscription through `useSyncExternalStore`.
+- Runtime coordinator: active run handles and normalized events outside render logic.
+
+Do not add a large global state dependency unless implementation demonstrates a cross-feature requirement not served by reducers, repositories, and external-store subscriptions.
+
+### 17.3 Runtime boundaries
+
+Preserve:
+
+- singleton ASR and ffmpeg workers;
+- Transformers.js model Cache Storage and cleanup key;
+- ffmpeg single-threaded GitHub Pages compatibility;
+- sequential batch execution;
+- current server endpoints and authentication pattern;
+- local WebGPU secure-context guard and WASM fallback;
+- large-model q4/WebGPU restriction.
+
+Add adapters around these boundaries. Do not move long-running work into React components.
+
+### 17.4 Copy architecture
+
+Move copy from the `src/App.tsx` monolith into feature-scoped EN/VI modules. Each feature exports one typed key shape and both locales must satisfy it at compile time. Event and issue codes map to localized copy at the UI boundary. No hardcoded user-facing English in components, workers, adapters, validation, aria labels, titles, empty states, or technical-detail headings.
+
+## 18. Error and notification system
+
+### 18.1 Error shape
+
+Typed product errors contain stable code, severity, scope, localized parameter data, recovery actions, technical cause, retryability, and occurrence ID. Technical cause may include provider status and stack in development, but never token, authorization header, source-media content, raw Drive ID, or sensitive response body.
+
+### 18.2 Rendering rules
+
+1. One active error per failed operation scope.
+2. Render beside the action or item that failed.
+3. Provide one primary recovery CTA and optional secondary action.
+4. Put technical details in an expandable disclosure.
+5. Use `role="alert"`/assertive announcement only for newly blocking errors.
+6. Clear error when retry begins; do not preserve it after confirmed success.
+7. Dedupe repeated provider events by operation occurrence ID.
+8. Do not put errors in confirmation toasts.
+
+### 18.3 Toasts
+
+Toasts are confirmation-only: saved export, copied text, delete with Undo, batch completion, connected, signed out. Use a FIFO queue. Default auto-dismiss is 5 seconds; Undo confirmation remains 10 seconds. Pause timer on hover and keyboard focus. `aria-live="polite"`; no toast steals focus.
+
+Batch completion emits one summary confirmation. Failed items retain contextual errors in queue; summary links to affected items.
+
+### 18.4 Recovery map
+
+| Error | Primary recovery |
+| --- | --- |
+| WebGPU unavailable for selected model | Use recommended Base/WASM |
+| Unsupported/failed media analysis | Choose another file |
+| Model asset download failed | Retry download |
+| Runtime failed | Retry item |
+| Server unavailable | Retry connection or choose local file mode |
+| Drive auth expired | Reconnect Drive |
+| Drive transient failure | Retry sync |
+| Invalid remote record | Keep local and inspect safe details |
+| Local save failed | Retry local save; do not navigate silently |
+
+## 19. Internationalization
+
+1. All app copy has EN and VI keys with compile-time parity.
+2. Locale formatting uses current UI language for dates, times, counts, sizes, and elapsed duration.
+3. Runtime, warning, validation, auth, sync, editor, and aria copy are localized by stable code.
+4. Proper nouns, model IDs, file names, URLs, and technical codes remain unchanged.
+5. Do not concatenate translated sentence fragments where grammar differs. Use parameterized full messages.
+6. Switching UI language updates visible copy without resetting queue, editor, runtime, or navigation state.
+7. Transcription language remains separate from UI language. `auto` behavior remains explicit in recommendation/review copy.
+
+## 20. Accessibility
+
+WCAG 2.2 AA is release target.
+
+### 20.1 Structure and focus
+
+- One visible `h1` per page.
+- Landmarks and labeled navigation regions.
+- Skip link to main content.
+- Route changes focus page heading; dialogs/sheets restore trigger focus.
+- Visible focus indicator meets contrast and is not clipped.
+- No positive `tabindex`.
+
+### 20.2 Controls
+
+- Use proven accessible combobox primitives or implement full ARIA combobox behavior: typed search, active descendant, Arrow Up/Down, Home/End, Enter, Escape, selected state, result count, and focus restoration.
+- Stage rail exposes current/completed state in text and semantics; it is not falsely marked as a required wizard.
+- Queue reorder supports buttons and announces new position politely.
+- Icon buttons have localized accessible names.
+- Touch targets meet 44 by 44 CSS px.
+
+### 20.3 Dynamic state
+
+- Blocking error: assertive once.
+- Confirmation and queue reorder: polite.
+- Progress announcements: phase changes immediately; percentage at most every 10% or 15 seconds, whichever is less noisy. Do not announce every worker event.
+- Cancellation request and completion receive distinct announcements.
+- Save/sync state is textual and not color-only.
+
+### 20.4 Editor
+
+- Document and Timeline tabs use correct tab semantics.
+- Segment controls have position and timestamp context.
+- Search reports result count and current result.
+- Keyboard supports all edit, split/merge alternative, copy, export, undo/redo, and navigation actions.
+- Reduced motion removes animated scrolling and spatial transitions.
+
+## 21. Performance requirements
+
+1. Initial Workbench bundle excludes lazy Library, editor, and Settings feature code.
+2. No model or ffmpeg asset request before explicit Transcribe.
+3. Preserve singleton workers and loaded model reuse across navigation and jobs.
+4. Subscribe components to narrow external-store snapshots; progress must not rerender entire shell or Library.
+5. Throttle high-frequency runtime events for presentation while keeping terminal event delivery immediate.
+6. Virtualize Library and Timeline lists when item count makes DOM size material; retain keyboard and screen-reader continuity.
+7. Search indexing runs incrementally or off the urgent render path for large libraries.
+8. Drive reconcile paginates and bounds concurrency. It must not compete with local transcription for avoidable main-thread work.
+9. Avoid decorative images and remote font requests. Abstract audio motifs use CSS/SVG with minimal geometry.
+10. Route lazy-loading states use stable layout and localized labels.
+
+Performance acceptance uses request inspection and React profiling, not subjective “fast” claims.
+
+## 22. Delivery slices
+
+Each slice is independently shippable behind coherent UI behavior. Do not merge half-wired controls.
+
+### 22.1 Slice 1: foundations
+
+- Stabilize existing strict-locator tests before replacing flows.
+- Add query navigation, shell, focus management, Precision Studio tokens, theme parity, product primitives, typed copy foundation.
+- Add repository boundaries and IndexedDB migration scaffolding with v1 fixtures.
+- Preserve current transcription flow behind new shell until replacement slice lands.
+
+Exit: addressable Workbench/Settings, data preserved, both themes render, no unrelated feature regression.
+
+### 22.2 Slice 2: guided Workbench
+
+- Add deterministic recommendation.
+- Add stage rail, File/Link source switch, privacy copy, review summary, typed issues.
+- Make URL-only server flow reachable.
+- Keep advanced model/language controls accessible.
+
+Exit: first run and returning-user setup work without model expertise; file append and link submit pass.
+
+### 22.3 Slice 3: progress, cancel, errors, queue
+
+- Add runtime adapters and stable event codes.
+- Add honest phase progress, elapsed/ETA policy, active/batch split.
+- Add cancellation for every runtime and SSE cleanup.
+- Add focused drawer/sheet, retry/remove/reorder, contextual errors, queued confirmation toasts.
+
+Exit: no fake percentages, duplicate errors, leaked subscriptions, or uncancellable run.
+
+### 22.4 Slice 4: editor and Library
+
+- Add canonical segment migration and serialization.
+- Add full transcript workspace, Document/Timeline editing, autosave, search, undo/redo, copy/export.
+- Add Library search/filter/actions and tombstone/Undo behavior.
+
+Exit: edits remain consistent across views and all exports; mobile editor complete.
+
+### 22.5 Slice 5: Google identity and sync
+
+- Add approved scopes, identity, popup dismissal, token expiry/refresh, sign-out/revoke.
+- Add Drive transport, durable queue, two-way reconcile, conflict order, tombstones, states, offline retry.
+- Route all transcription modes through local-save-first sync path.
+
+Exit: restore, conflict, deletion, reconnect, account switch protection, and offline recovery pass without source-media upload.
+
+### 22.6 Slice 6: mobile, accessibility, performance, polish
+
+- Complete 320/390 layouts, bottom navigation, queue sheet, keyboard/safe-area handling.
+- Complete WCAG checks, reduced motion, virtualization thresholds, lazy loading, render isolation.
+- Run focused visual refinement in both themes.
+
+Exit: viewport, keyboard, automated a11y, manual keyboard, request, and profile checks pass.
+
+### 22.7 Slice 7: regression and cleanup
+
+- Run full functional, real-ASR-gated, server, migration, sync, screenshot, and accessibility review.
+- Remove old `App.tsx` product components, duplicate copy, string matching, dead state, old result modal, and obsolete test workarounds.
+- Verify no stale routes, warnings, cache behavior, or generated output.
+
+Exit: all acceptance criteria and repository pre-commit checks pass.
+
+## 23. Test strategy
+
+### 23.1 Unit tests
+
+- Recommendation decision table, catalog fallback, language mismatch, capability changes.
+- Progress event normalization, phase completion, indeterminate behavior, ETA stability/reset.
+- Workbench queue reducer and editor reducer.
+- Runtime cancellation idempotency and late-event rejection.
+- Canonical segment normalization, split/merge, raw derivation, TXT/SRT/VTT/JSON consistency.
+- Conflict ordering, equal-time tie-break, tombstone precedence, duplicate remote collapse.
+- Backoff bounds/jitter range, auth pause, transient/permanent classification.
+- IndexedDB migration fixtures and transaction rollback.
+- Settings numeric validation.
+
+### 23.2 Component tests
+
+- Combobox keyboard and screen-reader semantics.
+- Stage rail and blocking/informational issue rendering.
+- One-error rendering, retry clearing, confirmation toast queue/timers.
+- Autosave debounce, serialization, flush, save states, incoming dirty-editor protection.
+- Queue reorder alternatives, drawer/sheet focus, cancel choices.
+- Identity menu, popup dismissal, reconnect, account switch warning.
+- Library visible item actions and responsive editor controls.
+
+### 23.3 E2E tests
+
+Required scenarios:
+
+1. First run with WebGPU available and unavailable.
+2. Returning unsafe model fallback.
+3. File select, append, remove, reorder, review, and start.
+4. URL-only server submission without file.
+5. Local, Cloudflare, and server cancellation; cancelled retry.
+6. Sequential batch with success, failure, cancel/pause, and retry.
+7. Error deduplication and stale-error removal after success.
+8. Document/Timeline edits, autosave after refresh, search, undo/redo, and all exports.
+9. Legacy text-only transcript migration and subtitle export.
+10. Library search, filter, rename, export, delete, Undo, and deep link.
+11. Drive sign-in dismissal, identity, expiry refresh, sign-out, revoke explanation, reconnect.
+12. Drive initial backup, restore to empty local DB, local/remote winner, equal-time tie-break, tombstone, offline queue, retry, auth pause, and account switch.
+13. No source-media request to Drive under any transcription mode.
+14. Back/Forward/refresh and route focus.
+15. EN/VI flows with no hardcoded English leakage.
+
+Run functional browser coverage at desktop, 390 px, and 320 px. Preserve gated real ASR tests and adapt selectors to the full transcript page. Expand server tests beyond configuration visibility using mocked capability, submit, SSE, cancel, and URL flows.
+
+### 23.4 Accessibility and visual checks
+
+- Automated accessibility scan on Workbench states, queue sheet, Library, transcript Document/Timeline, Settings, identity menu, errors, and confirmations.
+- Manual keyboard run for complete primary flows in EN and VI.
+- Screen-reader smoke for route changes, progress, cancellation, save/sync, and reorder announcements.
+- Focused screenshot regression at desktop, 390, and 320 in Light and Dark. Capture empty, review, active, failed, Library, editor, and sync-attention states.
+
+## 24. Acceptance criteria
+
+### 24.1 Product flow
+
+- [ ] New user can select a file and understand recommended local setup without opening advanced model details.
+- [ ] File additions append to queue.
+- [ ] Link source starts configured server transcription without a local file or media analysis.
+- [ ] Review names model, language, downloads, conversion, processing location, and privacy behavior.
+- [ ] Batch remains sequential.
+- [ ] Every active runtime exposes working cancel; cancelled items can retry.
+- [ ] Transcript opens as full page and is fully editable on mobile.
+- [ ] Library supports search, sync filters, rename, export, delete, and Undo without opening an item.
+
+### 24.2 State integrity
+
+- [ ] UI never displays a synthetic cross-phase percentage.
+- [ ] Current phase percentage appears only with real numerator/denominator.
+- [ ] One issue renders once per scope; no duplicate error toast/dialog/detail.
+- [ ] Success clears stale errors.
+- [ ] Document and Timeline edits update one canonical segment state.
+- [ ] TXT and subtitle exports cannot diverge from current editor content.
+- [ ] Existing v1 settings/transcripts survive migration.
+- [ ] Legacy text-only records produce deterministic segments and non-empty subtitle exports.
+
+### 24.3 Drive
+
+- [ ] Identity shows verified name/email/avatar fallback and explicit connection state.
+- [ ] Popup dismissal settles visibly; no silent or hanging Drive failure.
+- [ ] Tokens remain memory-only; expiry and silent refresh are tested.
+- [ ] Local save always completes before Drive work and Drive failure never loses local transcript.
+- [ ] All transcription modes enqueue the same sync path.
+- [ ] Two-way reconcile restores, updates, deletes, and resolves ties deterministically.
+- [ ] Tombstones prevent deleted transcript resurrection.
+- [ ] UI shows Local only, Pending, Syncing, Synced, Needs attention, last sync, and pending count accurately.
+- [ ] No raw Drive file ID appears.
+- [ ] No source media or settings are uploaded.
+- [ ] Revoke copy states that existing backup remains.
+
+### 24.4 Responsive and accessibility
+
+- [ ] No horizontal page overflow at desktop, 390 px, 320 px, or 200% zoom.
+- [ ] No hover-only action.
+- [ ] All touch targets are at least 44 by 44 CSS px.
+- [ ] Virtual keyboard does not hide critical action or active editor state.
+- [ ] Comboboxes and queue reorder are keyboard-complete.
+- [ ] Focus moves/restores correctly for routes, menus, dialogs, and sheets.
+- [ ] Status remains understandable without color.
+- [ ] Live announcements are semantic and throttled.
+- [ ] Automated checks and manual review support WCAG 2.2 AA.
+
+### 24.5 Performance and localization
+
+- [ ] Network inspection shows no model or ffmpeg request before user starts transcription.
+- [ ] Library/editor/Settings are lazy-loaded.
+- [ ] Worker singletons and model caches survive normal navigation and cancellation.
+- [ ] Progress does not rerender whole app shell.
+- [ ] Every user-facing string and accessible name has EN/VI copy parity.
+- [ ] Both Light and Dark match Precision Studio direction without gradients, glass, neon, or generic AI imagery.
+
+### 24.6 Repository quality gates
+
+Every implementation slice must pass applicable focused tests. Before merge, repository-required checks pass with zero errors or warnings:
+
+- `pnpm lint`
+- `pnpm typecheck`
+- `pnpm test`
+- `pnpm build`
+- `pnpm test:e2e`
+
+Run worker typecheck for worker/shared contract changes and server build for `server/` changes.
+
+## 25. Risks and mitigations
+
+| Risk | Impact | Mitigation |
+| --- | --- | --- |
+| Product-slice rebuild creates old/new state divergence | Lost queue or inconsistent routes | Introduce repositories/contracts first; one durable source; remove old path per completed slice |
+| Cooperative local cancellation unsupported deep in inference | UI says cancelled while compute continues | Extend worker protocol and verify resource stop; never fake terminal cancellation |
+| Segment-backed Document editing feels fragmented | Poor writing experience | Style blocks as continuous document; preserve caret and selection in reducer tests |
+| Legacy data violates new invariants | Migration loss or empty exports | Idempotent normalization, v1 fixtures, transactional upgrade, no destructive fallback |
+| Drive duplicate files or clock skew | Nondeterministic conflict/resurrection | Logical transcript IDs, explicit ordering, device/hash tie-break, tombstones, duplicate collapse |
+| Popup/refresh browser behavior varies | Silent auth failure | Error callback, bounded watchdog, explicit reconnect state, tested dismissal |
+| Sync overwrites active edits | User data loss | Dirty-editor protection, local save first, transactional incoming merge |
+| High-frequency progress harms rendering/a11y | Jank and announcement spam | Normalizer, narrow subscriptions, visual throttle, live-region throttle |
+| Mobile sheets/editor collide with keyboard | Hidden actions | Natural-height page editor, safe areas, visual viewport testing at 320/390 |
+| Copy extraction leaves English in adapters | Broken VI parity | Stable codes, typed feature copy, hardcoded-string lint/test scan |
+| Recommendation overclaims device capability | Misleading guidance | Use only current catalog/runtime facts; Base fallback; larger models remain explicit |
+| Tombstone retention grows storage | Long-term metadata accumulation | Compact payload, confirmed-reconcile retention gate, bounded metadata |
+
+## 26. Explicit resolved decisions
+
+1. Precision Studio is approved visual direction.
+2. Rebuild uses product slices, not big-bang or surface-only delivery.
+3. Workbench and Library are primary destinations; Settings remains secondary.
+4. Navigation uses query parameters for static-host compatibility.
+5. Mobile uses bottom navigation and queue bottom sheet.
+6. Transcript uses a full workspace, never a centered result modal.
+7. First run recommends Whisper Base multilingual and a safe local runtime under the deterministic policy.
+8. Larger models are never auto-recommended from unsupported device assumptions.
+9. File and Link are distinct source types; Link has no local-file prerequisite.
+10. Progress phases are Prepare, Load model, Transcribe, Save. No synthetic global percentage.
+11. ETA is conditional on stable measured throughput.
+12. Every runtime supports true cancellation; cancellation preserves reusable local worker/model state.
+13. Queue remains sequential and supports accessible reorder alternatives.
+14. Errors are contextual and singular. Toasts confirm; they do not report failures.
+15. Ordered segments are canonical; document text is derived.
+16. Legacy text-only transcripts become one deterministic zero-time segment.
+17. Autosave is local-first, debounced at 600 ms, serialized, and flushed on navigation/page hide.
+18. Library delete uses Undo plus durable tombstone.
+19. Drive sync is two-way for transcript JSON only.
+20. Approved Google scopes are exactly `openid email profile drive.file drive.appdata` with full scope URIs for Drive.
+21. Access tokens remain memory-only; identity, expiry, silent refresh, sign-out, and revoke are required.
+22. Revoking access does not erase backup, and UI says so.
+23. Conflict order is `updatedAt`, revision, device ID, payload hash.
+24. Drive never blocks or precedes local save.
+25. All runtimes use one normalized save/sync path.
+26. IndexedDB receives dedicated sync metadata, pending operations, revision, device, and tombstone state through transactional migration.
+27. React presentation state stays local; workflow state uses reducers; Drive sync is an external service with snapshot subscriptions.
+28. Runtime and issue localization uses stable codes, never string matching.
+29. EN/VI copy parity is compile-time enforced.
+30. Library, editor, and Settings are lazy-loaded; model/ffmpeg assets wait for explicit user action.
+31. WCAG 2.2 AA, 320 px completeness, both themes, and reduced motion are release requirements.
+32. No source-media upload, concurrent batch, fake dashboard, PWA expansion, or broad backend refactor is included.
