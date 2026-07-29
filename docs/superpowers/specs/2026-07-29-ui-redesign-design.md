@@ -492,24 +492,25 @@ Cancellation is not an error. It uses neutral status, no destructive toast, and 
 
 ### 13.1 Canonical representation
 
-Ordered transcript segments are the source of truth. Segment order is array order; timestamps never reorder the array. Normalize each segment’s text by replacing every run of Unicode whitespace with one ASCII space (`U+0020`) and trimming leading/trailing whitespace. Derived raw text is the non-empty normalized segment texts joined with exactly one ASCII space.
+Ordered transcript segments are the source of truth. The canonical editor and schema-2 persistence model uses integer relative milliseconds named `startMs` and `endMs`; `start` and `end` in seconds exist only at runtime-adapter and legacy-parser boundaries. Segment order is array order; timestamps never reorder the array. Normalize each segment’s text by replacing every run of Unicode whitespace with one ASCII space (`U+0020`) and trimming leading/trailing whitespace. Derived raw text is the non-empty normalized segment texts joined with exactly one ASCII space. Section 15.4 is the normative persisted/synced schema.
 
-Canonical subtitle timing is valid only when every segment, including a segment whose normalized text is empty, satisfies all of these invariants: `start` is finite and at least `0`; `end` is finite and at least `start`; and each segment after the first has `start >= previous.end`. Subtitle eligibility first validates timing globally across the complete ordered segment array. Only after that validation may emission omit normalized-empty segments. If no non-empty cues remain, SRT/VTT export is unavailable and the UI gives the explicit localized reason “No non-empty subtitle cues.” Validating emitted cues alone is prohibited.
+Canonical subtitle timing is valid only when every segment, including a segment whose normalized text is empty, satisfies all of these invariants: `startMs` and `endMs` are safe integers from `0` through `604800000` inclusive; `endMs >= startMs`; and each segment after the first has `startMs >= previous.endMs`. These are relative milliseconds from media start, not UTC epoch milliseconds. The seven-day maximum is a protocol/storage cap. Local input over the cap becomes Needs attention and cannot sync; remote input over the cap is rejected. No path silently clamps to the cap, including migration. Subtitle eligibility first validates timing globally across the complete ordered segment array. Only after that validation may emission omit normalized-empty segments. If no non-empty cues remain, SRT/VTT export is unavailable and the UI gives the explicit localized reason “No non-empty subtitle cues.” Validating emitted cues alone is prohibited.
 
-Persistence may retain `text` for backward compatibility and fast display, but every write must regenerate it from canonical segments in the same transaction. TXT uses regenerated document text. SRT and VTT use the same current segments. JSON contains both and must satisfy this invariant.
+Every canonical write regenerates `text` from canonical segments in the same transaction. TXT uses regenerated document text. SRT and VTT format `startMs`/`endMs` as subtitle timestamps without floating-point conversion. Schema-2 JSON uses the exact payload in Section 15.4 and must satisfy the derivation invariant.
 
-### 13.2 Legacy records without segments
+Runtime adapters convert provider-emitted second values before creating canonical editor state. A valid value is finite and non-negative, and `seconds * 1000` must remain finite, within JavaScript’s safe-integer magnitude, and within `0..604800000` before rounding. Convert it with `Math.round(seconds * 1000)`, then apply the same forward overlap clamp used below. A negative, non-finite, unsafe, or over-cap runtime value makes the local result Needs attention and prevents upload; it is never silently capped. Adapter tests cover values around half-millisecond rounding, safe/range checks, and overlap normalization.
 
-On migration or first repository read:
+### 13.2 Legacy records and seconds conversion
 
-1. Process segments in array order. Normalize each text under Section 13.1 and regenerate `text`.
-2. For each existing segment, let `previousEnd` be `0` for the first segment and the migrated prior segment’s end thereafter. Set migrated start to `max(previousEnd, max(0, originalStart))` when `originalStart` is finite, otherwise `previousEnd`. Set migrated end to `max(migratedStart, originalEnd)` when `originalEnd` is finite, otherwise `migratedStart`. This forward clamp is deterministic and establishes every timing invariant without reordering.
-3. If segments are empty and normalized legacy `text` is non-empty, create one segment with deterministic ID `legacy:<transcript-id>:0`, start `0`, end `0`, and normalized text. It is subtitle-eligible as a deterministic zero-length cue.
-4. If both are empty, create no segment and derive empty text; SRT/VTT export is unavailable because no non-empty cues exist.
-5. If a segment ID is missing or duplicates an earlier ID, assign deterministic `legacy:<transcript-id>:<index>` in array order, incrementing the index until unique.
-6. Preserve original records in migration fixtures, not in production shadow storage.
+On migration or first repository read, parse only the strict legacy shape defined in Section 15.4, then:
 
-This conversion is idempotent. It prevents empty subtitle exports from legacy text-only and current Cloudflare documents.
+1. Process legacy segments in array order. Normalize each text under Section 13.1 and regenerate `text`.
+2. For each legacy `start`/`end` seconds pair, let `previousEndMs` be `0` for the first segment and the migrated prior segment’s `endMs` thereafter. A finite non-negative value converts with `Math.round(value * 1000)` after its product is checked for finite safe magnitude and the `0..604800000` range. A non-finite or negative raw start becomes `previousEndMs`; a non-finite or negative raw end becomes the normalized raw start. If either non-negative finite value has an unsafe or over-cap product, preserve the original bounded record in local quarantine implementation state, mark it Needs attention, and prevent upload; do not emit a canonical payload or cap the value. Otherwise set `startMs = max(rawStartMs, previousEndMs)` and `endMs = max(rawEndMs, startMs)`.
+3. If the legacy segment array is empty, create one segment with deterministic stable ID `legacy:<transcript-id>:0`, `startMs = 0`, `endMs = 0`, and normalized legacy `text`, including when that text is empty. A non-empty zero-length cue is subtitle-eligible; an only empty cue leaves SRT/VTT unavailable with “No non-empty subtitle cues.”
+4. A missing segment `id` field is a strict legacy-shape failure. If a present ID is empty or duplicates an earlier ID, assign deterministic `legacy:<transcript-id>:<index>` in array order, incrementing the index until unique.
+5. Preserve original records in migration fixtures, not in production shadow storage.
+
+This conversion is deterministic and idempotent. Parser, migration, repository-read, editor, export, and hash fixtures must produce identical canonical payload bytes from the same legacy input.
 
 ### 13.3 Document view
 
@@ -517,16 +518,16 @@ Document view provides continuous prose editing. To preserve segment ownership:
 
 - Render segment-backed editable blocks with document typography and minimal timestamp chrome, not one uncontrolled textarea detached from segments.
 - Editing a block updates that segment text; persisted/exported text uses canonical Unicode-whitespace normalization.
-- Enter splits at the caret. The original segment keeps its ID, start, and end and receives the left text. The new segment gets a preallocated stable ID carried by the edit action, right text, and zero-length timing `[originalEnd, originalEnd]`.
-- Backspace at the start of a segment merges it into the previous segment. The surviving previous segment keeps its ID/start, takes the later segment’s end, and joins the two normalized non-empty texts with one ASCII space; the later segment is removed.
-- A single-line paste replaces the current selection inside its segment. A multiline paste splits on `CRLF` or one `LF`, `CR`, `U+2028`, or `U+2029`: the first part replaces the selection in the original segment; each additional part creates a segment in paste order with a preallocated stable action ID and zero-length timing at the original segment end. When an edit command carries deterministic adjacent timing—for example, importing already-timed cues—use those validated adjacent times instead, then apply the same forward-clamp invariants. Clipboard text alone never invents duration.
+- Enter splits at the caret. The original segment keeps its ID, `startMs`, and `endMs` and receives the left text. The new segment gets a preallocated stable ID carried by the edit action, right text, and zero-length timing `[originalEndMs, originalEndMs]`.
+- Backspace at the start of a segment merges it into the previous segment. The surviving previous segment keeps its ID and `startMs`, takes the later segment’s `endMs`, and joins the two normalized non-empty texts with one ASCII space; the later segment is removed.
+- A single-line paste replaces the current selection inside its segment. A multiline paste splits on `CRLF` or one `LF`, `CR`, `U+2028`, or `U+2029`: the first part replaces the selection in the original segment; each additional part creates a segment in paste order with a preallocated stable action ID and zero-length timing at the original segment’s `endMs`. When an edit command carries deterministic adjacent millisecond timing—for example, importing already-timed cues—use those validated adjacent times instead, then apply the same forward-clamp invariants. Clipboard text alone never invents duration.
 - A selection spanning segments deletes covered text/segments first, merges surviving boundary text using the merge rule, then applies split/paste rules at that deterministic caret. IDs of surviving boundary segments remain stable.
 
 Structural reducer actions carry their operation ID and all new segment IDs; the reducer never generates IDs during application or replay. Given the same canonical base document and action payload, normalization, segment order/timing, derived text, subtitle cues, JSON, and payload hash are byte-for-byte deterministic.
 
 ### 13.4 Timeline view
 
-Timeline shows each segment with editable start, end, and text. Validate finite, non-negative, ordered times. Invalid timing remains a local editor issue, blocks subtitle export and sync enqueue for that draft, and provides a focused correction action; TXT copy/export remains available from valid text.
+Timeline shows each segment with editable start, end, and text while storing `startMs`/`endMs` internally. Display/input formatters convert user-facing time syntax to bounded integer relative milliseconds without retaining floating-point seconds. Invalid, unsafe, over-seven-day, reversed, or overlapping timing remains a local Needs-attention issue, blocks subtitle export and sync enqueue for that draft, and provides a focused correction action; TXT copy/export remains available from valid text.
 
 Changing segment text or structure immediately updates both views through one reducer. Switching views never reparses raw text.
 
@@ -626,7 +627,7 @@ Reconnect preserves local records, pending operations, tombstones, account-neutr
 
 - After token acquisition, fetch OIDC UserInfo with the access token. Cap the response at 64 KiB before parsing; require a plain object, non-empty string `sub` up to 255 code points, optional `name` as a string up to 256 code points, optional `email` as a string up to 320 code points, optional `email_verified` as a boolean, optional `picture` URL up to 2,048 code points, and expected types. Email may be displayed only when non-empty and `email_verified === true`. The normalized issuer is fixed as `https://accounts.google.com`. Encode stable account key as the unambiguous length-prefixed pair `<issuer-code-point-length>:<issuer><sub-code-point-length>:<sub>`; email is display metadata and never an identity key. Reject identity activation when required UserInfo validation fails.
 - Header control displays avatar or initials/generic glyph, display label, and concise sync indicator. Display label fallback order is non-empty bounded name, verified email, then localized “Google account.” Initials derive from name, then verified email; when neither yields initials, use a generic account glyph. Account menu shows available bounded name and verified email, connection state, last sync, pending count, Sync now, Sign out, and Revoke access.
-- For avatar, allow only HTTPS URLs whose host is in the explicit avatar allowlist, initially exactly `lh3.googleusercontent.com`. Validate both the initial URL and final `response.url`; reject any redirect hop or final URL outside the allowlist, and cap redirects at three. Fetch with a five-second timeout and 1 MiB streamed byte cap, require an `image/*` MIME type, then render a revocable Blob URL. Never place the remote picture URL directly in `img src`. Redirect widening, CORS failure, timeout, invalid MIME, oversize response, or any validation failure falls back to initials or the generic account glyph.
+- For avatar, validate the initial URL before any request: scheme must be HTTPS, hostname must be in the explicit allowlist (initially exactly `lh3.googleusercontent.com`), credentials must be absent, and the port must be empty or the standard HTTPS port `443`. Fetch with `redirect: "error"`, a five-second timeout, and a 1 MiB streamed byte cap; require an `image/*` MIME type, then render a revocable Blob URL. Any redirect is rejected because browser Fetch cannot expose or count cross-origin redirect hops. Never inspect `response.url` as a redirect-chain security control, and never place the remote picture URL directly in `img src`. Redirect rejection, CORS prevention, timeout, invalid MIME, oversize response, or any validation failure falls back to initials or the generic account glyph.
 - Broken avatar falls back to initials or the generic account glyph without hiding identity.
 - Signed-out UI says “Not connected”; it never says Guest when a stale or failed connection is the relevant state.
 
@@ -636,19 +637,123 @@ Static-host CSP must enumerate narrow endpoints: `script-src https://accounts.go
 
 Each remote file is a versioned envelope in `appDataFolder` and uses MIME type `application/vnd.whisdom.transcript+json`. Let `remoteKey = base64url(SHA-256(UTF-8(transcriptId)))`, using the RFC 4648 URL-safe alphabet without padding. It is exactly 43 ASCII characters and must be recomputed from the parsed JSON `transcriptId` before accepting a file. The deterministic display name is `whisdom-transcript-<remoteKey>.json`. Drive `appProperties` contain `whisdomTranscriptKey=<remoteKey>` and a separate bounded decimal `whisdomSchemaVersion=<schemaVersion>`. Raw `transcriptId` must never appear in a filename or appProperty; it remains inside JSON.
 
-The current envelope schema version is `2`; the supported lower and upper version bounds are therefore both `2`. Numeric JSON values are accepted only as JSON numbers satisfying the stated integer and safe-integer bounds; numeric strings are rejected. Every envelope and canonical transcript timestamp is a finite JavaScript safe integer representing UTC epoch milliseconds from `946684800000` (`2000-01-01T00:00:00.000Z`) through `4102444800000` (`2100-01-01T00:00:00.000Z`), inclusive. Zero is never a timestamp. Nullable timestamp fields use JSON `null` to mean absent; omission is rejected where the versioned schema requires the field.
+The current envelope schema version is `2`; the supported lower and upper version bounds are both `2`. Tables in this section are normative. Every listed object is an exact allowlist: every field is required unless explicitly stated otherwise, and unknown or missing fields are rejected. Numeric strings are rejected. “Safe integer” means a JSON number for which `Number.isSafeInteger` is true. UTF-8 limits count encoded bytes without truncation. Code-point limits count Unicode scalar-value/code-point iteration, not UTF-16 code units.
 
-| Field | Rule |
-| --- | --- |
-| `schemaVersion` | Required positive JavaScript safe integer; accept supported value `2`, reject zero, negatives, fractions, values above `Number.MAX_SAFE_INTEGER`, and unsupported positive versions |
-| `transcriptId` | Non-empty string of at most 512 UTF-8 bytes; never truncate |
-| `revision` | Monotonic non-negative JavaScript safe integer per accepted mutation |
-| `updatedAt` | Required bounded epoch-millisecond timestamp |
-| `deletedAt` | Required field: bounded epoch-millisecond timestamp for a tombstone, otherwise `null` |
-| `deviceId` | Exactly `d_` plus the canonical unpadded base64url encoding of 128 random bits: 24 ASCII characters matching `^d_[A-Za-z0-9_-]{22}$`, decoding to exactly 16 bytes and re-encoding identically; generated once and persisted per browser profile, never derived from email or fingerprinting |
-| `deletionId` | Required field: for a tombstone, exactly `x_` plus the canonical unpadded base64url encoding of fresh 128 random bits, with the same exact-length/decode/re-encode rules and regex `^x_[A-Za-z0-9_-]{22}$`; otherwise `null` |
-| `restoredFromDeletionId` | Required field: for an explicit restored live record, the exact observed tombstone `deletionId` in the same bounded format; otherwise `null`; always `null` on tombstones |
-| `transcript` | Required field: `null` for tombstone; otherwise canonical transcript payload |
+Epoch fields and relative timing fields use different units and domains. `updatedAt`, `deletedAt`, and payload `createdAt` are UTC epoch milliseconds from `946684800000` (`2000-01-01T00:00:00.000Z`) through `4102444800000` (`2100-01-01T00:00:00.000Z`), inclusive. `startMs` and `endMs` are milliseconds relative to media start from `0` through `604800000` (seven days), inclusive. Zero is valid for relative timing and never valid for an epoch timestamp.
+
+#### Schema-2 envelope: exact allowlist
+
+| Field | Exact JSON type | Required/nullability | Bounds and units | Semantics |
+| --- | --- | --- | --- | --- |
+| `schemaVersion` | number | Required; non-null | Safe integer exactly `2` | Selects this schema; every other value is unsupported |
+| `transcriptId` | string | Required; non-null | 1..512 UTF-8 bytes | Logical ID carried only by the envelope; it must not appear inside `transcript` and is never truncated |
+| `revision` | number | Required; non-null | Safe integer `0..Number.MAX_SAFE_INTEGER` | Monotonic revision for each accepted mutation |
+| `updatedAt` | number | Required; non-null | Bounded UTC epoch milliseconds | Time of this envelope mutation |
+| `deletedAt` | number or null | Required | `null` or bounded UTC epoch milliseconds | `null` means live; a number means tombstone |
+| `deviceId` | string | Required; non-null | Exactly 24 ASCII characters matching `^d_[A-Za-z0-9_-]{22}$`; suffix decodes to exactly 16 bytes and canonical unpadded base64url re-encoding must match | Stable random browser-profile ID, never account-derived or fingerprint-derived |
+| `deletionId` | string or null | Required | `null` or exactly the canonical 24-character `x_` form matching `^x_[A-Za-z0-9_-]{22}$` with the same 16-byte decode/re-encode rule | Required non-null for tombstones; required `null` for ordinary live records; a restored live record also uses `null` here |
+| `restoredFromDeletionId` | string or null | Required | `null` or exact canonical `x_` form | Always `null` for tombstones and ordinary live records; non-null only for an explicit live restore that observed this exact deletion ID, and preserved by descended live mutations |
+| `transcript` | object or null | Required | Exact canonical payload below or `null` | Non-null iff live; `null` iff tombstone |
+
+Legal combinations are exact: a tombstone has numeric `deletedAt`, canonical non-null `deletionId`, null `restoredFromDeletionId`, and null `transcript`. An ordinary live record has null `deletedAt`, null `deletionId`, null `restoredFromDeletionId`, and a payload. A restored live record differs only by a canonical non-null `restoredFromDeletionId`. No unknown envelope field is accepted.
+
+#### Canonical live transcript payload: exact allowlist
+
+| Field | Exact JSON type | Required/nullability | Bounds and units | Semantics |
+| --- | --- | --- | --- | --- |
+| `title` | string | Required; non-null | After trimming outer Unicode whitespace: 1..512 code points and at most 2,048 UTF-8 bytes | Canonical value is outer-trimmed; preserve all internal content exactly; reject empty or a remote value that is not already canonical |
+| `sourceName` | string | Required; non-null | 0..2,048 code points and at most 8,192 UTF-8 bytes | Display metadata only; never a fetch target or model instruction |
+| `language` | string | Required; non-null | 1..128 code points and at most 512 UTF-8 bytes | `auto` or a catalog code; preserve a bounded unknown legacy code and display Unknown, but never execute it as a model instruction until explicitly remapped |
+| `modelId` | string | Required; non-null | 1..128 code points and at most 512 UTF-8 bytes | Preserve bounded unknown IDs and use a display fallback; unknown IDs do not become executable selections |
+| `mode` | string | Required; non-null | Exact enum `local-webgpu`, `cloudflare-ai`, `local-wasm`, or `server` | Processing mode that produced the transcript |
+| `createdAt` | number | Required; non-null | Bounded UTC epoch milliseconds | Transcript creation instant; distinct from envelope `updatedAt` |
+| `text` | string | Required; non-null | At most 16 MiB UTF-8 | Must exactly equal canonical derivation from `segments` |
+| `segments` | array | Required; non-null | 1..100,000 entries | Transcript order; every entry is the exact segment object below |
+
+The payload contains no `id`, no `updatedAt`, and no extension fields. The repository may separately retain bounded sync/quarantine implementation metadata, but that data never enters this payload, exports, or its hash.
+
+#### Canonical segment: exact allowlist
+
+| Field | Exact JSON type | Required/nullability | Bounds and units | Semantics |
+| --- | --- | --- | --- | --- |
+| `id` | string | Required; non-null | 1..255 code points and at most 1,024 UTF-8 bytes | Stable and unique within this transcript |
+| `startMs` | number | Required; non-null | Safe integer `0..604800000`; relative milliseconds | Inclusive cue start relative to media start |
+| `endMs` | number | Required; non-null | Safe integer `0..604800000`; relative milliseconds | Cue end relative to media start; must be `>= startMs` |
+| `text` | string | Required; non-null | At most 1 MiB UTF-8 | Already normalized by Section 13.1; may be empty |
+
+Array order is transcript order. For each entry after the first, `startMs >= previous.endMs`. No segment has unknown fields. The seven-day limit is a protocol/storage cap: over-cap local/runtime/legacy input is preserved as Needs attention when safely possible and cannot upload; over-cap schema-2 remote input is rejected. Silent capping is prohibited.
+
+#### Normative JSON examples
+
+Live record:
+
+```json
+{
+  "schemaVersion": 2,
+  "transcriptId": "tr_sample_001",
+  "revision": 3,
+  "updatedAt": 1785283201000,
+  "deletedAt": null,
+  "deviceId": "d_AAAAAAAAAAAAAAAAAAAAAA",
+  "deletionId": null,
+  "restoredFromDeletionId": null,
+  "transcript": {
+    "title": "Sample transcript",
+    "sourceName": "sample.wav",
+    "language": "en",
+    "modelId": "Xenova/whisper-base",
+    "mode": "local-webgpu",
+    "createdAt": 1785283200000,
+    "text": "Hello world.",
+    "segments": [
+      {
+        "id": "seg_001",
+        "startMs": 0,
+        "endMs": 1250,
+        "text": "Hello world."
+      }
+    ]
+  }
+}
+```
+
+Tombstone:
+
+```json
+{
+  "schemaVersion": 2,
+  "transcriptId": "tr_sample_001",
+  "revision": 4,
+  "updatedAt": 1785283202000,
+  "deletedAt": 1785283202000,
+  "deviceId": "d_AAAAAAAAAAAAAAAAAAAAAA",
+  "deletionId": "x_AAAAAAAAAAAAAAAAAAAAAA",
+  "restoredFromDeletionId": null,
+  "transcript": null
+}
+```
+
+#### Runtime, legacy, parser, and hash conformance
+
+Runtime result adapters, the canonical editor, JSON/TXT/subtitle exporters, IndexedDB repositories, schema-2 parser, migration, and hash code all consume or produce this exact payload. Runtime seconds and legacy `start`/`end` seconds convert only under Section 13.2; canonical code uses `startMs`/`endMs`.
+
+The isolated v1/current legacy parser accepts only a non-array plain object with exactly `{id,title,sourceName,language,modelId,mode,createdAt,updatedAt,text,segments}` and each segment with exactly `{id,start,end,text}`. Unknown or missing legacy fields are rejected. Legacy `createdAt` and `updatedAt` must be strings in the exact current `Date.prototype.toISOString()` form `YYYY-MM-DDTHH:mm:ss.sssZ`; parse to a finite instant and require `new Date(epochMs).toISOString()` to equal the input. Remote legacy import also requires the bounded epoch-millisecond range and rejects failures. Local v1 migration uses the same exact field allowlists and ISO parse, but preserves an invalid/out-of-range timestamp in bounded local quarantine implementation state as Needs attention under Section 16.4; it never uploads or treats that value as schema 2. Legacy segment seconds use Section 13.2. These exceptions never loosen schema 2.
+
+The conflict payload hash remains lowercase hexadecimal SHA-256 over RFC 8785 canonical JSON of an exact four-key object containing `deletedAt`, `deletionId`, `restoredFromDeletionId`, and `transcript`, with each value copied from the validated record and every key and null present. For a live record, `transcript` is byte-for-byte the exact payload allowlist above: no envelope `transcriptId`/`updatedAt`, no field aliases, and segment keys are `startMs`/`endMs`. Section 15.8 defines ordering use. Conformance fixtures pin the exact RFC 8785 canonical JSON bytes and expected digest; parser output, migration output, editor serialization, export serialization, and hash input must be identical.
+
+For the normative live example, the pinned UTF-8 hash input is this exact single line (no trailing newline):
+
+```json
+{"deletedAt":null,"deletionId":null,"restoredFromDeletionId":null,"transcript":{"createdAt":1785283200000,"language":"en","mode":"local-webgpu","modelId":"Xenova/whisper-base","segments":[{"endMs":1250,"id":"seg_001","startMs":0,"text":"Hello world."}],"sourceName":"sample.wav","text":"Hello world.","title":"Sample transcript"}}
+```
+
+For the normative tombstone example, the pinned UTF-8 hash input is this exact single line (no trailing newline):
+
+```json
+{"deletedAt":1785283202000,"deletionId":"x_AAAAAAAAAAAAAAAAAAAAAA","restoredFromDeletionId":null,"transcript":null}
+```
+
+The hash fixture records the lowercase 64-character digest produced by both the implementation and an independent Web Crypto `SHA-256` oracle over these fixed bytes; fixture review fails if either digest or any canonical byte changes. The oracle is not used to canonicalize the object and therefore cannot mask field-name, field-order, omission, or unit regressions.
 
 `deletionId` is stable for that tombstone across retries, duplicate files, reconcile, and idempotent upserts. It is generated only for a new delete event, never regenerated while rewriting the same tombstone. A valid live mutation descended from an explicit restore preserves its `restoredFromDeletionId`; unrelated or stale live state cannot synthesize or change it. A later delete replaces that live lineage with a fresh `deletionId` and null `restoredFromDeletionId`.
 
@@ -658,7 +763,7 @@ Discovery calls Drive files list with `spaces=appDataFolder`, `trashed=false`, t
 
 Concurrent clients can race and create duplicate Drive files; absolute remote uniqueness is not promised. Eventual uniqueness uses this protocol: discover all logical duplicates, validate each, select canonical content by Section 15.8 conflict order and then ascending Drive file ID as the deterministic tie-break when content order is identical, write/verify the canonical file, relist after the write, and enqueue a bounded cleanup job for noncanonical duplicate file IDs. After canonical verification, cleanup deletes at most 20 noncanonical files per reconcile and retries safely; failure leaves duplicates but not ambiguous canonical selection.
 
-Legacy Drive migration recognizes existing Whisdom `TranscriptDocument` files named `{id}.json` only through a bounded legacy discovery pass; raw names are never copied into new metadata. Cap the pass by normal Drive pagination, the 25 MiB body limit, and the same transcript field/string/array/timestamp bounds except for an isolated legacy-ID intake cap of 16 KiB UTF-8. The isolated legacy parser accepts only the current legacy timestamp representation, parses it to a finite instant, requires it within the accepted range, and converts it exactly to integer epoch milliseconds; these legacy exceptions never enter the schema-2 parser. Validate each legacy body and import it locally without truncating its ID. IDs from 1 through 512 UTF-8 bytes may derive `remoteKey` and write a schema-2 envelope on the first migration sync. IDs from 513 bytes through 16 KiB are preserved locally, marked Needs attention, and never uploaded until explicit safe-ID remediation creates a valid stable ID. Empty IDs, IDs above 16 KiB, and otherwise invalid legacy bodies remain bounded remote quarantine metadata only. Verify every new file body, recomputed key, appProperties, and canonical hash before enqueueing cleanup of the old file. Cleanup remains bounded to 20 old files per reconcile and never runs before verified envelope persistence. Never truncate an ID. Locally migrated IDs over 512 bytes follow the same preserve-local/Needs-attention/no-upload rule without an artificial local truncation cap.
+Legacy Drive migration recognizes existing Whisdom `TranscriptDocument` files named `{id}.json` only through a bounded legacy discovery pass; raw names are never copied into new metadata. Cap the pass by normal Drive pagination, the 25 MiB body limit, and the canonical target bounds in the normative Section 15.4 tables except for an isolated legacy-ID intake cap of 16 KiB UTF-8 and the explicitly defined legacy timestamp/seconds conversion. The isolated parser uses the exact legacy object and segment allowlists from Section 15.4; unknown fields reject. Validate each legacy body and import it locally without truncating its ID. IDs from 1 through 512 UTF-8 bytes may derive `remoteKey` and write a schema-2 envelope on the first migration sync. IDs from 513 bytes through 16 KiB are preserved locally, marked Needs attention, and never uploaded until explicit safe-ID remediation creates a valid stable ID. Empty IDs, IDs above 16 KiB, and otherwise invalid legacy bodies remain bounded remote quarantine metadata only. Verify every new file body, recomputed key, appProperties, and canonical hash before enqueueing cleanup of the old file. Cleanup remains bounded to 20 old files per reconcile and never runs before verified envelope persistence. Never truncate an ID. Locally migrated IDs over 512 bytes follow the same preserve-local/Needs-attention/no-upload rule without an artificial local truncation cap.
 
 ### 15.5 Local-first mutation path
 
@@ -719,13 +824,11 @@ When both candidates are live or both are tombstones, compare by this exact desc
 
 The tombstone special rule, not revision ordering alone, prevents resurrection. Within two-live or two-tombstone comparisons, revision precedes clocks so clock skew cannot let a lower revision win. Equal revisions are treated as concurrent for tie-breaking. `updatedAt` selects among those candidates; it does not independently establish causality. Remote `updatedAt` must be a bounded epoch-millisecond safe integer under Section 15.4. Invalid legacy local timestamps remain below valid timestamps and proceed to deterministic tie-breaks until migrated; invalid remote timestamps fail parser validation. Competing tombstones therefore converge deterministically by revision, `updatedAt`, `deviceId`, payload hash, and finally ascending Drive file ID only when their content order is identical.
 
-`deviceId` compares ASCII code points, not locale collation. Payload hash is lowercase ASCII hexadecimal SHA-256 over RFC 8785 canonical JSON of exactly `{ "deletedAt": <epoch-ms-or-null>, "deletionId": <id-or-null>, "restoredFromDeletionId": <id-or-null>, "transcript": <canonical-payload-or-null> }`, with keys and nulls present exactly as shown. After accepting a remote winner, the next local mutation revision is `max(local revision, remote revision) + 1`; if that increment would exceed `Number.MAX_SAFE_INTEGER`, mutation is blocked as Needs attention rather than rounded or wrapped.
+`deviceId` compares ASCII code points, not locale collation. Payload hash uses the exact RFC 8785 input and canonical schema-2 payload defined normatively in Section 15.4; no repository/app-domain assembly fields enter it. After accepting a remote winner, the next local mutation revision is `max(local revision, remote revision) + 1`; if that increment would exceed `Number.MAX_SAFE_INTEGER`, mutation is blocked as Needs attention rather than rounded or wrapped.
 
 #### Untrusted remote parser and durable candidates
 
-Treat every Drive body as untrusted. Stream bytes and abort above 25 MiB before `JSON.parse`. Accept only a non-array plain object with exactly the schema-2 allowlisted fields; reject unknown or missing envelope/transcript fields. Require `schemaVersion` to be a positive safe integer and reject every unsupported value rather than partially interpreting it. Validate revision safe-integer bounds; transcript ID non-empty/512-byte bound; recomputed `remoteKey`; exact canonical `deviceId`, `deletionId`, and `restoredFromDeletionId` formats and legal tombstone/live combinations; enum membership; bounded epoch-millisecond timestamps; canonical segment timing/text invariants; and globally unique non-empty segment IDs within the record.
-
-Schema-version maxima are: title 512 Unicode code points; source display name/reference 2,048 code points; language/model/runtime/enum strings 128 code points; derived transcript text 16 MiB UTF-8; at most 100,000 segments; each segment ID 255 code points; each normalized segment text 1 MiB UTF-8; at most 100 diagnostic entries with code and bounded string parameters of 1,024 code points each; and at most 256 bounded metadata entries. The total 25 MiB cap remains authoritative. Require derived text to equal canonical segment derivation and reject rather than repair an incoming remote record.
+Treat every Drive body as untrusted. Stream bytes and abort above 25 MiB before `JSON.parse`. Accept only a non-array plain object matching the exact schema-2 envelope, payload, and segment tables in Section 15.4; reject every unknown or missing field at every level. Require `schemaVersion` to be the safe integer `2` and reject every other value rather than partially interpreting it. Validate every JSON type, nullability rule, code-point and UTF-8 byte bound, enum, epoch/relative-millisecond unit and range, legal tombstone/live lineage combination, derived-text equality, normalized segment text, globally unique segment ID, and segment order invariant. A live payload containing envelope fields such as `id`, `transcriptId`, or `updatedAt`, or any other extension, is an unknown-field failure. Reject rather than repair remote input. The total 25 MiB stream cap remains authoritative in addition to all field bounds.
 
 Persist every validated incoming winner/non-winner needed for dirty-editor, account-switch preview, or conflict handling in the dedicated account-neutral `conflictCandidates` store before presenting or applying it. Candidate comparison data includes revision, updatedAt, deviceId, deletedAt, deletionId, restoredFromDeletionId, transcript/null, and canonical payload hash; it excludes account identity and Drive identifiers. The Drive layer associates a candidate with account key, remoteKey, and Drive file metadata in `syncMetadata`; editor draft/candidate payloads remain account-neutral. Invalid records never enter `transcripts` or `conflictCandidates`. Store only bounded quarantine metadata: Drive file ID up to 255 code points, remoteKey when valid, stable error code up to 128 code points, and lowercase SHA-256 of streamed body bytes; never store arbitrary body, provider response text, or parsed transcript fragments.
 
@@ -746,7 +849,7 @@ Backoff schedule uses base 1 second, doubles to maximum 60 seconds, adds 0-25% j
 
 ### 15.10 Tombstone retention
 
-Remote tombstones and local causal ordering identity are permanent for this redesign. After 180 days following a confirmed reconcile, and only when no known operation is pending, compaction may remove retry history and error/diagnostic auxiliary metadata. It must retain transcript ID, remoteKey, revision, updatedAt, deletedAt, deletionId, `restoredFromDeletionId` null state, device ID, payload hash, account association/confirmation needed for ordering, and the complete remote tombstone JSON. Do not compact while signed out or auth-paused. Physical local or remote tombstone deletion is out of scope until a future replica-watermark protocol can prove every replica observed the deletion.
+Remote tombstones and local causal ordering identity are permanent for this redesign. After 180 days following a confirmed reconcile, and only when no known operation is pending, compaction may remove retry history and auxiliary error state from sync implementation metadata. It must retain transcript ID, remoteKey, revision, updatedAt, deletedAt, deletionId, `restoredFromDeletionId` null state, device ID, payload hash, account association/confirmation needed for ordering, and the complete remote tombstone JSON. Do not compact while signed out or auth-paused. Physical local or remote tombstone deletion is out of scope until a future replica-watermark protocol can prove every replica observed the deletion.
 
 ## 16. IndexedDB schema and migration
 
@@ -761,7 +864,7 @@ Version 2 contains every required logical store:
 | Store | Key | Purpose |
 | --- | --- | --- |
 | `settings` | Existing singleton key | Preserve current `AppSettings`; add only validated fields through defaults |
-| `transcripts` | Transcript ID | Canonical transcript, safe-integer revision, device ID, deletion timestamp/ID, restored-from lineage, timestamps, local ID-remediation state |
+| `transcripts` | Transcript ID | Schema-2 envelope state and exact canonical payload from Section 15.4, plus local-only remediation state kept outside serialized payload |
 | `drafts` | Transcript ID | Account-neutral durable editor draft, base durable revision, dirty/save state |
 | `conflictCandidates` | Candidate ID | Validated account-neutral incoming transcript/tombstone candidate including causal deletion lineage and comparison fields; no account/Drive identifiers |
 | `syncMetadata` | Account key + transcript ID | Derived remoteKey, remote file ID/ETag, candidate/account association, confirmed revision/order/lineage, item state, last error code |
@@ -770,6 +873,8 @@ Version 2 contains every required logical store:
 | `meta` | Named key | Schema version helpers, stable device ID, migration completion data |
 
 Pending operations require indexes for account, transcript ID, and next attempt time. Transcript listing requires updated-time and deletion-state indexes. Conflict candidates require transcript-ID and received-time indexes; Drive account/file association belongs in `syncMetadata`, not candidate payloads. Exact physical names may match this table; changing them requires a documented migration test in the implementation PR.
+
+The persisted and synced schema separates envelope identity/revision fields from the canonical transcript payload. A repository API may assemble an app-domain record that exposes envelope `transcriptId` as `id` and envelope `updatedAt` beside payload fields for UI convenience, but that assembled object is not schema-2 JSON, hash input, or canonical payload. The current TypeScript `TranscriptDocument` still uses the legacy combined shape and second-based segments; Slice 1B/4 implementation must migrate its types and adapters rather than claiming it already satisfies this specification.
 
 ### 16.3 Transaction boundaries
 
@@ -787,14 +892,14 @@ Migration ships in two deployment-safe phases:
 
 1. **Slice 1A compatibility opener (rollback floor).** Open the named database without passing a lower explicit version. Omitting the version lets IndexedDB open the existing version; passing `1` against a v2 database would raise `VersionError` and is prohibited. Inspect `db.version`, use a version-aware repository for supported v1/v2 layouts, and close with a localized unsupported-data-version state if the version is above the client’s maximum supported version. A brand-new omitted-version open creates the platform’s initial version; initialize only the Slice 1A-compatible layout through its controlled creation path.
 2. **Slice 1B transactional v1→v2 upgrade.** Request version 2 and create `drafts`, `conflictCandidates`, `syncMetadata`, `pendingOperations`, `syncState`, and `meta`, plus every required index, in the single `versionchange` transaction. Upgrade existing `settings` and `transcripts` in that same transaction; abort leaves the v1 database intact.
-3. For each v1 transcript, apply Section 13.2 normalization and forward-clamp exactly, preserve ID/title/source/language/model/mode, set revision `0`, assign one parser-valid generated device ID persisted in `meta`, set deletion-lineage fields to null, and regenerate canonical `text`. Convert valid current legacy `createdAt`/`updatedAt` representations to integer epoch milliseconds within the accepted range. Preserve an invalid/out-of-range legacy timestamp locally as Needs attention and prohibit its upload until explicit timestamp remediation; in local conflict comparison it sorts below a valid timestamp. Preserve a legacy transcript ID over 512 UTF-8 bytes locally, mark it Needs attention for safe-ID remediation, and prohibit upload; never truncate it.
+3. For each v1 transcript, first enforce the exact legacy object/segment allowlists in Section 15.4, then apply Section 13.2 seconds-to-milliseconds normalization and forward clamp exactly. Preserve ID/title/source/language/model/mode, map legacy `id` to envelope `transcriptId`, set revision `0`, assign one parser-valid generated device ID persisted in `meta`, set deletion-lineage fields to null, keep envelope `updatedAt` outside payload, and regenerate canonical `text`. Convert exact current ISO `createdAt`/`updatedAt` strings to integer epoch milliseconds within the accepted range. Preserve an invalid/out-of-range local legacy timestamp as Needs attention in bounded local quarantine implementation state and prohibit its upload until explicit timestamp remediation; in local conflict comparison it sorts below a valid timestamp. Preserve a legacy transcript ID over 512 UTF-8 bytes locally, mark it Needs attention for safe-ID remediation, and prohibit upload; never truncate it. Unknown or missing legacy fields reject migration of that record without aborting valid sibling records; retain only bounded local quarantine implementation state and never partially interpret the rejected body.
 4. Preserve settings by merging only missing defaults. Validate numeric values: chunk seconds finite integer 15-60; overlap finite number 0-5 and less than chunk seconds. Invalid values fall back to current defaults 30 and 1.
 5. Initialize empty drafts/candidate/sync stores. Create no pending Drive upload merely from migration while signed out. Slice 5 associates/enqueues records only after account consent.
 6. The upgrade is idempotent under interrupted open attempts and never deletes a valid transcript. It validates or replaces malformed legacy local device metadata with one newly generated parser-valid profile device ID; it never derives identity from account data or a fingerprint.
 
 After any deployed client opens/upgrades a database to v2, no production rollback may go below Slice 1A. Operational rollback must deploy Slice 1A-compatible or newer code, because older code that explicitly opens version 1 will fail on v2 and code assuming v1 stores may misbehave. Slice 4 consumes the migrated v2 repository; it performs no schema migration.
 
-Migration fixtures must include: default v1 settings, `NaN`-equivalent invalid persisted numbers, text-only transcript, valid segmented transcript, overlapping/out-of-order/non-finite timing, Unicode whitespace, duplicate/missing segment IDs, unknown model ID, empty transcript, timestamp lower/upper boundaries and out-of-range values, transcript IDs at 512 UTF-8 bytes and 513 UTF-8 bytes including multibyte text, and malformed legacy device metadata. Tests reopen migrated data and verify semantic equality plus canonical invariants, local preservation plus Needs-attention/no-upload for oversized IDs, parser-valid persisted device identity, null initial deletion lineage, all v2 stores/indexes, interrupted-transaction rollback, Slice 1A opening v1 and v2 without requesting a downgrade, and deterministic rejection of unsupported versions above 2.
+Migration fixtures must include: default v1 settings, `NaN`-equivalent invalid persisted numbers, text-only and empty-text no-segment transcripts, valid segmented transcript, overlapping/out-of-order/non-finite timing, half-millisecond rounding, exact seven-day timing, over-seven-day timing, Unicode whitespace, duplicate/empty segment IDs, missing required legacy fields, unknown model ID, timestamp lower/upper boundaries and out-of-range values, transcript IDs at 512 UTF-8 bytes and 513 UTF-8 bytes including multibyte text, unknown legacy object/segment fields, and malformed legacy device metadata. Tests reopen migrated data and verify exact payload equality with parser/editor/hash fixtures; `startMs`/`endMs` conversion and forward clamp; an empty generated cue’s subtitle ineligibility; local Needs-attention/no-upload preservation for oversized IDs and over-cap timing; parser-valid persisted device identity; null initial deletion lineage; all v2 stores/indexes; interrupted-transaction rollback; Slice 1A opening v1 and v2 without requesting a downgrade; and deterministic rejection of unsupported versions above 2.
 
 ### 16.5 Clear-data semantics
 
@@ -990,7 +1095,7 @@ Exit: canonical fixture outputs match across TXT/JSON/SRT/VTT/hash; dirty-naviga
 
 ### 22.5 Slice 5: Google identity and sync
 
-- **Checkpoint A — identity/transport:** approved scopes, attempt IDs/watchdogs, optional UserInfo display fields and fallbacks, bounded no-widening avatar Blob fetch, exact-host CSP, same-page token renewal, user-initiated reload reconnect, sign-out/revoke, remoteKey Drive discovery/upsert.
+- **Checkpoint A — identity/transport:** approved scopes, attempt IDs/watchdogs, optional UserInfo display fields and fallbacks, initial avatar URL validation plus bounded `redirect: "error"` Blob fetch/fallback, exact-host CSP, same-page token renewal, user-initiated reload reconnect, sign-out/revoke, remoteKey Drive discovery/upsert.
 - **Checkpoint B — durable outbound:** account consent/association, durable queue, serialized writes, local-save-first path for every transcription mode, causal tombstone/restore JSON, safe-ID upload gate, legacy Drive migration, retry, post-write verification, eventual-uniqueness cleanup.
 - **Checkpoint C — inbound reconciliation/conflicts:** four-download concurrency, strict bounded envelope parser, durable account-neutral candidates, causal restore rule, deterministic regular ordering/hash, dirty-editor protection, account-switch preview confirmation, offline/auth recovery.
 
@@ -1020,10 +1125,11 @@ Exit: all observable acceptance scenarios, deployment rollback checks, and repos
 - Progress event normalization, phase completion, indeterminate behavior, rolling-30-second ETA sample/span/CV eligibility, and stage/item reset.
 - Workbench queue reducer and editor reducer.
 - Runtime cancellation idempotency, cooperative acknowledgement, forced per-type worker termination/recreation, persistent-cache retention, singleton-at-most-one invariant, and late-event rejection.
-- Unicode-whitespace normalization, forward timing clamp, split/merge/multiline paste/spanning-selection behavior, raw derivation, all-segment subtitle timing validation, invalid normalized-empty segment rejection, all-empty no-cue unavailability, and byte-identical canonical inputs for TXT/SRT/VTT/JSON/hash.
+- Unicode-whitespace normalization; runtime and legacy seconds-to-`startMs`/`endMs` rounding/range checks; deterministic forward timing clamp; split/merge/multiline paste/spanning-selection behavior in relative milliseconds; raw derivation; all-segment subtitle timing validation; invalid normalized-empty segment rejection; all-empty no-cue unavailability; millisecond subtitle formatting; and byte-identical canonical inputs for TXT/SRT/VTT/JSON/hash.
 - Causal tombstone-before-ordering rule; reconcile discovery/read-before-write preventing a queued stale live record with arbitrarily high revision from overwriting an unseen tombstone; exact observed restore with greater revision winning; restore against an older deletion losing to a newer deletion ID; duplicate/competing tombstones converging by revision/updatedAt/device/hash/Drive ID; two-live regular ordering; bounded timestamp validity; ASCII device tie-break; RFC 8785 lowercase SHA-256 including deletion lineage; safe next-revision overflow handling; and bounded cleanup.
-- Untrusted parser byte cap/plain-object/exact-field/schema/unknown-field/enum/string/array/segment-ID/invariant rejection; exact lower/upper acceptance and outside/fraction/unsafe rejection fixtures for schemaVersion and revision; transcript ID at 512 UTF-8 bytes and rejection at 513; remoteKey recomputation mismatch; canonical and malformed deviceId/deletionId/restoredFromDeletionId; timestamp lower/upper acceptance plus zero/null/type/out-of-range rejection; legal live/tombstone lineage combinations; invalid-record metadata bounds; and account-neutral durable candidate storage.
-- Legacy Drive `{id}.json` bounded import, 512-byte upload boundary, 513-byte and 16-KiB local-preservation boundaries, over-16-KiB metadata-only quarantine, derived remoteKey envelope write/verify-before-cleanup, bounded old-file cleanup, invalid body quarantine, and no-truncation behavior.
+- Untrusted parser byte cap/plain-object/exact-field/schema/unknown-field/enum/string/array/segment-ID/invariant rejection against every normative Section 15.4 row; exact lower/upper acceptance and outside/fraction/unsafe rejection fixtures for schemaVersion and revision; transcript ID at 512 UTF-8 bytes and rejection at 513; transcript ID present only in the envelope; payload `id`, `transcriptId`, duplicate `updatedAt`, and every other unknown field rejected; remoteKey recomputation mismatch; canonical and malformed deviceId/deletionId/restoredFromDeletionId; epoch timestamp lower/upper acceptance plus zero/null/type/out-of-range rejection; relative timing zero/seven-day acceptance plus over-cap/fraction/unsafe rejection; explicit epoch-versus-relative-unit fixtures; legal live/tombstone lineage combinations; bounded invalid-record quarantine state; and account-neutral durable candidate storage.
+- Legacy Drive `{id}.json` exact object/segment allowlist, current ISO timestamp parsing, deterministic seconds conversion, parser/migration-identical canonical output, 512-byte upload boundary, 513-byte and 16-KiB local-preservation boundaries, over-16-KiB metadata-only quarantine, unknown-field rejection, derived remoteKey envelope write/verify-before-cleanup, bounded old-file cleanup, invalid body quarantine, and no-truncation behavior.
+- Schema/hash fixture uses the normative live example and pins RFC 8785 canonical bytes for the exact deletion-lineage projection. It proves `transcriptId` occurs once in the envelope and never in hash input/payload; segment keys are exactly `startMs`/`endMs`; parsing, editor serialization, and legacy migration produce identical payload bytes; repeated hashing is stable; and the implementation SHA-256 equals an independent Web Crypto digest of those fixed canonical bytes. A paired tombstone fixture pins explicit nulls and the tombstone projection.
 - Backoff bounds/jitter range, auth pause, transient/permanent classification.
 - Slice 1A versionless compatibility open for v1/v2, unsupported-version rejection, complete v1→v2 store/index migration, and transaction rollback.
 - Settings numeric validation.
@@ -1035,7 +1141,7 @@ Exit: all observable acceptance scenarios, deployment rollback checks, and repos
 - One-error rendering, retry clearing, confirmation toast queue/timers.
 - Autosave debounce/serialization, app-navigation await, save-failure Retry/Discard, popstate restoration/replay guard, best-effort visibility/pagehide, conditional beforeunload registration, save states, and incoming dirty-editor protection.
 - Queue reorder alternatives, drawer/sheet focus, cancel choices.
-- Identity menu, auth attempt-ID timeout/late callback rejection, GIS error callback, same-page renewal, reload reconnect requirement, revoke confirmed/unconfirmed states, optional name/picture and display/initial/glyph fallbacks, avatar initial/final URL allowlist and redirect/CORS/MIME/byte/timeout rejection, and account-switch paused/preview/apply/disclosure confirmation behavior.
+- Identity menu, auth attempt-ID timeout/late callback rejection, GIS error callback, same-page renewal, reload reconnect requirement, revoke confirmed/unconfirmed states, optional name/picture and display/initial/glyph fallbacks, avatar initial HTTPS/exact-host/no-credentials/standard-port validation, `redirect: "error"` fallback on any redirect, CORS/MIME/byte/timeout fallback, and account-switch paused/preview/apply/disclosure confirmation behavior. Tests make no assertion about inspecting redirect hops or final `response.url`.
 - Library visible item actions and responsive editor controls.
 
 ### 23.3 E2E tests
@@ -1046,11 +1152,11 @@ Required named scenarios:
 2. `WB-01`: file select, append, remove, reorder, review, and start; `WB-02`: URL-only server submission without file.
 3. `RUN-01`: cooperative local cancel acknowledges before terminal state; `RUN-02`: noninterruptible ASR/ffmpeg cancel terminates only active worker, retains Cache Storage, recreates lazily, and never has two live workers of one type; `RUN-03`: Cloudflare/server cancel and cancelled retry; `RUN-04`: ETA eligibility/reset boundaries.
 4. `QUEUE-01`: sequential batch covers success, failure, cancel/pause, continue choice, and retry; `ERR-01`: one contextual error and stale-error removal after success.
-5. `EDIT-01`: Document/Timeline split, merge, multiline paste, timestamps, undo/redo, and canonical TXT/JSON/SRT/VTT/hash fixture outputs; `EDIT-02`: search traversal/wrap/persistence/reset/no-result focus/announcement; `EDIT-03`: a normalized-empty segment with invalid timing blocks SRT/VTT before cue omission, while all timing-valid empty segments leave subtitle export unavailable with the explicit no-non-empty-cues reason; `SAVE-01`: autosave survives refresh; `SAVE-02`: app navigation and Back/Forward save failure exercise Retry and Discard against last durable revision; `SAVE-03`: unload warning exists only while dirty/saving without asserting guaranteed async unload save.
-6. `MIG-01`: Slice 1A opens v1 and v2 without lower-version request and rejects unsupported version; `MIG-02`: transactional v1→v2 fixtures produce every store/index and canonical forward clamps; `MIG-03`: simulated rollback never deploys a pre-1A opener after v2 exposure.
+5. `EDIT-01`: Document/Timeline split, merge, multiline paste, relative-millisecond timestamps, undo/redo, and canonical TXT/JSON/SRT/VTT/hash fixture outputs; `EDIT-02`: search traversal/wrap/persistence/reset/no-result focus/announcement; `EDIT-03`: a normalized-empty segment with invalid timing blocks SRT/VTT before cue omission, while all timing-valid empty segments leave subtitle export unavailable with the explicit no-non-empty-cues reason; `EDIT-04`: runtime seconds round exactly to bounded milliseconds, seven days is accepted, over-cap becomes Needs attention without clamping, and format/export retain exact canonical timing; `SAVE-01`: autosave survives refresh; `SAVE-02`: app navigation and Back/Forward save failure exercise Retry and Discard against last durable revision; `SAVE-03`: unload warning exists only while dirty/saving without asserting guaranteed async unload save.
+6. `MIG-01`: Slice 1A opens v1 and v2 without lower-version request and rejects unsupported version; `MIG-02`: transactional v1→v2 strict-allowlist fixtures produce every store/index, exact current-ISO epoch conversion, canonical millisecond rounding/forward clamps, empty generated cue behavior, and byte-identical parser/hash output; `MIG-03`: simulated rollback never deploys a pre-1A opener after v2 exposure.
 7. `LIB-01`: search, filter, rename, export, delete, Undo, deep link, 1,000-row threshold, and visible actions.
-8. `GIS-01`: sign-in dismissal/error/timeout/late callback; `GIS-02`: UserInfo stable sub identity, optional name/picture fallbacks, and bounded no-redirect-widening avatar Blob/fallback; `GIS-03`: same-page expiry renewal and reload user reconnect; `GIS-04`: confirmed and unconfirmed revoke copy/link; `GIS-05`: different-account Cancel, Reconcile-without-upload preview without apply, explicit apply confirmation, and separate disclosure confirmation before upload.
-9. `DRV-01`: deterministic MIME/remoteKey filename/appProperties discovery pagination, raw-ID absence, JSON key recomputation, ETag-conditioned PATCH, 404/412 rediscovery, and post-write verification; `DRV-02`: duplicate race selects conflict winner then Drive ID and bounded cleanup; `DRV-03`: reconcile reads current remote state before writes, stale arbitrarily-high-revision live loses without overwriting an unseen or raced tombstone, exact observed higher-revision restore wins, old-deletion restore loses to newer tombstone, duplicate/competing tombstones converge, two-live regular ties converge, next local revision is safe, and causal tombstone JSON remains permanent; `DRV-04`: 25 MiB and every numeric/identity/timestamp/parser boundary, durable account-neutral valid candidate, bounded invalid metadata, offline queue/retry/auth pause, four-download cap, and serialized per-transcript writes; `DRV-05`: legacy `{id}.json` migration verifies new envelope before bounded cleanup, uploads IDs only through 512 UTF-8 bytes, preserves 513-byte through 16-KiB IDs locally as Needs attention, quarantines larger IDs as bounded metadata, and never truncates.
+8. `GIS-01`: sign-in dismissal/error/timeout/late callback; `GIS-02`: UserInfo stable sub identity, optional name/picture fallbacks, initial URL policy, `redirect: "error"`, and timeout/oversize/MIME/CORS fallback to a bounded local Blob/initials/glyph result; `GIS-03`: same-page expiry renewal and reload user reconnect; `GIS-04`: confirmed and unconfirmed revoke copy/link; `GIS-05`: different-account Cancel, Reconcile-without-upload preview without apply, explicit apply confirmation, and separate disclosure confirmation before upload.
+9. `DRV-01`: deterministic MIME/remoteKey filename/appProperties discovery pagination, raw-ID absence, JSON key recomputation, ETag-conditioned PATCH, 404/412 rediscovery, and post-write verification; `DRV-02`: duplicate race selects conflict winner then Drive ID and bounded cleanup; `DRV-03`: reconcile reads current remote state before writes, stale arbitrarily-high-revision live loses without overwriting an unseen or raced tombstone, exact observed higher-revision restore wins, old-deletion restore loses to newer tombstone, duplicate/competing tombstones converge, two-live regular ties converge, next local revision is safe, and causal tombstone JSON remains permanent; `DRV-04`: 25 MiB and every normative envelope/payload/segment type, byte/code-point, numeric, identity, epoch/relative-unit, seven-day, exact-field, derivation, ordering, and lineage boundary; transcriptId envelope-only; exact RFC 8785 fixture stability; durable account-neutral valid candidate; bounded invalid metadata; offline queue/retry/auth pause; four-download cap; and serialized per-transcript writes; `DRV-05`: strict legacy `{id}.json` migration verifies canonical output and new envelope before bounded cleanup, uploads IDs only through 512 UTF-8 bytes, preserves 513-byte through 16-KiB IDs locally as Needs attention, quarantines larger IDs as bounded metadata, and never truncates.
 10. `PRIV-01`: no source-media/settings request to Drive under any mode; CSP contains only documented Google hosts; account switch performs no upload without explicit consent.
 11. `NAV-01`: Back/Forward/refresh/deep-link and route focus; `I18N-01`: every named flow runs in EN and VI with no hardcoded English leakage.
 12. `PERF-01`: initial route/chunk requests exclude Library/editor/Settings/model/ffmpeg heavy assets; `PERF-02`: 100 progress updates produce zero profiler commits in mounted header/nav/Library subtrees; `PERF-03`: 1,000-row/5,000-segment fixtures verify thresholds and 8 ms yielding with scheduler and fallback paths.
@@ -1092,23 +1198,23 @@ Focused screenshot regression `VIS-01` runs at desktop, 390, and 320 in Light an
 - [ ] One issue renders once per scope; no duplicate error toast/dialog/detail.
 - [ ] Success clears stale errors.
 - [ ] Document and Timeline edits update one canonical segment state.
-- [ ] `EDIT-01` fixtures produce expected canonical normalized text, timing, TXT, JSON, SRT, VTT, and payload hash bytes after split/merge/paste; `EDIT-03` proves every segment is timing-valid before empty-cue omission and all-empty transcripts disable SRT/VTT with an explicit reason.
+- [ ] `EDIT-01`/`EDIT-04` fixtures produce expected canonical normalized text, `startMs`/`endMs`, TXT, JSON, SRT, VTT, and payload hash bytes after split/merge/paste; runtime seconds round exactly; seven days is accepted; over-cap input becomes Needs attention without clamping; `EDIT-03` proves every segment is timing-valid before empty-cue omission and all-empty transcripts disable SRT/VTT with an explicit reason.
 - [ ] `SAVE-02` holds route on failed save; Retry and Discard produce specified durable outcomes for app and browser history navigation.
 - [ ] `MIG-01` through `MIG-03` prove v1 preservation, complete v2 stores/indexes, transactional rollback, supported-version behavior, and deployment rollback floor.
-- [ ] Legacy text-only records produce one `[0,0]` deterministic segment and an eligible non-empty subtitle cue.
+- [ ] Legacy text-only records produce one deterministic `startMs = 0`, `endMs = 0` segment and an eligible non-empty subtitle cue; an empty generated cue remains ineligible.
 
 ### 24.3 Drive
 
 - [ ] Identity shows optional bounded name, verified-email, localized account-label, initials/glyph, and bounded avatar fallbacks in the defined order, plus explicit connection state.
 - [ ] `GIS-01` proves popup dismissal/error/timeout settles, invalidates attempt ID, and ignores late callbacks.
 - [ ] Access/expiry remain memory-only; `GIS-03` permits `prompt: ''` only on the connected page and requires user reconnect after reload.
-- [ ] Account key equals normalized Google issuer plus UserInfo `sub`; email is never used as key; avatar renders only from a bounded fetched Blob URL whose initial and final origins pass the exact allowlist, or falls back to initials/generic glyph.
+- [ ] Account key equals normalized Google issuer plus UserInfo `sub`; email is never used as key. Avatar validates only the initial HTTPS/exact-host/no-credentials/standard-port URL, fetches with `redirect: "error"`, and falls back to initials/generic glyph on any redirect, timeout, oversize body, non-image MIME, CORS prevention, or other fetch failure. No acceptance check assumes browser access to redirect hops or final `response.url`.
 - [ ] Revoke success appears only after confirmed callback; absent/failing token reports unconfirmed revocation and links Google Account permissions.
 - [ ] Local save always completes before Drive work and Drive failure never loses local transcript.
 - [ ] All transcription modes enqueue the same sync path.
 - [ ] `DRV-01` and `DRV-02` prove deterministic remoteKey filename/appProperties/upsert, no raw transcript ID in Drive metadata, transcriptId-to-key verification, bounded ETag-conditioned PATCH with 404/412 rediscovery, post-write verification, race-tolerant canonical selection, and bounded eventual duplicate cleanup without claiming absolute uniqueness.
 - [ ] `DRV-03` proves reconcile reads current remote state before writes and the causal tombstone special rule precedes regular ordering: stale live state loses without overwriting the unseen tombstone regardless of revision, only an exact observed higher-revision restore wins, an old-deletion restore loses to a later deletion, and competing tombstones converge deterministically. It also proves safe next-revision handling and permanent lineage-bearing tombstone JSON.
-- [ ] `DRV-04` proves the 25 MiB cap; exact schemaVersion/revision/transcript UTF-8/remoteKey/device/deletion/restore/timestamp boundaries; strict field and lineage parser rules; durable account-neutral valid candidates; bounded invalid metadata; four-download maximum; and per-transcript write serialization.
+- [ ] `DRV-04` proves the 25 MiB cap; every exact Section 15.4 JSON type, required/nullability rule, byte/code-point bound, enum, epoch/relative unit and range, seven-day boundary, segment invariant, canonical derivation, envelope-only transcriptId, no-unknown-field rule, legal lineage combination, and stable RFC 8785 hash fixture; durable account-neutral valid candidates; bounded invalid metadata; four-download maximum; and per-transcript write serialization.
 - [ ] `DRV-05` proves bounded legacy Drive JSON import, derived remoteKey envelope write and verification before old-file cleanup, 512-byte upload acceptance, 513-byte/16-KiB local-preservation boundaries, over-16-KiB metadata-only quarantine, invalid-record quarantine, and no truncation.
 - [ ] UI states Local only, Pending, Syncing, Synced, Needs attention, last sync, and pending count equal repository/sync-service fixture state.
 - [ ] No raw Drive file ID appears.
@@ -1166,7 +1272,7 @@ Run worker typecheck for worker/shared contract changes and server build for `se
 | Remote JSON is oversized or hostile | Memory pressure, corruption, or transcript overwrite | 25 MiB stream cap, strict bounded parser, durable validated candidates, metadata-only invalid quarantine |
 | Stale live record has a high revision | Deleted transcript resurrects | Tombstone wins before revision unless a user-observed exact deletionId restore has a greater revision; later deletions use new IDs |
 | Raw or oversized transcript ID reaches Drive metadata | Metadata leakage, invalid query/name, or collisions | Derive fixed 43-character remoteKey, recompute after parse, preserve oversized legacy IDs locally as Needs attention, never truncate |
-| Avatar redirects widen allowed origin | Identity fetch reaches unapproved host | Validate initial and final URL against exact HTTPS allowlist, cap redirects/bytes/MIME/time, use Blob URL, fall back locally |
+| Avatar URL redirects or cannot be fetched under browser CORS | Browser follows an unapproved target or identity image fails | Validate initial HTTPS/exact host/credentials/port, fetch with `redirect: "error"`, cap bytes/MIME/time, use Blob URL, and fall back locally on any redirect or fetch failure; never claim hop inspection |
 | Sync overwrites active edits | User data loss | Dirty-editor protection, local save first, transactional incoming merge |
 | Navigation/unload occurs during dirty save | Lost edits or false persistence promise | Await app navigation, restore popstate, Retry/Discard against durable revision, conditional beforeunload; pagehide remains best effort |
 | High-frequency progress harms rendering/a11y | Jank and announcement spam | Normalizer, narrow subscriptions, visual throttle, live-region throttle |
@@ -1192,14 +1298,14 @@ Run worker typecheck for worker/shared contract changes and server build for `se
 12. Every runtime reaches cancelled only after acknowledgement, abort completion, or worker termination. Cooperative local cancel is conditional; forced cancel may discard live worker state but retains persistent model Cache Storage and permits lazy singleton recreation.
 13. Queue remains sequential and supports accessible reorder alternatives.
 14. Errors are contextual and singular. Toasts confirm; they do not report failures.
-15. Ordered segments are canonical; Unicode whitespace normalization and one-space joining derive document text. Every segment, including normalized-empty segments, must pass finite, nonnegative, nonoverlapping timing before SRT/VTT is eligible; empty cues are omitted only afterward, and zero remaining non-empty cues disables subtitle export with an explicit reason.
-16. Migration forward-clamps timing; legacy text-only transcripts become one deterministic subtitle-eligible zero-time segment; split/merge/paste rules produce deterministic exports and hash input.
+15. Ordered segments are canonical and use safe-integer relative `startMs`/`endMs` bounded to seven days; Unicode whitespace normalization and one-space joining derive document text. Every segment, including normalized-empty segments, must pass bounded, nonnegative, nonoverlapping timing before SRT/VTT is eligible; empty cues are omitted only afterward, and zero remaining non-empty cues disables subtitle export with an explicit reason.
+16. Runtime and legacy seconds convert with checked `Math.round(seconds * 1000)` and deterministic forward clamp. Over-seven-day input is never capped. Legacy no-segment transcripts become one deterministic zero-time segment; only a non-empty generated cue is subtitle-eligible. Split/merge/paste, formatter, export, parser, migration, and hash rules use canonical milliseconds.
 17. Autosave is local-first, debounced at 600 ms, and serialized. App navigation awaits save; dirty Back/Forward restores editor state; Retry/Discard is explicit; unload persistence is best effort only.
 18. Library delete uses Undo plus a durable tombstone with fresh stable deletionId; only a user action observing that exact tombstone may write a greater-revision restoredFromDeletionId.
 19. Drive sync is two-way for transcript JSON only.
 20. Approved Google scopes are exactly `openid email profile drive.file drive.appdata` with full scope URIs for Drive.
 21. GIS access tokens/expiry remain memory-only and no browser refresh token exists. Same-page `prompt: ''` may be attempted; reload requires user reconnect.
-22. Identity comes from bounded OIDC UserInfo; name/picture are optional, verified email is display-only, account key is normalized issuer plus `sub`, and avatar uses exact-host no-widening bounded fetch plus local fallback. Revoke is confirmed only by callback and never erases backup.
+22. Identity comes from bounded OIDC UserInfo; name/picture are optional, verified email is display-only, account key is normalized issuer plus `sub`, and avatar validates the initial exact HTTPS host/no-credentials/standard-port URL, uses a bounded `redirect: "error"` fetch, and falls back locally on every redirect/CORS/fetch validation failure. Browser redirect hops/final URL are not inspected. Revoke is confirmed only by callback and never erases backup.
 23. When exactly one candidate is a tombstone, it wins before normal ordering unless the live candidate is an exact observed greater-revision restore of that deletionId. Two-live and two-tombstone candidates use revision, bounded epoch-millisecond `updatedAt`, ASCII device ID, then lowercase RFC 8785/SHA-256 hash including deletion lineage. Revision alone does not prevent resurrection.
 24. Drive never blocks or precedes local save.
 25. All runtimes use one normalized save/sync path.
@@ -1211,7 +1317,7 @@ Run worker typecheck for worker/shared contract changes and server build for `se
 31. WCAG 2.2 AA, zero automated critical/serious violations, all named EN/VI manual checks, 320 px completeness, both themes, and reduced motion are release requirements in every slice.
 32. No source-media upload, concurrent batch, fake dashboard, PWA expansion, or broad backend refactor is included.
 33. Drive uses deterministic MIME, 43-character SHA-256 remoteKey filename/appProperties, read-before-write discovery, and ETag-conditioned PATCH semantics; JSON retains bounded transcriptId and must hash back to the same key. Raw transcript IDs never enter filenames/appProperties. Concurrent creates may duplicate files; conflict-order plus Drive-ID tie-break, verification, and bounded cleanup provide eventual—not absolute—uniqueness.
-34. Schema/revision are bounded safe integers; deviceId and deletion IDs use exact canonical 128-bit base64url formats; timestamps are bounded UTC epoch-millisecond safe integers. Strict parsing rejects unsupported versions, malformed lineage, mismatched keys, and out-of-bound values.
+34. Section 15.4 is the normative schema-2 exact allowlist. Envelope owns transcriptId/revision/updatedAt/deletion lineage; live payload owns only title/sourceName/language/modelId/mode/createdAt/text/segments; segments own only id/startMs/endMs/text. Exact types, nulls, bounds, units, canonical derivation, and unknown-field rejection apply. RFC 8785 hashing uses that exact payload without assembled app-domain fields.
 35. Legacy Drive `{id}.json` documents migrate through bounded validation, local import, verified new-envelope write, then bounded cleanup. Oversized IDs remain local Needs attention until explicit safe-ID remediation and are never truncated/uploaded.
-36. Remote tombstones and local causal ordering identity are permanent; only retry/error/diagnostic auxiliary metadata compacts after the confirmed 180-day gate.
+36. Remote tombstones and local causal ordering identity are permanent; only retry/error auxiliary sync metadata compacts after the confirmed 180-day gate.
 37. Different-account connection starts paused. Reconcile without upload stages preview but applies no remote winner without explicit confirmation; local upload requires separate disclosure confirmation.
