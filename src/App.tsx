@@ -78,7 +78,10 @@ import {
   resolveTranscriptionLanguage,
   TRANSCRIPTION_LANGUAGES,
 } from "@/features/transcription/language"
+import { formatProductError, type ProductError } from "@/app/copy"
+import { ProductErrorPanel } from "@/components/product/ProductErrorPanel"
 import { downloadTranscript, type ExportFormat } from "@/features/transcription/exports"
+import "@/features/storage/compatibility-api"
 import {
   deleteTranscript,
   clearTranscripts,
@@ -87,6 +90,7 @@ import {
   renameTranscript,
   saveSettings,
   saveTranscript,
+  StorageCompatibilityError,
 } from "@/features/storage/indexed-db"
 import {
   isGoogleDriveConfigured,
@@ -618,6 +622,7 @@ export function App() {
   const [history, setHistory] = React.useState<TranscriptDocument[]>([])
   const [error, setError] = React.useState<string | null>(null)
   const [errorDialogOpen, setErrorDialogOpen] = React.useState(false)
+  const [fatalStorageError, setFatalStorageError] = React.useState<ProductError | null>(null)
   const [driveStatus, setDriveStatus] = React.useState<DriveStatus>({ type: "idle" })
   const [driveAccessToken, setDriveAccessToken] = React.useState<string | null>(null)
   const [urlInput, setUrlInput] = React.useState("")
@@ -637,16 +642,36 @@ export function App() {
       : serverCapabilities
 
   React.useEffect(() => {
-    void loadSettings().then((storedSettings) => {
-      settingsRef.current = storedSettings
-      setSettings(storedSettings)
-    })
-    void listTranscripts().then(setHistory)
+    async function hydrate() {
+      try {
+        const [storedSettings, storedHistory] = await Promise.all([loadSettings(), listTranscripts()])
+        settingsRef.current = storedSettings
+        setSettings(storedSettings)
+        setHistory(storedHistory)
+      } catch (caught) {
+        if (!(caught instanceof StorageCompatibilityError)) throw caught
+        setFatalStorageError({
+          occurrenceId: createId("storage-version"),
+          code: caught.code,
+          severity: "error",
+          scope: "navigation",
+          scopeId: "database",
+          params: { foundVersion: caught.foundVersion, maximumVersion: 2 },
+          primaryAction: { code: "inspect-details", params: {} },
+          secondaryAction: null,
+          retryable: false,
+          technicalCause: null,
+        })
+      }
+    }
+    void hydrate()
     void navigator.storage?.persist?.().catch(() => undefined)
   }, [])
 
   React.useEffect(() => {
-    void saveSettings(settings)
+    void saveSettings(settings).catch((caught: unknown) => {
+      if (!(caught instanceof StorageCompatibilityError)) throw caught
+    })
   }, [settings])
 
   React.useEffect(() => {
@@ -1324,8 +1349,49 @@ export function App() {
     }
   }
 
+  if (fatalStorageError) {
+    const fatalStorageCopy = formatProductError(settings.uiLanguage, fatalStorageError)
+    return (
+      <main className="min-h-svh bg-background px-4 py-16 text-foreground">
+        <div className="mx-auto max-w-xl">
+          <div className="mb-6 flex gap-2" role="group" aria-label="Interface language">
+            <Button variant="outline" onClick={() => setSettings((current) => ({ ...current, uiLanguage: "en" }))}>English</Button>
+            <Button variant="outline" onClick={() => setSettings((current) => ({ ...current, uiLanguage: "vi" }))}>Tiếng Việt</Button>
+          </div>
+          <ProductErrorPanel
+            language={settings.uiLanguage}
+            error={fatalStorageError}
+            onPrimaryAction={() => setErrorDialogOpen(true)}
+          />
+          <Dialog open={errorDialogOpen} onOpenChange={setErrorDialogOpen}>
+            <DialogContent className="max-w-lg border-destructive/30">
+              <DialogHeader>
+                <DialogTitle>{fatalStorageCopy.title}</DialogTitle>
+                <DialogDescription>{fatalStorageCopy.message}</DialogDescription>
+              </DialogHeader>
+              <div className="max-h-80 overflow-auto rounded-md border bg-muted/30 p-4">
+                <pre className="whitespace-pre-wrap break-words font-mono text-sm text-foreground">
+                  {JSON.stringify({
+                    occurrenceId: fatalStorageError.occurrenceId,
+                    code: fatalStorageError.code,
+                    params: fatalStorageError.params,
+                  }, null, 2)}
+                </pre>
+              </div>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="secondary">{t.closeResults}</Button>
+                </DialogClose>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </main>
+    )
+  }
+
   return (
-    <main className="min-h-svh bg-background text-foreground">
+    <main className="min-h-svh bg-background text-foreground" data-testid="compatibility-product-ready">
       <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
           <button
