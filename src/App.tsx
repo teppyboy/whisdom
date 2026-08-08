@@ -883,12 +883,6 @@ export function App() {
 
     if (runSettings.mode === "cloudflare-ai") {
       if (!driveAccessToken && !import.meta.env.DEV) {
-        setToastMessage({
-          id: createId("toast"),
-          title: t.transcriptionFailed,
-          description: t.serverRequiresAuth,
-          kind: "error",
-        })
         throw new Error(t.serverRequiresAuth)
       }
 
@@ -969,12 +963,6 @@ export function App() {
 
     if (runSettings.mode === "server") {
       if (!driveAccessToken && !import.meta.env.DEV) {
-        setToastMessage({
-          id: createId("toast"),
-          title: t.transcriptionFailed,
-          description: t.serverRequiresAuth,
-          kind: "error",
-        })
         throw new Error(t.serverRequiresAuth)
       }
 
@@ -1185,17 +1173,14 @@ export function App() {
       setTranscript(document)
       setIsResultOpen(true)
     } catch (caught) {
-      const detail = caught instanceof Error ? `${caught.name}: ${caught.message}\n${caught.stack ?? ""}` : String(caught)
+      const detail =
+        caught instanceof Error
+          ? `${caught.name}: ${caught.message}\n${caught.stack ?? ""}`
+          : String(caught)
       console.error("[transcription]", detail)
       setJobState("error")
       const message = caught instanceof Error ? caught.message : t.transcriptionFailed
       setError(message)
-      setToastMessage({
-        id: createId("toast"),
-        title: t.transcriptionFailed,
-        description: message,
-        kind: "error",
-      })
       updateQueueItem(selectedQueueId, { status: "error", error: message })
     }
   }
