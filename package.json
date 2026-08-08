@@ -16,7 +16,8 @@
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "build:wasm": "wasm-pack build audio-processor --target web --out-dir ../src/wasm/audio-processor"
+    "build:wasm": "wasm-pack build audio-processor --target web --out-dir ../src/wasm/audio-processor",
+    "release:check-rollback-floor": "node scripts/check-rollback-floor.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",
