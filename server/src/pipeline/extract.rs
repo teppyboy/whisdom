@@ -86,7 +86,9 @@ pub async fn extract_audio(
     };
 
     if !status.success() {
-        return Err(AppError::Internal("ffmpeg exited with non-zero status".into()));
+        return Err(AppError::Internal(
+            "ffmpeg exited with non-zero status".into(),
+        ));
     }
 
     Ok(())

@@ -25,7 +25,11 @@ pub struct AppState {
     pub model_registry: Arc<models::ModelRegistry>,
 }
 
-fn build_app(config: Config, queue: Queue, model_registry: Arc<models::ModelRegistry>) -> axum::Router {
+fn build_app(
+    config: Config,
+    queue: Queue,
+    model_registry: Arc<models::ModelRegistry>,
+) -> axum::Router {
     let multipart_body_limit = config.multipart_body_limit();
     let cors = {
         let mut cors = CorsLayer::new()
@@ -189,7 +193,11 @@ mod tests {
     #[tokio::test]
     async fn transcribe_rejects_unknown_model_with_bad_request() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
+        let app = build_app(
+            test_config(&temp_dir, 1),
+            Queue::new(),
+            test_model_registry(),
+        );
 
         let response = app
             .oneshot(multipart_request_with_model(16, "nonexistent-model"))
@@ -202,7 +210,11 @@ mod tests {
     #[tokio::test]
     async fn transcribe_accepts_audio_above_axum_default_limit() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 4), Queue::new(), test_model_registry());
+        let app = build_app(
+            test_config(&temp_dir, 4),
+            Queue::new(),
+            test_model_registry(),
+        );
 
         let response = app
             .oneshot(multipart_request(3 * 1024 * 1024, true))
@@ -215,7 +227,11 @@ mod tests {
     #[tokio::test]
     async fn transcribe_accepts_audio_at_configured_file_limit() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
+        let app = build_app(
+            test_config(&temp_dir, 1),
+            Queue::new(),
+            test_model_registry(),
+        );
 
         let response = app
             .oneshot(multipart_request(1024 * 1024, true))
@@ -228,7 +244,11 @@ mod tests {
     #[tokio::test]
     async fn transcribe_rejects_audio_above_configured_file_limit() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
+        let app = build_app(
+            test_config(&temp_dir, 1),
+            Queue::new(),
+            test_model_registry(),
+        );
 
         let response = app
             .oneshot(multipart_request(1024 * 1024 + 1, true))
@@ -241,7 +261,11 @@ mod tests {
     #[tokio::test]
     async fn transcribe_maps_parser_limit_to_payload_too_large() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
+        let app = build_app(
+            test_config(&temp_dir, 1),
+            Queue::new(),
+            test_model_registry(),
+        );
 
         let response = app
             .oneshot(multipart_request(2 * 1024 * 1024, true))
@@ -254,7 +278,11 @@ mod tests {
     #[tokio::test]
     async fn transcribe_reports_incomplete_multipart_as_bad_request() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
+        let app = build_app(
+            test_config(&temp_dir, 1),
+            Queue::new(),
+            test_model_registry(),
+        );
 
         let response = app
             .oneshot(multipart_request(16, false))
@@ -272,7 +300,11 @@ mod tests {
     #[tokio::test]
     async fn capabilities_includes_models_and_default_model_fields() {
         let temp_dir = tempfile::tempdir().expect("temp directory should be created");
-        let app = build_app(test_config(&temp_dir, 1), Queue::new(), test_model_registry());
+        let app = build_app(
+            test_config(&temp_dir, 1),
+            Queue::new(),
+            test_model_registry(),
+        );
 
         let response = app
             .oneshot(

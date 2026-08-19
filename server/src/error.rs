@@ -28,9 +28,10 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
-            AppError::PayloadTooLarge => {
-                (StatusCode::PAYLOAD_TOO_LARGE, "payload too large".to_string())
-            }
+            AppError::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload too large".to_string(),
+            ),
             AppError::Internal(msg) => {
                 tracing::error!(error = %msg, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, msg.clone())

@@ -64,7 +64,11 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useTheme } from "@/components/theme-provider"
-import { analyzeMediaFile, bytesToMb, formatDuration } from "@/features/media/preflight"
+import {
+  analyzeMediaFile,
+  bytesToMb,
+  formatDuration,
+} from "@/features/media/preflight"
 import {
   DEFAULT_SETTINGS,
   canRunModelLocally,
@@ -80,7 +84,10 @@ import {
 } from "@/features/transcription/language"
 import { formatProductError, type ProductError } from "@/app/copy"
 import { ProductErrorPanel } from "@/components/product/ProductErrorPanel"
-import { downloadTranscript, type ExportFormat } from "@/features/transcription/exports"
+import {
+  downloadTranscript,
+  type ExportFormat,
+} from "@/features/transcription/exports"
 import "@/features/storage/compatibility-api"
 import {
   deleteTranscript,
@@ -97,13 +104,22 @@ import {
   requestDriveAccess,
   uploadTranscriptMetadata,
 } from "@/features/google-drive/drive"
-import { clearModelCaches } from "@/features/storage/cleanup"
+import { clearAllModelCaches } from "@/features/storage/cleanup"
 import { cn } from "@/lib/utils"
 import { createId } from "@/lib/id"
-import { clearLocalWorkerState, convertWithFfmpeg, transcribeLocally } from "@/lib/transcription-worker-client"
+import {
+  clearLocalWorkerState,
+  convertWithFfmpeg,
+  transcribeLocally,
+} from "@/lib/transcription-worker-client"
 import { transcribeChunkWithServer } from "@/features/server-transcription/client"
+import { localHelperClient } from "@/features/local-helper/client"
 import { ServerTranscriptionApi } from "@/features/server-transcription/api"
-import type { ServerCapabilities, ServerJobPhase, ServerJobStatus } from "@/features/server-transcription/types"
+import type {
+  ServerCapabilities,
+  ServerJobPhase,
+  ServerJobStatus,
+} from "@/features/server-transcription/types"
 import type {
   AppSettings,
   JobState,
@@ -116,10 +132,31 @@ import type {
 } from "@/features/transcription/types"
 
 const MODES: Array<{ value: ProcessingMode; label: string; detail: string }> = [
-  { value: "local-webgpu", label: "Local WebGPU", detail: "Default, fastest private path" },
-  { value: "cloudflare-ai", label: "Manual server", detail: "Authorized users, free quota only" },
-  { value: "local-wasm", label: "Local WASM", detail: "Fallback for unsupported browsers" },
-  { value: "server", label: "Server (CPU)", detail: "Server-side whisper.cpp. Sign in required." },
+  {
+    value: "local-webgpu",
+    label: "Local WebGPU",
+    detail: "Default, fastest private path",
+  },
+  {
+    value: "cloudflare-ai",
+    label: "Manual server",
+    detail: "Authorized users, free quota only",
+  },
+  {
+    value: "local-wasm",
+    label: "Local WASM",
+    detail: "Fallback for unsupported browsers",
+  },
+  {
+    value: "local-helper",
+    label: "Local Helper",
+    detail: "Native Vulkan/CPU helper on this Windows device",
+  },
+  {
+    value: "server",
+    label: "Server (CPU)",
+    detail: "Server-side whisper.cpp. Sign in required.",
+  },
 ]
 
 const EXPORTS: ExportFormat[] = ["txt", "json", "srt", "vtt"]
@@ -180,12 +217,21 @@ const COPY = {
     readingMetadata: "Reading media metadata",
     reviewPlan: "Review downloads and processing plan",
     couldNotAnalyze: "Could not analyze media",
-    serverGuardrail: "Server mode is manual opt-in but chunk upload is not enabled yet. Use local mode for now.",
-    serverRequiresAuth: "Server transcription requires Google sign-in. Please connect your account to continue.",
+    serverGuardrail:
+      "Server mode is manual opt-in but chunk upload is not enabled yet. Use local mode for now.",
+    serverRequiresAuth:
+      "Server transcription requires Google sign-in. Please connect your account to continue.",
     serverUrl: "Enter video/audio URL",
-    serverModeDesc: "Server-side transcription via whisper.cpp. Sign in required.",
+    serverModeDesc:
+      "Server-side transcription via whisper.cpp. Sign in required.",
+    companionTitle: "Desktop Companion",
+    companionDescription:
+      "Choose a media file in the Windows dialog when transcription starts. The file stays on this device.",
+    companionModelDescription:
+      "Whisper Large v3 Turbo runs in the native Windows Companion with Vulkan/CPU acceleration. ~574 MB download.",
     serverUnavailable: "Transcription server unavailable",
-    serverModelsUnavailable: "Could not load available models from the server. Check server status and try again.",
+    serverModelsUnavailable:
+      "Could not load available models from the server. Check server status and try again.",
     quantizedLargeModel: (label: string) =>
       `${label} will run with q4 browser weights to avoid multi-gigabyte buffer allocation.`,
     largeModelNeedsWebGpu: (label: string) =>
@@ -207,19 +253,23 @@ const COPY = {
     convertingMedia: "Converting media",
     backHome: "Back to home",
     quickSetup: "Transcription setup",
-    quickSetupDescription: "Choose the model and spoken language before uploading or transcribing.",
+    quickSetupDescription:
+      "Choose the model and spoken language before uploading or transcribing.",
     settingsDescription: "Processing mode, storage, and advanced options.",
     interfaceLanguage: "Interface language",
     interfaceLanguageDescription: "Language used by the website UI.",
     transcription: "Transcription",
-    transcriptionDescription: "Model and language used for local transcription.",
+    transcriptionDescription:
+      "Model and language used for local transcription.",
     model: "Model",
     language: "Language",
     spokenLanguage: "Spoken language of the media.",
     searchLanguage: "Search language",
     noLanguages: "No languages found.",
-    englishOnlyWarning: "Current model is English-only. Pick a multilingual model for this language.",
-    englishOnlySidebar: "Current model is English-only. Switch to a multilingual Whisper model.",
+    englishOnlyWarning:
+      "Current model is English-only. Pick a multilingual model for this language.",
+    englishOnlySidebar:
+      "Current model is English-only. Switch to a multilingual Whisper model.",
     processing: "Processing",
     processingDescription: "Where transcription runs and how media is chunked.",
     mode: "Mode",
@@ -230,18 +280,24 @@ const COPY = {
     storage: "Storage",
     storageDescription: "Local persistence options.",
     persistMediaBlobs: "Persist media blobs",
-    persistMediaBlobsDescription: "Keep original media in this browser for quicker resume.",
+    persistMediaBlobsDescription:
+      "Keep original media in this browser for quicker resume.",
     storageCleanup: "Storage cleanup",
-    storageCleanupDescription: "Remove local browser data when you need disk space or a clean state.",
+    storageCleanupDescription:
+      "Remove local browser data when you need disk space or a clean state.",
     clearDownloadedModels: "Clear downloaded models",
-    clearDownloadedModelsDescription: "Deletes cached Whisper model files and resets loaded local workers.",
+    clearDownloadedModelsDescription:
+      "Deletes cached Whisper model files and resets loaded local workers.",
     clearSavedTranscripts: "Clear saved transcripts",
-    clearSavedTranscriptsDescription: "Deletes transcript records stored in this browser. Export anything important first.",
+    clearSavedTranscriptsDescription:
+      "Deletes transcript records stored in this browser. Export anything important first.",
     storageCleaned: "Storage cleaned",
-    modelCachesCleared: (count: number) => count > 0 ? `${count} model cache cleared.` : "No model cache was found.",
+    modelCachesCleared: (count: number) =>
+      count > 0 ? `${count} model cache cleared.` : "No model cache was found.",
     savedTranscriptsCleared: "Saved transcripts were deleted.",
     dropTitle: "Drop audio or video",
-    dropDescription: "Preflight checks the file before any model or ffmpeg download. Video is converted locally, then transcribed in chunks.",
+    dropDescription:
+      "Preflight checks the file before any model or ffmpeg download. Video is converted locally, then transcribed in chunks.",
     chooseFile: "Choose file",
     filesSelected: (count: number) => `${count} files selected`,
     selectedFile: (name: string) => `Selected: ${name}`,
@@ -261,7 +317,8 @@ const COPY = {
     duration: "Duration",
     size: "Size",
     chunks: "Chunks",
-    emptyPreflight: "Select a file to calculate duration, chunks, downloads, and mode.",
+    emptyPreflight:
+      "Select a file to calculate duration, chunks, downloads, and mode.",
     downloads: "Downloads",
     detailedLog: "Detailed log",
     showDetailedLog: "Show detailed log",
@@ -282,31 +339,43 @@ const COPY = {
       `${completed} transcripts saved. ${failed} files need attention.`,
     dismissNotification: "Dismiss notification",
     readyForOutput: "Ready for output",
-    emptyTranscript: "Your transcript appears here after local transcription. Export names include source, language, date, and time.",
+    emptyTranscript:
+      "Your transcript appears here after local transcription. Export names include source, language, date, and time.",
     recent: "Recent",
     emptyHistory: "No transcripts saved yet.",
     openTranscript: "Open transcript",
     removeTranscript: "Remove transcript",
-    downloadDescription: (notes: string, sizeMb: number) => `${notes} ~${sizeMb} MB download.`,
+    downloadDescription: (notes: string, sizeMb: number) =>
+      `${notes} ~${sizeMb} MB download.`,
     modelDescriptions: {
-      "onnx-community/whisper-base": "Default. Good English/Vietnamese balance for local browsers.",
-      "onnx-community/whisper-tiny": "Fastest multilingual local option. Lower accuracy.",
-      "onnx-community/whisper-small": "Better accuracy, heavier download and memory use.",
-      "onnx-community/whisper-medium_timestamped": "High-accuracy multilingual model with timestamp-focused weights for high-end devices.",
-      "onnx-community/whisper-large-v3-turbo": "Best high-end default: much higher accuracy than Small while staying faster than full Large v3.",
-      "onnx-community/whisper-large-v3-ONNX": "Maximum accuracy option. Very large download and long initialization; intended for high-end devices.",
-      "onnx-community/whisper-tiny.en": "English-only. Not suitable for Vietnamese.",
+      "onnx-community/whisper-base":
+        "Default. Good English/Vietnamese balance for local browsers.",
+      "onnx-community/whisper-tiny":
+        "Fastest multilingual local option. Lower accuracy.",
+      "onnx-community/whisper-small":
+        "Better accuracy, heavier download and memory use.",
+      "onnx-community/whisper-medium_timestamped":
+        "High-accuracy multilingual model with timestamp-focused weights for high-end devices.",
+      "onnx-community/whisper-large-v3-turbo":
+        "Best high-end default: much higher accuracy than Small while staying faster than full Large v3.",
+      "onnx-community/whisper-large-v3-ONNX":
+        "Maximum accuracy option. Very large download and long initialization; intended for high-end devices.",
+      "onnx-community/whisper-tiny.en":
+        "English-only. Not suitable for Vietnamese.",
     } satisfies Record<string, string>,
     modeDetails: {
       "local-webgpu": "Default, fastest private path",
       "cloudflare-ai": "Authorized users, free quota only",
       "local-wasm": "Fallback for unsupported browsers",
+      "local-helper":
+        "Optional native Vulkan/CPU companion on this Windows device.",
       server: "Server-side transcription via whisper.cpp. Sign in required.",
     } satisfies Record<ProcessingMode, string>,
     modeLabels: {
       "local-webgpu": "Local WebGPU",
       "cloudflare-ai": "Manual server",
       "local-wasm": "Local WASM",
+      "local-helper": "Desktop Companion",
       server: "Server (CPU)",
     } satisfies Record<ProcessingMode, string>,
     languageLabels: {
@@ -347,12 +416,20 @@ const COPY = {
     readingMetadata: "Đang đọc thông tin tệp",
     reviewPlan: "Kiểm tra kế hoạch xử lý",
     couldNotAnalyze: "Không thể phân tích tệp",
-    serverGuardrail: "Chế độ máy chủ chưa được bật. Vui lòng dùng xử lý cục bộ.",
-    serverRequiresAuth: "Cần đăng nhập Google để dùng máy chủ. Vui lòng kết nối tài khoản để tiếp tục.",
+    serverGuardrail:
+      "Chế độ máy chủ chưa được bật. Vui lòng dùng xử lý cục bộ.",
+    serverRequiresAuth:
+      "Cần đăng nhập Google để dùng máy chủ. Vui lòng kết nối tài khoản để tiếp tục.",
     serverUrl: "Nhập URL video/âm thanh",
     serverModeDesc: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
+    companionTitle: "Desktop Companion",
+    companionDescription:
+      "Chọn tệp media trong hộp thoại Windows khi bắt đầu chép lời. Tệp vẫn ở trên thiết bị này.",
+    companionModelDescription:
+      "Whisper Large v3 Turbo chạy trong Desktop Companion trên Windows với tăng tốc Vulkan/CPU. Tải xuống khoảng 574 MB.",
     serverUnavailable: "Máy chủ chuyển ngữ không khả dụng",
-    serverModelsUnavailable: "Không thể tải danh sách mô hình từ máy chủ. Kiểm tra trạng thái máy chủ và thử lại.",
+    serverModelsUnavailable:
+      "Không thể tải danh sách mô hình từ máy chủ. Kiểm tra trạng thái máy chủ và thử lại.",
     quantizedLargeModel: (label: string) =>
       `${label} sẽ dùng trọng số q4 trong trình duyệt để tránh cấp phát bộ nhớ nhiều GB.`,
     largeModelNeedsWebGpu: (label: string) =>
@@ -374,19 +451,23 @@ const COPY = {
     convertingMedia: "Đang chuyển đổi tệp",
     backHome: "Quay lại trang chính",
     quickSetup: "Thiết lập chép lời",
-    quickSetupDescription: "Chọn mô hình và ngôn ngữ nói trước khi tải tệp hoặc bắt đầu xử lý.",
+    quickSetupDescription:
+      "Chọn mô hình và ngôn ngữ nói trước khi tải tệp hoặc bắt đầu xử lý.",
     settingsDescription: "Chế độ xử lý, lưu trữ và tùy chọn nâng cao.",
     interfaceLanguage: "Ngôn ngữ giao diện",
     interfaceLanguageDescription: "Ngôn ngữ dùng cho website.",
     transcription: "Chép lời",
-    transcriptionDescription: "Chọn mô hình và ngôn ngữ cho quá trình xử lý trên thiết bị.",
+    transcriptionDescription:
+      "Chọn mô hình và ngôn ngữ cho quá trình xử lý trên thiết bị.",
     model: "Mô hình",
     language: "Ngôn ngữ",
     spokenLanguage: "Ngôn ngữ trong tệp âm thanh hoặc video.",
     searchLanguage: "Tìm ngôn ngữ",
     noLanguages: "Không tìm thấy ngôn ngữ phù hợp.",
-    englishOnlyWarning: "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
-    englishOnlySidebar: "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn một mô hình Whisper đa ngôn ngữ.",
+    englishOnlyWarning:
+      "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
+    englishOnlySidebar:
+      "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn một mô hình Whisper đa ngôn ngữ.",
     processing: "Xử lý",
     processingDescription: "Chọn nơi xử lý và cách chia tệp thành đoạn.",
     mode: "Chế độ",
@@ -397,18 +478,26 @@ const COPY = {
     storage: "Dữ liệu cục bộ",
     storageDescription: "Tùy chọn lưu dữ liệu trên thiết bị.",
     persistMediaBlobs: "Lưu tệp media",
-    persistMediaBlobsDescription: "Giữ tệp gốc trên thiết bị này để tiếp tục nhanh hơn.",
+    persistMediaBlobsDescription:
+      "Giữ tệp gốc trên thiết bị này để tiếp tục nhanh hơn.",
     storageCleanup: "Dọn dẹp dữ liệu",
-    storageCleanupDescription: "Xóa dữ liệu cục bộ khi cần thêm dung lượng hoặc muốn bắt đầu lại.",
+    storageCleanupDescription:
+      "Xóa dữ liệu cục bộ khi cần thêm dung lượng hoặc muốn bắt đầu lại.",
     clearDownloadedModels: "Xóa mô hình đã tải",
-    clearDownloadedModelsDescription: "Xóa các tệp mô hình Whisper đã lưu và đặt lại worker cục bộ.",
+    clearDownloadedModelsDescription:
+      "Xóa các tệp mô hình Whisper đã lưu và đặt lại worker cục bộ.",
     clearSavedTranscripts: "Xóa bản chép đã lưu",
-    clearSavedTranscriptsDescription: "Xóa các bản chép lưu trong trình duyệt này. Hãy xuất tệp quan trọng trước.",
+    clearSavedTranscriptsDescription:
+      "Xóa các bản chép lưu trong trình duyệt này. Hãy xuất tệp quan trọng trước.",
     storageCleaned: "Đã dọn dẹp dữ liệu",
-    modelCachesCleared: (count: number) => count > 0 ? `Đã xóa ${count} bộ nhớ đệm mô hình.` : "Không tìm thấy bộ nhớ đệm mô hình.",
+    modelCachesCleared: (count: number) =>
+      count > 0
+        ? `Đã xóa ${count} bộ nhớ đệm mô hình.`
+        : "Không tìm thấy bộ nhớ đệm mô hình.",
     savedTranscriptsCleared: "Đã xóa các bản chép đã lưu.",
     dropTitle: "Thả âm thanh hoặc video",
-    dropDescription: "Tệp được kiểm tra trước khi tải mô hình hoặc ffmpeg. Video sẽ được chuyển thành âm thanh trên thiết bị rồi xử lý theo đoạn.",
+    dropDescription:
+      "Tệp được kiểm tra trước khi tải mô hình hoặc ffmpeg. Video sẽ được chuyển thành âm thanh trên thiết bị rồi xử lý theo đoạn.",
     chooseFile: "Chọn tệp",
     filesSelected: (count: number) => `Đã chọn ${count} tệp`,
     selectedFile: (name: string) => `Đang chọn: ${name}`,
@@ -428,7 +517,8 @@ const COPY = {
     duration: "Thời lượng",
     size: "Dung lượng",
     chunks: "Đoạn",
-    emptyPreflight: "Chọn tệp để xem thời lượng, số đoạn, tài nguyên cần tải và chế độ xử lý.",
+    emptyPreflight:
+      "Chọn tệp để xem thời lượng, số đoạn, tài nguyên cần tải và chế độ xử lý.",
     downloads: "Cần tải",
     detailedLog: "Nhật ký chi tiết",
     showDetailedLog: "Hiện nhật ký chi tiết",
@@ -449,31 +539,44 @@ const COPY = {
       `Đã lưu ${completed} bản chép. ${failed} tệp cần kiểm tra lại.`,
     dismissNotification: "Đóng thông báo",
     readyForOutput: "Sẵn sàng xuất",
-    emptyTranscript: "Bản chép sẽ xuất hiện ở đây sau khi xử lý. Tên tệp xuất gồm nguồn, ngôn ngữ, ngày và giờ.",
+    emptyTranscript:
+      "Bản chép sẽ xuất hiện ở đây sau khi xử lý. Tên tệp xuất gồm nguồn, ngôn ngữ, ngày và giờ.",
     recent: "Gần đây",
     emptyHistory: "Chưa có bản chép nào.",
     openTranscript: "Mở bản chép",
     removeTranscript: "Xóa bản chép",
-    downloadDescription: (notes: string, sizeMb: number) => `${notes} Khoảng ${sizeMb} MB.`,
+    downloadDescription: (notes: string, sizeMb: number) =>
+      `${notes} Khoảng ${sizeMb} MB.`,
     modelDescriptions: {
-      "onnx-community/whisper-base": "Mặc định. Cân bằng tốt giữa tốc độ và độ chính xác cho tiếng Anh/tiếng Việt.",
-      "onnx-community/whisper-tiny": "Nhanh nhất trong các mô hình đa ngôn ngữ. Độ chính xác thấp hơn.",
-      "onnx-community/whisper-small": "Độ chính xác cao hơn, cần tải xuống và bộ nhớ nhiều hơn.",
-      "onnx-community/whisper-medium_timestamped": "Mô hình đa ngôn ngữ có độ chính xác cao, tối ưu cho mốc thời gian và thiết bị mạnh.",
-      "onnx-community/whisper-large-v3-turbo": "Lựa chọn tốt cho thiết bị mạnh: chính xác hơn Small đáng kể nhưng nhanh hơn Large v3 đầy đủ.",
-      "onnx-community/whisper-large-v3-ONNX": "Tùy chọn chính xác tối đa. Tệp tải xuống rất lớn và khởi tạo lâu; dành cho thiết bị cao cấp.",
-      "onnx-community/whisper-tiny.en": "Chỉ hỗ trợ tiếng Anh, không phù hợp cho tiếng Việt.",
+      "onnx-community/whisper-base":
+        "Mặc định. Cân bằng tốt giữa tốc độ và độ chính xác cho tiếng Anh/tiếng Việt.",
+      "onnx-community/whisper-tiny":
+        "Nhanh nhất trong các mô hình đa ngôn ngữ. Độ chính xác thấp hơn.",
+      "onnx-community/whisper-small":
+        "Độ chính xác cao hơn, cần tải xuống và bộ nhớ nhiều hơn.",
+      "onnx-community/whisper-medium_timestamped":
+        "Mô hình đa ngôn ngữ có độ chính xác cao, tối ưu cho mốc thời gian và thiết bị mạnh.",
+      "onnx-community/whisper-large-v3-turbo":
+        "Lựa chọn tốt cho thiết bị mạnh: chính xác hơn Small đáng kể nhưng nhanh hơn Large v3 đầy đủ.",
+      "onnx-community/whisper-large-v3-ONNX":
+        "Tùy chọn chính xác tối đa. Tệp tải xuống rất lớn và khởi tạo lâu; dành cho thiết bị cao cấp.",
+      "onnx-community/whisper-tiny.en":
+        "Chỉ hỗ trợ tiếng Anh, không phù hợp cho tiếng Việt.",
     } satisfies Record<string, string>,
     modeDetails: {
       "local-webgpu": "Xử lý cục bộ nhanh nhất khi trình duyệt hỗ trợ.",
-      "cloudflare-ai": "Dành cho tài khoản được cấp quyền, chỉ dùng hạn mức miễn phí.",
+      "cloudflare-ai":
+        "Dành cho tài khoản được cấp quyền, chỉ dùng hạn mức miễn phí.",
       "local-wasm": "Dự phòng khi WebGPU không khả dụng.",
+      "local-helper":
+        "Companion Vulkan/CPU tùy chọn trên thiết bị Windows này.",
       server: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
     } satisfies Record<ProcessingMode, string>,
     modeLabels: {
       "local-webgpu": "Local WebGPU",
       "cloudflare-ai": "Máy chủ",
       "local-wasm": "Local WASM",
+      "local-helper": "Desktop Companion",
       server: "Máy chủ (CPU)",
     } satisfies Record<ProcessingMode, string>,
     languageLabels: {
@@ -539,7 +642,7 @@ const SERVER_MODEL_STATIC_FALLBACK: Record<string, string> = {
 
 function resolveServerModelLabel(
   modelId: string,
-  capabilities: ServerCapabilitiesState,
+  capabilities: ServerCapabilitiesState
 ): string {
   if (typeof capabilities === "object" && capabilities?.models) {
     const found = capabilities.models.find((m) => m.id === modelId)
@@ -607,7 +710,9 @@ export function App() {
   const t = COPY[settings.uiLanguage]
   const [file, setFile] = React.useState<File | null>(null)
   const [queue, setQueue] = React.useState<QueuedFile[]>([])
-  const [selectedQueueId, setSelectedQueueId] = React.useState<string | null>(null)
+  const [selectedQueueId, setSelectedQueueId] = React.useState<string | null>(
+    null
+  )
   const [analysis, setAnalysis] = React.useState<MediaAnalysis | null>(null)
   const [jobState, setJobState] = React.useState<JobState>("idle")
   const [progress, setProgress] = React.useState<TranscriptionProgress>({
@@ -616,25 +721,38 @@ export function App() {
     progress: 0,
   })
   const [progressLog, setProgressLog] = React.useState<ProgressLogEntry[]>([])
-  const [transcript, setTranscript] = React.useState<TranscriptDocument | null>(null)
+  const [transcript, setTranscript] = React.useState<TranscriptDocument | null>(
+    null
+  )
   const [isResultOpen, setIsResultOpen] = React.useState(false)
-  const [toastMessage, setToastMessage] = React.useState<ToastMessage | null>(null)
+  const [toastMessage, setToastMessage] = React.useState<ToastMessage | null>(
+    null
+  )
   const [history, setHistory] = React.useState<TranscriptDocument[]>([])
   const [error, setError] = React.useState<string | null>(null)
   const [errorDialogOpen, setErrorDialogOpen] = React.useState(false)
-  const [fatalStorageError, setFatalStorageError] = React.useState<ProductError | null>(null)
-  const [driveStatus, setDriveStatus] = React.useState<DriveStatus>({ type: "idle" })
-  const [driveAccessToken, setDriveAccessToken] = React.useState<string | null>(null)
+  const [fatalStorageError, setFatalStorageError] =
+    React.useState<ProductError | null>(null)
+  const [driveStatus, setDriveStatus] = React.useState<DriveStatus>({
+    type: "idle",
+  })
+  const [driveAccessToken, setDriveAccessToken] = React.useState<string | null>(
+    null
+  )
   const [urlInput, setUrlInput] = React.useState("")
   const serverApiRef = React.useRef<ServerTranscriptionApi | null>(null)
-  const [serverCapabilities, setServerCapabilities] = React.useState<ServerCapabilitiesState>(null)
-  const [serverCapabilitiesKey, setServerCapabilitiesKey] = React.useState<string | null>(null)
+  const [serverCapabilities, setServerCapabilities] =
+    React.useState<ServerCapabilitiesState>(null)
+  const [serverCapabilitiesKey, setServerCapabilitiesKey] = React.useState<
+    string | null
+  >(null)
   const settingsRef = React.useRef(settings)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const driveStatusText = getDriveStatusText(driveStatus, t)
   const driveStatusIcon = getDriveStatusIcon(driveStatus)
   const serverUrl = import.meta.env.VITE_SERVER_URL as string | undefined
-  const serverAuthIdentity = driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : "signed-out")
+  const serverAuthIdentity =
+    driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : "signed-out")
   const serverRequestKey = `${serverUrl ?? "missing"}\0${serverAuthIdentity}`
   const activeServerCapabilities: ServerCapabilitiesState =
     settings.mode === "server" && serverCapabilitiesKey !== serverRequestKey
@@ -644,7 +762,10 @@ export function App() {
   React.useEffect(() => {
     async function hydrate() {
       try {
-        const [storedSettings, storedHistory] = await Promise.all([loadSettings(), listTranscripts()])
+        const [storedSettings, storedHistory] = await Promise.all([
+          loadSettings(),
+          listTranscripts(),
+        ])
         settingsRef.current = storedSettings
         setSettings(storedSettings)
         setHistory(storedHistory)
@@ -688,11 +809,18 @@ export function App() {
         cancelled = true
       }
     }
-    if (serverCapabilitiesKey === serverRequestKey && typeof serverCapabilities === "object" && serverCapabilities) {
+    if (
+      serverCapabilitiesKey === serverRequestKey &&
+      typeof serverCapabilities === "object" &&
+      serverCapabilities
+    ) {
       return
     }
     let cancelled = false
-    const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : null))
+    const api = new ServerTranscriptionApi(
+      serverUrl,
+      () => driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : null)
+    )
     serverApiRef.current = api
     queueMicrotask(() => {
       if (!cancelled) {
@@ -703,7 +831,10 @@ export function App() {
     void api.getCapabilities().then((cap) => {
       if (cancelled) return
       const models = cap?.models ?? []
-      const hasValidDefault = Boolean(cap?.default_model && models.some((model) => model.id === cap.default_model))
+      const hasValidDefault = Boolean(
+        cap?.default_model &&
+        models.some((model) => model.id === cap.default_model)
+      )
       if (!cap?.available || models.length === 0 || !hasValidDefault) {
         setServerCapabilitiesKey(serverRequestKey)
         setServerCapabilities("error")
@@ -725,7 +856,11 @@ export function App() {
   }, [settings.mode, driveAccessToken])
 
   React.useEffect(() => {
-    if (typeof activeServerCapabilities !== "object" || !activeServerCapabilities?.models) return
+    if (
+      typeof activeServerCapabilities !== "object" ||
+      !activeServerCapabilities?.models
+    )
+      return
     const validIds = new Set(activeServerCapabilities.models.map((m) => m.id))
     if (!settings.serverModelId || !validIds.has(settings.serverModelId)) {
       if (activeServerCapabilities.default_model) {
@@ -737,18 +872,27 @@ export function App() {
 
   const model = findModel(settings.modelId)
   const selectedServerModel =
-    typeof activeServerCapabilities === "object" && activeServerCapabilities?.models
-      ? activeServerCapabilities.models.find((item) => item.id === settings.serverModelId)
+    typeof activeServerCapabilities === "object" &&
+    activeServerCapabilities?.models
+      ? activeServerCapabilities.models.find(
+          (item) => item.id === settings.serverModelId
+        )
       : undefined
   const serverSelectionReady = Boolean(selectedServerModel)
   const canStart =
-    file &&
-    analysis &&
+    !isBusy(jobState) &&
+    (settings.mode === "local-helper" ||
+      (Boolean(file) &&
+        Boolean(analysis) &&
+        (settings.mode !== "server" || serverSelectionReady)))
+  const canStartAll =
+    settings.mode !== "local-helper" &&
+    queue.length > 1 &&
     !isBusy(jobState) &&
     (settings.mode !== "server" || serverSelectionReady)
-  const canStartAll =
-    queue.length > 1 && !isBusy(jobState) && (settings.mode !== "server" || serverSelectionReady)
-  const isEnglishOnlyMismatch = isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) && !model.multilingual
+  const isEnglishOnlyMismatch =
+    isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) &&
+    !model.multilingual
 
   function recordProgress(nextProgress: TranscriptionProgress) {
     const localizedProgress: TranscriptionProgress = {
@@ -815,7 +959,11 @@ export function App() {
     setError(null)
     setProgressLog([])
     setJobState("analyzing")
-    recordProgress({ phase: "analyzing", message: t.readingMetadata, progress: 0.08 })
+    recordProgress({
+      phase: "analyzing",
+      message: t.readingMetadata,
+      progress: 0.08,
+    })
 
     try {
       const result = await analyzeMediaFile(nextFile, nextSettings)
@@ -828,7 +976,8 @@ export function App() {
       })
     } catch (caught) {
       setJobState("error")
-      const message = caught instanceof Error ? caught.message : t.couldNotAnalyze
+      const message =
+        caught instanceof Error ? caught.message : t.couldNotAnalyze
       setError(message)
       setToastMessage({
         id: createId("toast"),
@@ -854,7 +1003,12 @@ export function App() {
     setQueue((current) => [...current, ...addedQueue])
 
     if (shouldAnalyzeFirstAddedFile) {
-      await analyzeSelectedFile(addedQueue[0].file, settingsRef.current, true, addedQueue[0].id)
+      await analyzeSelectedFile(
+        addedQueue[0].file,
+        settingsRef.current,
+        true,
+        addedQueue[0].id
+      )
     }
   }
 
@@ -867,10 +1021,16 @@ export function App() {
     }
 
     const removedIndex = queue.findIndex((item) => item.id === id)
-    const nextSelected = nextQueue[Math.min(Math.max(removedIndex, 0), nextQueue.length - 1)]
+    const nextSelected =
+      nextQueue[Math.min(Math.max(removedIndex, 0), nextQueue.length - 1)]
 
     if (nextSelected) {
-      await analyzeSelectedFile(nextSelected.file, settingsRef.current, false, nextSelected.id)
+      await analyzeSelectedFile(
+        nextSelected.file,
+        settingsRef.current,
+        false,
+        nextSelected.id
+      )
       return
     }
 
@@ -885,17 +1045,28 @@ export function App() {
 
   function mapServerPhase(phase: ServerJobPhase): JobState {
     switch (phase) {
-      case "queued": return "idle"
-      case "downloading": return "downloading-assets"
-      case "extracting": return "preparing-media"
-      case "transcribing": return "transcribing"
-      case "complete": return "complete"
-      case "error": return "error"
-      case "cancelled": return "cancelled"
+      case "queued":
+        return "idle"
+      case "downloading":
+        return "downloading-assets"
+      case "extracting":
+        return "preparing-media"
+      case "transcribing":
+        return "transcribing"
+      case "complete":
+        return "complete"
+      case "error":
+        return "error"
+      case "cancelled":
+        return "cancelled"
     }
   }
 
-  async function transcribeFile(targetFile: File, queueId: string | null, runSettings: AppSettings) {
+  async function transcribeFile(
+    targetFile: File,
+    queueId: string | null,
+    runSettings: AppSettings
+  ) {
     const runModel = findModel(runSettings.modelId)
 
     setFile(targetFile)
@@ -904,7 +1075,11 @@ export function App() {
     setError(null)
     setProgressLog([])
     setJobState("analyzing")
-    recordProgress({ phase: "analyzing", message: t.readingMetadata, progress: 0.08 })
+    recordProgress({
+      phase: "analyzing",
+      message: t.readingMetadata,
+      progress: 0.08,
+    })
 
     if (runSettings.mode === "cloudflare-ai") {
       if (!driveAccessToken && !import.meta.env.DEV) {
@@ -931,20 +1106,31 @@ export function App() {
       }
 
       setJobState("chunking")
-      recordProgress({ phase: "chunking", message: t.readingMetadata, progress: 0.4 })
+      recordProgress({
+        phase: "chunking",
+        message: t.readingMetadata,
+        progress: 0.4,
+      })
       const wavBytes = new Uint8Array(await audioBlob.arrayBuffer())
-      const { default: initAP, split_wav_chunks } = (await import(
-        "./wasm/audio-processor/audio_processor.js"
-      )) as unknown as {
-        default: () => Promise<void>
-        split_wav_chunks: (data: Uint8Array, size: number) => Iterable<unknown>
-      }
+      const { default: initAP, split_wav_chunks } =
+        (await import("./wasm/audio-processor/audio_processor.js")) as unknown as {
+          default: () => Promise<void>
+          split_wav_chunks: (
+            data: Uint8Array,
+            size: number
+          ) => Iterable<unknown>
+        }
       await initAP()
       const rawChunks = split_wav_chunks(wavBytes, 9 * 1024 * 1024)
-      const chunks = Array.from(rawChunks).map((c) => new Uint8Array(c as ArrayBuffer))
+      const chunks = Array.from(rawChunks).map(
+        (c) => new Uint8Array(c as ArrayBuffer)
+      )
 
       setJobState("transcribing")
-      const cfLanguage = resolveTranscriptionLanguage(runSettings.language, runSettings.uiLanguage)
+      const cfLanguage = resolveTranscriptionLanguage(
+        runSettings.language,
+        runSettings.uiLanguage
+      )
       const texts: string[] = []
       for (let i = 0; i < chunks.length; i++) {
         recordProgress({
@@ -958,7 +1144,11 @@ export function App() {
           },
         })
         const audio = new Blob([chunks[i]], { type: "audio/wav" })
-        const result = await transcribeChunkWithServer({ audio, language: cfLanguage, accessToken: driveAccessToken ?? "dev-mode" })
+        const result = await transcribeChunkWithServer({
+          audio,
+          language: cfLanguage,
+          accessToken: driveAccessToken ?? "dev-mode",
+        })
         texts.push(result.text)
       }
 
@@ -977,12 +1167,20 @@ export function App() {
       }
 
       setJobState("saving")
-      recordProgress({ phase: "saving", message: t.transcriptReady, progress: 0.95 })
+      recordProgress({
+        phase: "saving",
+        message: t.transcriptReady,
+        progress: 0.95,
+      })
       await saveTranscript(doc)
       updateQueueItem(queueId, { status: "complete", transcriptId: doc.id })
       setHistory(await listTranscripts())
       setJobState("complete")
-      recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+      recordProgress({
+        phase: "complete",
+        message: t.transcriptReady,
+        progress: 1,
+      })
       return doc
     }
 
@@ -996,39 +1194,58 @@ export function App() {
       const serverModelId = runSettings.serverModelId
       const modelIsAvailable =
         typeof activeServerCapabilities === "object" &&
-        activeServerCapabilities?.models?.some((item) => item.id === serverModelId)
+        activeServerCapabilities?.models?.some(
+          (item) => item.id === serverModelId
+        )
       if (!serverModelId || !modelIsAvailable) {
         throw new Error(t.serverModelsUnavailable)
       }
 
-      const api = new ServerTranscriptionApi(serverUrl, () => driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : null))
+      const api = new ServerTranscriptionApi(
+        serverUrl,
+        () => driveAccessToken ?? (import.meta.env.DEV ? "dev-mode" : null)
+      )
 
       if (urlInput.trim()) {
         setJobState("downloading-assets")
-        recordProgress({ phase: "downloading-assets", message: "Submitting URL...", progress: 0.1 })
+        recordProgress({
+          phase: "downloading-assets",
+          message: "Submitting URL...",
+          progress: 0.1,
+        })
         const jobId = await api.submitJob(
           { type: "url", url: urlInput.trim() },
           runSettings.language,
-          serverModelId,
+          serverModelId
         )
 
         return new Promise<TranscriptDocument>((resolve, reject) => {
           api.subscribeProgress(jobId, (status: ServerJobStatus) => {
             const mapped = mapServerPhase(status.phase)
-            recordProgress({ phase: mapped, message: status.message ?? "", progress: status.progress ?? 0 })
+            recordProgress({
+              phase: mapped,
+              message: status.message ?? "",
+              progress: status.progress ?? 0,
+            })
 
             if (status.phase === "complete" && status.segments) {
               const now = new Date().toISOString()
               const doc: TranscriptDocument = {
                 id: createId("tr"),
-                title: urlInput.trim().split("/").pop()?.replace(/[?#].*$/, "") || t.untitledTranscript,
+                title:
+                  urlInput
+                    .trim()
+                    .split("/")
+                    .pop()
+                    ?.replace(/[?#].*$/, "") || t.untitledTranscript,
                 sourceName: urlInput.trim(),
                 language: runSettings.language,
                 modelId: serverModelId,
                 mode: "server",
                 createdAt: now,
                 updatedAt: now,
-                text: status.text ?? status.segments.map(s => s.text).join(" "),
+                text:
+                  status.text ?? status.segments.map((s) => s.text).join(" "),
                 segments: status.segments.map((s) => ({
                   id: createId("seg"),
                   start: s.start,
@@ -1038,10 +1255,17 @@ export function App() {
               }
               setJobState("saving")
               void saveTranscript(doc).then(() => {
-                updateQueueItem(queueId, { status: "complete", transcriptId: doc.id })
+                updateQueueItem(queueId, {
+                  status: "complete",
+                  transcriptId: doc.id,
+                })
                 void listTranscripts().then(setHistory)
                 setJobState("complete")
-                recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+                recordProgress({
+                  phase: "complete",
+                  message: t.transcriptReady,
+                  progress: 1,
+                })
                 resolve(doc)
               })
             } else if (status.phase === "error") {
@@ -1054,30 +1278,39 @@ export function App() {
       }
 
       setJobState("preparing-media")
-      recordProgress({ phase: "preparing-media", message: "Uploading...", progress: 0.1 })
+      recordProgress({
+        phase: "preparing-media",
+        message: "Uploading...",
+        progress: 0.1,
+      })
       const jobId = await api.submitJob(
         { type: "file", file: targetFile, filename: targetFile.name },
         runSettings.language,
-        serverModelId,
+        serverModelId
       )
 
       return new Promise<TranscriptDocument>((resolve, reject) => {
         api.subscribeProgress(jobId, (status: ServerJobStatus) => {
           const mapped = mapServerPhase(status.phase)
-          recordProgress({ phase: mapped, message: status.message ?? "", progress: status.progress ?? 0 })
+          recordProgress({
+            phase: mapped,
+            message: status.message ?? "",
+            progress: status.progress ?? 0,
+          })
 
           if (status.phase === "complete" && status.segments) {
             const now = new Date().toISOString()
             const doc: TranscriptDocument = {
               id: createId("tr"),
-              title: targetFile.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
+              title:
+                targetFile.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
               sourceName: targetFile.name,
               language: runSettings.language,
               modelId: serverModelId,
               mode: "server",
               createdAt: now,
               updatedAt: now,
-              text: status.text ?? status.segments.map(s => s.text).join(" "),
+              text: status.text ?? status.segments.map((s) => s.text).join(" "),
               segments: status.segments.map((s) => ({
                 id: createId("seg"),
                 start: s.start,
@@ -1087,10 +1320,17 @@ export function App() {
             }
             setJobState("saving")
             void saveTranscript(doc).then(() => {
-              updateQueueItem(queueId, { status: "complete", transcriptId: doc.id })
+              updateQueueItem(queueId, {
+                status: "complete",
+                transcriptId: doc.id,
+              })
               void listTranscripts().then(setHistory)
               setJobState("complete")
-              recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+              recordProgress({
+                phase: "complete",
+                message: t.transcriptReady,
+                progress: 1,
+              })
               resolve(doc)
             })
           } else if (status.phase === "error") {
@@ -1106,7 +1346,10 @@ export function App() {
 
     const freshAnalysis = await analyzeMediaFile(targetFile, runSettings)
     setAnalysis(freshAnalysis)
-    const effectiveMode = freshAnalysis.recommendedMode === "local-webgpu" ? "local-webgpu" : "local-wasm"
+    const effectiveMode =
+      freshAnalysis.recommendedMode === "local-webgpu"
+        ? "local-webgpu"
+        : "local-wasm"
     const device = effectiveMode === "local-webgpu" ? "webgpu" : "wasm"
 
     if (!canRunModelLocally(runModel, device)) {
@@ -1130,7 +1373,10 @@ export function App() {
     }
 
     setJobState("transcribing")
-    const effectiveLanguage = resolveTranscriptionLanguage(runSettings.language, runSettings.uiLanguage)
+    const effectiveLanguage = resolveTranscriptionLanguage(
+      runSettings.language,
+      runSettings.uiLanguage
+    )
     const result = await transcribeLocally({
       file: input,
       modelId: runSettings.modelId,
@@ -1184,17 +1430,145 @@ export function App() {
     updateQueueItem(queueId, { status: "complete", transcriptId: document.id })
     setHistory(await listTranscripts())
     setJobState("complete")
-    recordProgress({ phase: "complete", message: t.transcriptReady, progress: 1 })
+    recordProgress({
+      phase: "complete",
+      message: t.transcriptReady,
+      progress: 1,
+    })
     return document
   }
 
+  async function transcribeWithCompanion(
+    runSettings: AppSettings
+  ): Promise<TranscriptDocument | null> {
+    setError(null)
+    setTranscript(null)
+    setProgressLog([])
+    setJobState("downloading-assets")
+    recordProgress({
+      phase: "downloading-assets",
+      message: t.downloadingModelAssets,
+      progress: 0.1,
+    })
+    await localHelperClient.connect()
+    const submission = await localHelperClient.pickAndSubmit(
+      resolveTranscriptionLanguage(
+        runSettings.language,
+        runSettings.uiLanguage
+      ),
+      "ggml-large-v3-turbo-q5_0"
+    )
+    if (!submission) {
+      setJobState("idle")
+      recordProgress({ phase: "idle", message: t.waiting, progress: 0 })
+      return null
+    }
+
+    const language = resolveTranscriptionLanguage(
+      runSettings.language,
+      runSettings.uiLanguage
+    )
+    return new Promise<TranscriptDocument>((resolve, reject) => {
+      let settled = false
+      const connection = localHelperClient.subscribeProgress(
+        submission.jobId,
+        (status) => {
+          const mapped = mapServerPhase(status.phase)
+          recordProgress({
+            phase: mapped,
+            message: status.message ?? t.transcribingAudio,
+            progress: status.progress ?? 0,
+          })
+          setJobState(mapped)
+          if (status.phase === "complete" && status.segments) {
+            const now = new Date().toISOString()
+            const document: TranscriptDocument = {
+              id: createId("transcript"),
+              title:
+                submission.filename.replace(/\.[^.]+$/, "") ||
+                t.untitledTranscript,
+              sourceName: submission.filename,
+              language,
+              modelId: "ggml-large-v3-turbo-q5_0",
+              mode: "local-helper",
+              createdAt: now,
+              updatedAt: now,
+              text:
+                status.text ??
+                status.segments.map((segment) => segment.text).join(" "),
+              segments: status.segments.map((segment) => ({
+                ...segment,
+                id: createId("segment"),
+              })),
+            }
+            if (settled) return
+            settled = true
+            connection.unsubscribe()
+            setJobState("saving")
+            void saveTranscript(document)
+              .then(async () => {
+                setHistory(await listTranscripts())
+                setJobState("complete")
+                recordProgress({
+                  phase: "complete",
+                  message: t.transcriptReady,
+                  progress: 1,
+                })
+                resolve(document)
+              })
+              .catch(reject)
+          } else if (
+            status.phase === "error" ||
+            status.phase === "cancelled"
+          ) {
+            if (settled) return
+            settled = true
+            connection.unsubscribe()
+            reject(new Error(status.error ?? "Transcription cancelled"))
+          }
+        },
+        (error) => {
+          if (settled) return
+          settled = true
+          connection.unsubscribe()
+          reject(error)
+        }
+      )
+    })
+  }
+
   async function startTranscription() {
+    if (settingsRef.current.mode === "local-helper") {
+      try {
+        const document = await transcribeWithCompanion(settingsRef.current)
+        if (document) {
+          setTranscript(document)
+          setIsResultOpen(true)
+        }
+      } catch (caught) {
+        const detail =
+          caught instanceof Error
+            ? `${caught.name}: ${caught.message}\n${caught.stack ?? ""}`
+            : String(caught)
+        console.error("[transcription]", detail)
+        setJobState("error")
+        const message =
+          caught instanceof Error ? caught.message : t.transcriptionFailed
+        setError(message)
+      }
+      return
+    }
+
     if (!file || !analysis) {
       return
     }
 
     try {
-      const document = await transcribeFile(file, selectedQueueId, settingsRef.current)
+      const document = await transcribeFile(
+        file,
+        selectedQueueId,
+        settingsRef.current
+      )
       setTranscript(document)
       setIsResultOpen(true)
     } catch (caught) {
@@ -1204,7 +1578,8 @@ export function App() {
           : String(caught)
       console.error("[transcription]", detail)
       setJobState("error")
-      const message = caught instanceof Error ? caught.message : t.transcriptionFailed
+      const message =
+        caught instanceof Error ? caught.message : t.transcriptionFailed
       setError(message)
       updateQueueItem(selectedQueueId, { status: "error", error: message })
     }
@@ -1212,7 +1587,18 @@ export function App() {
 
   async function startBatchTranscription() {
     const runSettings = settingsRef.current
-    const queueSnapshot = queue.length > 0 ? queue : file ? [{ id: selectedQueueId ?? createId("file"), file, status: "pending" as const }] : []
+    const queueSnapshot =
+      queue.length > 0
+        ? queue
+        : file
+          ? [
+              {
+                id: selectedQueueId ?? createId("file"),
+                file,
+                status: "pending" as const,
+              },
+            ]
+          : []
     const completed: TranscriptDocument[] = []
     const failures: string[] = []
 
@@ -1223,7 +1609,8 @@ export function App() {
         const document = await transcribeFile(item.file, item.id, runSettings)
         completed.push(document)
       } catch (caught) {
-        const message = caught instanceof Error ? caught.message : t.transcriptionFailed
+        const message =
+          caught instanceof Error ? caught.message : t.transcriptionFailed
         failures.push(`${item.file.name}: ${message}`)
         updateQueueItem(item.id, { status: "error", error: message })
       }
@@ -1290,15 +1677,22 @@ export function App() {
   async function clearDownloadedModels() {
     try {
       clearLocalWorkerState()
-      const deletedCount = await clearModelCaches()
+      const cacheResult = await clearAllModelCaches(
+        localHelperClient.hasPairing()
+          ? () => localHelperClient.clearCache()
+          : undefined
+      )
 
       setToastMessage({
         id: createId("toast"),
         title: t.storageCleaned,
-        description: t.modelCachesCleared(deletedCount),
+        description: cacheResult.helperError
+          ? `${t.modelCachesCleared(cacheResult.browserDeleted)} Helper cache: ${cacheResult.helperError}`
+          : t.modelCachesCleared(cacheResult.browserDeleted),
       })
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : t.transcriptionFailed
+      const message =
+        caught instanceof Error ? caught.message : t.transcriptionFailed
       setError(message)
       setToastMessage({
         id: createId("toast"),
@@ -1338,7 +1732,10 @@ export function App() {
     setHistory(await listTranscripts())
   }
 
-  function updateSetting<T extends keyof AppSettings>(key: T, value: AppSettings[T]) {
+  function updateSetting<T extends keyof AppSettings>(
+    key: T,
+    value: AppSettings[T]
+  ) {
     const nextSettings = { ...settings, [key]: value }
 
     settingsRef.current = nextSettings
@@ -1350,13 +1747,34 @@ export function App() {
   }
 
   if (fatalStorageError) {
-    const fatalStorageCopy = formatProductError(settings.uiLanguage, fatalStorageError)
+    const fatalStorageCopy = formatProductError(
+      settings.uiLanguage,
+      fatalStorageError
+    )
     return (
       <main className="min-h-svh bg-background px-4 py-16 text-foreground">
         <div className="mx-auto max-w-xl">
-          <div className="mb-6 flex gap-2" role="group" aria-label="Interface language">
-            <Button variant="outline" onClick={() => setSettings((current) => ({ ...current, uiLanguage: "en" }))}>English</Button>
-            <Button variant="outline" onClick={() => setSettings((current) => ({ ...current, uiLanguage: "vi" }))}>Tiếng Việt</Button>
+          <div
+            className="mb-6 flex gap-2"
+            role="group"
+            aria-label="Interface language"
+          >
+            <Button
+              variant="outline"
+              onClick={() =>
+                setSettings((current) => ({ ...current, uiLanguage: "en" }))
+              }
+            >
+              English
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() =>
+                setSettings((current) => ({ ...current, uiLanguage: "vi" }))
+              }
+            >
+              Tiếng Việt
+            </Button>
           </div>
           <ProductErrorPanel
             language={settings.uiLanguage}
@@ -1367,15 +1785,21 @@ export function App() {
             <DialogContent className="max-w-lg border-destructive/30">
               <DialogHeader>
                 <DialogTitle>{fatalStorageCopy.title}</DialogTitle>
-                <DialogDescription>{fatalStorageCopy.message}</DialogDescription>
+                <DialogDescription>
+                  {fatalStorageCopy.message}
+                </DialogDescription>
               </DialogHeader>
               <div className="max-h-80 overflow-auto rounded-md border bg-muted/30 p-4">
-                <pre className="whitespace-pre-wrap break-words font-mono text-sm text-foreground">
-                  {JSON.stringify({
-                    occurrenceId: fatalStorageError.occurrenceId,
-                    code: fatalStorageError.code,
-                    params: fatalStorageError.params,
-                  }, null, 2)}
+                <pre className="font-mono text-sm break-words whitespace-pre-wrap text-foreground">
+                  {JSON.stringify(
+                    {
+                      occurrenceId: fatalStorageError.occurrenceId,
+                      code: fatalStorageError.code,
+                      params: fatalStorageError.params,
+                    },
+                    null,
+                    2
+                  )}
                 </pre>
               </div>
               <DialogFooter>
@@ -1391,7 +1815,10 @@ export function App() {
   }
 
   return (
-    <main className="min-h-svh bg-background text-foreground" data-testid="compatibility-product-ready">
+    <main
+      className="min-h-svh bg-background text-foreground"
+      data-testid="compatibility-product-ready"
+    >
       <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
           <button
@@ -1412,7 +1839,12 @@ export function App() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="rounded-full" aria-label={t.accountMenu}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full"
+                aria-label={t.accountMenu}
+              >
                 <Avatar className="size-8 border">
                   <AvatarFallback>
                     <User className="size-4 text-muted-foreground" />
@@ -1430,7 +1862,9 @@ export function App() {
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <div className="px-2 py-1.5">
-                <div className="mb-2 text-xs text-muted-foreground">{t.interfaceLanguage}</div>
+                <div className="mb-2 text-xs text-muted-foreground">
+                  {t.interfaceLanguage}
+                </div>
                 <div
                   className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"
                   role="group"
@@ -1478,7 +1912,9 @@ export function App() {
                   aria-label={t.toggleTheme}
                   size="sm"
                   checked={resolvedTheme === "dark"}
-                  onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
+                  onCheckedChange={(checked) =>
+                    setTheme(checked ? "dark" : "light")
+                  }
                 />
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -1490,7 +1926,7 @@ export function App() {
         {view === "settings" ? (
           <div
             key="settings"
-            className="animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out"
+            className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-2"
           >
             <SettingsPage
               settings={settings}
@@ -1505,7 +1941,7 @@ export function App() {
         ) : (
           <section
             key="home"
-            className="grid flex-1 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out lg:grid-cols-[minmax(0,1fr)_360px]"
+            className="grid flex-1 animate-in gap-6 duration-300 ease-out fade-in slide-in-from-bottom-2 lg:grid-cols-[minmax(0,1fr)_360px]"
           >
             <div className="flex min-w-0 flex-col gap-6">
               <MainControls
@@ -1519,9 +1955,11 @@ export function App() {
 
               {settings.mode === "server" ? (
                 !driveAccessToken && !import.meta.env.DEV ? (
-                  <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+                  <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
                     <CardContent className="flex flex-col items-center gap-4 py-8">
-                      <p className="text-sm text-muted-foreground">{t.serverModeDesc}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {t.serverModeDesc}
+                      </p>
                       <Button onClick={() => void signInWithGoogle()}>
                         <HardDrive className="mr-2 size-4" />
                         {driveAccessToken ? t.googleConnected : t.signInGoogle}
@@ -1529,9 +1967,12 @@ export function App() {
                     </CardContent>
                   </Card>
                 ) : (
-                  <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+                  <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
                     <CardContent className="pt-5">
-                      <Label htmlFor="server-url-input" className="text-sm font-medium">
+                      <Label
+                        htmlFor="server-url-input"
+                        className="text-sm font-medium"
+                      >
                         {t.serverUrl}
                       </Label>
                       <Input
@@ -1547,46 +1988,68 @@ export function App() {
                 )
               ) : null}
 
-              <DropZone
-                file={file}
-                fileCount={queue.length}
-                isBusy={isBusy(jobState)}
-                copy={t}
-                onPick={() => fileInputRef.current?.click()}
-                onDropFiles={(nextFiles) => void handleFiles(nextFiles)}
-              />
+              {settings.mode === "local-helper" ? (
+                <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
+                  <CardContent className="py-8 text-center">
+                    <CardTitle className="text-base">{t.companionTitle}</CardTitle>
+                    <CardDescription className="mx-auto mt-2 max-w-md">
+                      {t.companionDescription}
+                    </CardDescription>
+                  </CardContent>
+                </Card>
+              ) : (
+                <>
+                  <DropZone
+                    file={file}
+                    fileCount={queue.length}
+                    isBusy={isBusy(jobState)}
+                    copy={t}
+                    onPick={() => fileInputRef.current?.click()}
+                    onDropFiles={(nextFiles) => void handleFiles(nextFiles)}
+                  />
 
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="audio/*,video/*"
-                className="hidden"
-                onChange={(event) => {
-                  const nextFiles = Array.from(event.target.files ?? [])
-                  if (nextFiles.length > 0) {
-                    void handleFiles(nextFiles)
-                  }
-                  event.currentTarget.value = ""
-                }}
-              />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="audio/*,video/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const nextFiles = Array.from(event.target.files ?? [])
+                      if (nextFiles.length > 0) {
+                        void handleFiles(nextFiles)
+                      }
+                      event.currentTarget.value = ""
+                    }}
+                  />
 
-              {queue.length > 1 ? (
-                <FileQueuePanel
-                  queue={queue}
-                  selectedId={selectedQueueId}
-                  disabled={isBusy(jobState)}
-                  copy={t}
-                  onSelect={(item) => void analyzeSelectedFile(item.file, settingsRef.current, false, item.id)}
-                  onRemove={(id) => void removeQueuedFile(id)}
-                />
-              ) : null}
+                  {queue.length > 1 ? (
+                    <FileQueuePanel
+                      queue={queue}
+                      selectedId={selectedQueueId}
+                      disabled={isBusy(jobState)}
+                      copy={t}
+                      onSelect={(item) =>
+                        void analyzeSelectedFile(
+                          item.file,
+                          settingsRef.current,
+                          false,
+                          item.id
+                        )
+                      }
+                      onRemove={(id) => void removeQueuedFile(id)}
+                    />
+                  ) : null}
+                </>
+              )}
 
               <PreflightPanel
                 analysis={analysis}
                 model={
                   settings.mode === "server"
-                    ? selectedServerModel?.label ?? settings.serverModelId ?? "-"
+                    ? (selectedServerModel?.label ??
+                      settings.serverModelId ??
+                      "-")
                     : model.label
                 }
                 copy={t}
@@ -1605,8 +2068,9 @@ export function App() {
 
             <aside className="flex min-w-0 flex-col gap-4">
               {isEnglishOnlyMismatch &&
-              (settings.mode === "local-webgpu" || settings.mode === "local-wasm") ? (
-                <div className="animate-in fade-in slide-in-from-top-1 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive duration-200">
+              (settings.mode === "local-webgpu" ||
+                settings.mode === "local-wasm") ? (
+                <div className="animate-in rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive duration-200 fade-in slide-in-from-top-1">
                   {t.englishOnlySidebar}
                 </div>
               ) : null}
@@ -1643,10 +2107,12 @@ export function App() {
               <AlertCircle className="size-5" />
               {t.transcriptionFailed}
             </DialogTitle>
-            <DialogDescription className="sr-only">Error details</DialogDescription>
+            <DialogDescription className="sr-only">
+              Error details
+            </DialogDescription>
           </DialogHeader>
           <div className="max-h-80 overflow-auto rounded-md border bg-muted/30 p-4">
-            <pre className="whitespace-pre-wrap break-words text-sm font-mono text-foreground">
+            <pre className="font-mono text-sm break-words whitespace-pre-wrap text-foreground">
               {error}
             </pre>
           </div>
@@ -1673,19 +2139,25 @@ function MainControls({
   model: ReturnType<typeof findModel>
   copy: Copy
   isEnglishOnlyMismatch: boolean
-  updateSetting: <T extends keyof AppSettings>(key: T, value: AppSettings[T]) => void
+  updateSetting: <T extends keyof AppSettings>(
+    key: T,
+    value: AppSettings[T]
+  ) => void
   serverCapabilities: ServerCapabilitiesState
 }) {
   const modelDescription =
-    copy.modelDescriptions[model.id as keyof typeof copy.modelDescriptions] ?? model.notes
+    copy.modelDescriptions[model.id as keyof typeof copy.modelDescriptions] ??
+    model.notes
   const usesQuantizedWeights = getLocalModelDtype(model) === "q4"
   const selectedServerModel =
     typeof serverCapabilities === "object" && serverCapabilities?.models
-      ? serverCapabilities.models.find((item) => item.id === settings.serverModelId)
+      ? serverCapabilities.models.find(
+          (item) => item.id === settings.serverModelId
+        )
       : undefined
 
   return (
-    <Card className="relative z-20 overflow-visible animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+    <Card className="relative z-20 animate-in overflow-visible duration-300 ease-out fade-in slide-in-from-bottom-1">
       <CardHeader>
         <CardTitle className="text-base">{copy.quickSetup}</CardTitle>
         <CardDescription>{copy.quickSetupDescription}</CardDescription>
@@ -1693,7 +2165,14 @@ function MainControls({
       <CardContent className="grid gap-4 md:grid-cols-2">
         <div className="grid gap-2">
           <Label>{copy.model}</Label>
-          {settings.mode !== "server" ? (
+          {settings.mode === "local-helper" ? (
+            <>
+              <Input value="Whisper Large v3 Turbo Companion" readOnly aria-label={copy.model} />
+              <p className="text-xs leading-5 text-muted-foreground">
+                {copy.companionModelDescription}
+              </p>
+            </>
+          ) : settings.mode !== "server" ? (
             <>
               <Select
                 value={settings.modelId}
@@ -1729,7 +2208,8 @@ function MainControls({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent align="start">
-                  {typeof serverCapabilities === "object" && serverCapabilities?.models
+                  {typeof serverCapabilities === "object" &&
+                  serverCapabilities?.models
                     ? serverCapabilities.models.map((m) => (
                         <SelectItem key={m.id} value={m.id}>
                           {m.label}
@@ -1739,7 +2219,9 @@ function MainControls({
                 </SelectContent>
               </Select>
               {serverCapabilities === "error" ? (
-                <p className="text-xs leading-5 text-destructive">{copy.serverModelsUnavailable}</p>
+                <p className="text-xs leading-5 text-destructive">
+                  {copy.serverModelsUnavailable}
+                </p>
               ) : selectedServerModel ? (
                 <p className="text-xs leading-5 text-muted-foreground">
                   {selectedServerModel.label} - {selectedServerModel.quality}
@@ -1756,12 +2238,16 @@ function MainControls({
             copy={copy}
             onValueChange={(value) => updateSetting("language", value)}
           />
-          <p className="text-xs leading-5 text-muted-foreground">{copy.spokenLanguage}</p>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {copy.spokenLanguage}
+          </p>
         </div>
 
         {isEnglishOnlyMismatch &&
         (settings.mode === "local-webgpu" || settings.mode === "local-wasm") ? (
-          <p className="text-sm text-destructive md:col-span-2">{copy.englishOnlyWarning}</p>
+          <p className="text-sm text-destructive md:col-span-2">
+            {copy.englishOnlyWarning}
+          </p>
         ) : null}
 
         {usesQuantizedWeights &&
@@ -1825,7 +2311,8 @@ function LanguageCombobox({
 
     document.addEventListener("pointerdown", closeOnOutsidePointer)
 
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer)
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsidePointer)
   }, [open])
 
   return (
@@ -1844,7 +2331,7 @@ function LanguageCombobox({
       </Button>
 
       {open ? (
-        <div className="absolute z-50 mt-2 w-full min-w-[18rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg animate-in fade-in-0 zoom-in-95 duration-150">
+        <div className="absolute z-50 mt-2 w-full min-w-[18rem] animate-in overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg duration-150 fade-in-0 zoom-in-95">
           <div className="flex items-center gap-2 border-b px-4 py-2.5">
             <Search className="size-4 text-muted-foreground" />
             <Input
@@ -1882,14 +2369,25 @@ function LanguageCombobox({
                     setOpen(false)
                   }}
                 >
-                  <Check className={cn("size-4", item.code === value ? "opacity-100" : "opacity-0")} />
+                  <Check
+                    className={cn(
+                      "size-4",
+                      item.code === value ? "opacity-100" : "opacity-0"
+                    )}
+                  />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{item.name}</span>
+                    <span className="block truncate font-medium">
+                      {item.name}
+                    </span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {item.code === "auto" ? copy.spokenLanguage : item.nativeName}
+                      {item.code === "auto"
+                        ? copy.spokenLanguage
+                        : item.nativeName}
                     </span>
                   </span>
-                  <span className="shrink-0 pr-1 text-xs uppercase text-muted-foreground">{item.code}</span>
+                  <span className="shrink-0 pr-1 text-xs text-muted-foreground uppercase">
+                    {item.code}
+                  </span>
                 </button>
               ))
             )}
@@ -1910,7 +2408,10 @@ function SettingsPage({
   copy,
 }: {
   settings: AppSettings
-  updateSetting: <T extends keyof AppSettings>(key: T, value: AppSettings[T]) => void
+  updateSetting: <T extends keyof AppSettings>(
+    key: T,
+    value: AppSettings[T]
+  ) => void
   storageActionsDisabled: boolean
   onClearDownloadedModels: () => void
   onClearSavedTranscripts: () => void
@@ -1920,33 +2421,49 @@ function SettingsPage({
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 sm:gap-6">
       <div className="flex items-start gap-3">
-        <Button variant="ghost" size="icon" onClick={onBack} aria-label={copy.backHome}>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onBack}
+          aria-label={copy.backHome}
+        >
           <ArrowLeft />
         </Button>
         <div className="min-w-0">
-          <h2 className="text-lg font-semibold tracking-tight">{copy.settings}</h2>
+          <h2 className="text-lg font-semibold tracking-tight">
+            {copy.settings}
+          </h2>
           <p className="text-sm text-muted-foreground">
             {copy.settingsDescription}
           </p>
         </div>
       </div>
 
-      <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+      <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
         <CardHeader>
           <CardTitle>{copy.processing}</CardTitle>
           <CardDescription>{copy.processingDescription}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-5">
-          <SettingRow label={copy.mode} description={copy.modeDetails[settings.mode]}>
+          <SettingRow
+            label={copy.mode}
+            description={copy.modeDetails[settings.mode]}
+          >
             <Select
               value={settings.mode}
-              onValueChange={(value) => updateSetting("mode", value as ProcessingMode)}
+              onValueChange={(value) =>
+                updateSetting("mode", value as ProcessingMode)
+              }
             >
               <SelectTrigger aria-label={copy.mode} className="w-full sm:w-44">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">
-                {MODES.filter((item) => item.value !== "server" || Boolean(import.meta.env.VITE_SERVER_URL)).map((item) => (
+                {MODES.filter(
+                  (item) =>
+                    item.value !== "server" ||
+                    Boolean(import.meta.env.VITE_SERVER_URL)
+                ).map((item) => (
                   <SelectItem key={item.value} value={item.value}>
                     {copy.modeLabels[item.value]}
                   </SelectItem>
@@ -1957,7 +2474,10 @@ function SettingsPage({
           <Separator />
           {settings.mode !== "server" ? (
             <>
-              <SettingRow label={copy.chunkSeconds} description={copy.chunkSecondsDescription}>
+              <SettingRow
+                label={copy.chunkSeconds}
+                description={copy.chunkSecondsDescription}
+              >
                 <Input
                   type="number"
                   min={15}
@@ -1965,10 +2485,15 @@ function SettingsPage({
                   value={settings.chunkSeconds}
                   aria-label={copy.chunkSeconds}
                   className="w-full sm:w-24"
-                  onChange={(event) => updateSetting("chunkSeconds", Number(event.target.value))}
+                  onChange={(event) =>
+                    updateSetting("chunkSeconds", Number(event.target.value))
+                  }
                 />
               </SettingRow>
-              <SettingRow label={copy.overlapSeconds} description={copy.overlapSecondsDescription}>
+              <SettingRow
+                label={copy.overlapSeconds}
+                description={copy.overlapSecondsDescription}
+              >
                 <Input
                   type="number"
                   min={0}
@@ -1976,7 +2501,9 @@ function SettingsPage({
                   value={settings.overlapSeconds}
                   aria-label={copy.overlapSeconds}
                   className="w-full sm:w-24"
-                  onChange={(event) => updateSetting("overlapSeconds", Number(event.target.value))}
+                  onChange={(event) =>
+                    updateSetting("overlapSeconds", Number(event.target.value))
+                  }
                 />
               </SettingRow>
             </>
@@ -1984,7 +2511,7 @@ function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out delay-75">
+      <Card className="animate-in delay-75 duration-300 ease-out fade-in slide-in-from-bottom-1">
         <CardHeader>
           <CardTitle>{copy.storage}</CardTitle>
           <CardDescription>{copy.storageDescription}</CardDescription>
@@ -1997,14 +2524,18 @@ function SettingsPage({
             <Switch
               checked={settings.persistMediaBlobs}
               aria-label={copy.persistMediaBlobs}
-              onCheckedChange={(checked) => updateSetting("persistMediaBlobs", checked)}
+              onCheckedChange={(checked) =>
+                updateSetting("persistMediaBlobs", checked)
+              }
             />
           </SettingRow>
           <Separator />
           <div className="grid gap-3">
             <div className="space-y-0.5">
               <h3 className="text-sm font-medium">{copy.storageCleanup}</h3>
-              <p className="text-xs text-muted-foreground">{copy.storageCleanupDescription}</p>
+              <p className="text-xs text-muted-foreground">
+                {copy.storageCleanupDescription}
+              </p>
             </div>
             <SettingRow
               label={copy.clearDownloadedModels}
@@ -2074,8 +2605,13 @@ function DropZone({
   onPick: () => void
   onDropFiles: (files: File[]) => void
 }) {
-  const title = file ? (fileCount > 1 ? copy.filesSelected(fileCount) : file.name) : copy.dropTitle
-  const description = file && fileCount > 1 ? copy.selectedFile(file.name) : copy.dropDescription
+  const title = file
+    ? fileCount > 1
+      ? copy.filesSelected(fileCount)
+      : file.name
+    : copy.dropTitle
+  const description =
+    file && fileCount > 1 ? copy.selectedFile(file.name) : copy.dropDescription
 
   return (
     <div
@@ -2094,12 +2630,16 @@ function DropZone({
     >
       <div className="flex max-w-xl flex-col items-center gap-4">
         <div className="flex size-12 items-center justify-center rounded-md border bg-muted text-muted-foreground [&_svg]:size-5">
-          {file?.type.startsWith("video/") ? <FileVideo /> : file ? <FileAudio /> : <UploadCloud />}
+          {file?.type.startsWith("video/") ? (
+            <FileVideo />
+          ) : file ? (
+            <FileAudio />
+          ) : (
+            <UploadCloud />
+          )}
         </div>
         <div className="space-y-1.5">
-          <h2 className="text-xl font-semibold tracking-tight">
-            {title}
-          </h2>
+          <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
           <p className="mx-auto max-w-[58ch] text-sm leading-6 text-muted-foreground">
             {description}
           </p>
@@ -2128,10 +2668,12 @@ function FileQueuePanel({
   onRemove: (id: string) => void
 }) {
   return (
-    <Card className="animate-in fade-in slide-in-from-bottom-1 duration-300 ease-out">
+    <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
       <CardHeader className="pb-3">
         <CardDescription>{copy.fileQueue}</CardDescription>
-        <CardTitle className="text-base">{copy.filesSelected(queue.length)}</CardTitle>
+        <CardTitle className="text-base">
+          {copy.filesSelected(queue.length)}
+        </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-2">
         {queue.map((item) => (
@@ -2139,7 +2681,9 @@ function FileQueuePanel({
             key={item.id}
             className={cn(
               "grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded-md border px-2 py-2 text-sm transition-colors",
-              selectedId === item.id ? "border-ring bg-accent" : "hover:bg-accent/60",
+              selectedId === item.id
+                ? "border-ring bg-accent"
+                : "hover:bg-accent/60",
               disabled && "cursor-not-allowed opacity-70"
             )}
           >
@@ -2150,10 +2694,22 @@ function FileQueuePanel({
               disabled={disabled}
               onClick={() => onSelect(item)}
             >
-              <span className="block truncate font-medium">{item.file.name}</span>
-              <span className="block text-xs text-muted-foreground">{bytesToMb(item.file.size)} MB</span>
+              <span className="block truncate font-medium">
+                {item.file.name}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {bytesToMb(item.file.size)} MB
+              </span>
             </button>
-            <Badge variant={item.status === "error" ? "destructive" : item.status === "complete" ? "secondary" : "outline"}>
+            <Badge
+              variant={
+                item.status === "error"
+                  ? "destructive"
+                  : item.status === "complete"
+                    ? "secondary"
+                    : "outline"
+              }
+            >
               {copy.queueStatusLabels[item.status]}
             </Badge>
             <Button
@@ -2203,7 +2759,8 @@ function PreflightPanel({
   onStartAll: () => void
   onErrorClick: () => void
 }) {
-  const progressMessage = progress.phase === "idle" ? copy.waiting : progress.message
+  const progressMessage =
+    progress.phase === "idle" ? copy.waiting : progress.message
   const [showDetailedLog, setShowDetailedLog] = React.useState(false)
 
   return (
@@ -2220,13 +2777,21 @@ function PreflightPanel({
 
       <CardContent className="space-y-5">
         {analysis ? (
-          <div className="grid animate-in fade-in slide-in-from-bottom-1 gap-3 duration-300 sm:grid-cols-2">
+          <div className="grid animate-in gap-3 duration-300 fade-in slide-in-from-bottom-1 sm:grid-cols-2">
             <Metric
               icon={<Gauge />}
               label={copy.duration}
-              value={analysis.duration === null ? copy.unknownDuration : formatDuration(analysis.duration)}
+              value={
+                analysis.duration === null
+                  ? copy.unknownDuration
+                  : formatDuration(analysis.duration)
+              }
             />
-            <Metric icon={<Download />} label={copy.size} value={`${bytesToMb(analysis.fileSize)} MB`} />
+            <Metric
+              icon={<Download />}
+              label={copy.size}
+              value={`${bytesToMb(analysis.fileSize)} MB`}
+            />
             <Metric icon={<Languages />} label={copy.model} value={model} />
             <Metric
               icon={<CheckCircle2 />}
@@ -2235,26 +2800,36 @@ function PreflightPanel({
             />
           </div>
         ) : (
-           <p className="animate-in fade-in text-sm text-muted-foreground duration-200">
+          <p className="animate-in text-sm text-muted-foreground duration-200 fade-in">
             {copy.emptyPreflight}
           </p>
         )}
 
         {analysis ? (
-          <div className="animate-in fade-in slide-in-from-bottom-1 space-y-3 duration-300">
+          <div className="animate-in space-y-3 duration-300 fade-in slide-in-from-bottom-1">
             <div className="rounded-md border bg-muted/40 p-4 transition-colors duration-200">
-              <p className="text-xs font-medium text-muted-foreground">{copy.downloads}</p>
+              <p className="text-xs font-medium text-muted-foreground">
+                {copy.downloads}
+              </p>
               <div className="mt-3 grid gap-2">
                 {analysis.requiredAssets.map((asset) => (
-                  <div key={asset.id} className="flex items-center justify-between gap-3 text-sm">
+                  <div
+                    key={asset.id}
+                    className="flex items-center justify-between gap-3 text-sm"
+                  >
                     <span>{asset.label}</span>
-                    <span className="text-muted-foreground">~{asset.sizeMb} MB</span>
+                    <span className="text-muted-foreground">
+                      ~{asset.sizeMb} MB
+                    </span>
                   </div>
                 ))}
               </div>
             </div>
             {analysis.warnings.map((warning) => (
-              <p key={warning} className="animate-in fade-in text-xs leading-5 text-muted-foreground duration-200">
+              <p
+                key={warning}
+                className="animate-in text-xs leading-5 text-muted-foreground duration-200 fade-in"
+              >
                 {warning}
               </p>
             ))}
@@ -2262,10 +2837,15 @@ function PreflightPanel({
         ) : null}
 
         <div className="space-y-3">
-          <Progress value={Math.round(progress.progress * 100)} className="h-1.5" />
+          <Progress
+            value={Math.round(progress.progress * 100)}
+            className="h-1.5"
+          />
           <div className="flex items-center justify-between gap-4 text-sm">
             <span className="text-muted-foreground">{progressMessage}</span>
-            <span className="font-medium">{Math.round(progress.progress * 100)}%</span>
+            <span className="font-medium">
+              {Math.round(progress.progress * 100)}%
+            </span>
           </div>
           {progressLog.length > 0 ? (
             <div className="rounded-md border bg-muted/20">
@@ -2277,7 +2857,9 @@ function PreflightPanel({
               >
                 <span className="font-medium">{copy.detailedLog}</span>
                 <span className="text-xs text-muted-foreground">
-                  {showDetailedLog ? copy.hideDetailedLog : copy.showDetailedLog}
+                  {showDetailedLog
+                    ? copy.hideDetailedLog
+                    : copy.showDetailedLog}
                 </span>
               </button>
               {showDetailedLog ? (
@@ -2286,9 +2868,13 @@ function PreflightPanel({
                     {progressLog.map((entry) => (
                       <div key={entry.id} className="grid gap-1 text-xs">
                         <div className="flex items-center justify-between gap-3">
-                          <span className="min-w-0 truncate text-muted-foreground">{entry.message}</span>
+                          <span className="min-w-0 truncate text-muted-foreground">
+                            {entry.message}
+                          </span>
                           <span className="shrink-0 font-medium">
-                            {entry.progress === undefined ? "--" : `${Math.round(entry.progress * 100)}%`}
+                            {entry.progress === undefined
+                              ? "--"
+                              : `${Math.round(entry.progress * 100)}%`}
                           </span>
                         </div>
                         <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground/70">
@@ -2305,7 +2891,7 @@ function PreflightPanel({
           {error ? (
             <button
               type="button"
-              className="animate-in fade-in slide-in-from-top-1 cursor-pointer text-left text-sm text-destructive underline decoration-destructive/30 underline-offset-2 duration-200 hover:decoration-destructive"
+              className="animate-in cursor-pointer text-left text-sm text-destructive underline decoration-destructive/30 underline-offset-2 duration-200 fade-in slide-in-from-top-1 hover:decoration-destructive"
               onClick={() => onErrorClick()}
               title="Click for full error details"
             >
@@ -2314,12 +2900,27 @@ function PreflightPanel({
           ) : null}
           <div className={cn("grid gap-2", queueCount > 1 && "sm:grid-cols-2")}>
             <Button className="w-full" disabled={!canStart} onClick={onStart}>
-              {isBusy(jobState) ? <Loader2 className="animate-spin" /> : <Play />}
-              {queueCount > 1 ? copy.transcribeSelected : copy.confirmTranscribe}
+              {isBusy(jobState) ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <Play />
+              )}
+              {queueCount > 1
+                ? copy.transcribeSelected
+                : copy.confirmTranscribe}
             </Button>
             {queueCount > 1 ? (
-              <Button className="w-full" variant="outline" disabled={!canStartAll} onClick={onStartAll}>
-                {isBusy(jobState) ? <Loader2 className="animate-spin" /> : <Play />}
+              <Button
+                className="w-full"
+                variant="outline"
+                disabled={!canStartAll}
+                onClick={onStartAll}
+              >
+                {isBusy(jobState) ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Play />
+                )}
                 {copy.transcribeAll(queueCount)}
               </Button>
             ) : null}
@@ -2347,7 +2948,10 @@ function ResultDialog({
   copy: Copy
   serverCapabilities: ServerCapabilitiesState
 }) {
-  const transcriptModel = transcript && transcript.mode !== "server" ? findModel(transcript.modelId) : null
+  const transcriptModel =
+    transcript && transcript.mode !== "server"
+      ? findModel(transcript.modelId)
+      : null
   const transcriptModelLabel = transcript
     ? transcript.mode === "server"
       ? resolveServerModelLabel(transcript.modelId, serverCapabilities)
@@ -2368,17 +2972,25 @@ function ResultDialog({
                 onRename={onRename}
                 copy={copy}
               />
-              <div className="flex flex-wrap gap-2 pt-1" aria-label={copy.transcriptDetails}>
+              <div
+                className="flex flex-wrap gap-2 pt-1"
+                aria-label={copy.transcriptDetails}
+              >
                 <Badge variant="secondary">{transcriptModelLabel}</Badge>
-                <Badge variant="outline">{copy.modeLabels[transcript.mode]}</Badge>
                 <Badge variant="outline">
-                  {getLanguageLabel(transcript.language, copy.languageLabels.auto)}
+                  {copy.modeLabels[transcript.mode]}
+                </Badge>
+                <Badge variant="outline">
+                  {getLanguageLabel(
+                    transcript.language,
+                    copy.languageLabels.auto
+                  )}
                 </Badge>
               </div>
             </DialogHeader>
 
             <div className="grid min-h-0 gap-0 overflow-hidden lg:grid-cols-2">
-              <section className="min-h-0 border-b p-4 lg:border-r lg:border-b-0 sm:p-6">
+              <section className="min-h-0 border-b p-4 sm:p-6 lg:border-r lg:border-b-0">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <h3 className="text-sm font-medium">{copy.rawText}</h3>
                 </div>
@@ -2393,7 +3005,9 @@ function ResultDialog({
 
               <section className="min-h-0 p-4 sm:p-6">
                 <div className="mb-3 flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-medium">{copy.textWithTimestamps}</h3>
+                  <h3 className="text-sm font-medium">
+                    {copy.textWithTimestamps}
+                  </h3>
                 </div>
                 <div className="h-[32svh] min-h-72 overflow-auto rounded-md border lg:h-[48svh]">
                   {transcript.segments.map((segment) => (
@@ -2402,7 +3016,8 @@ function ResultDialog({
                       className="grid gap-1 border-b px-3 py-2.5 last:border-b-0 sm:grid-cols-[7rem_1fr] sm:gap-3"
                     >
                       <span className="font-mono text-xs text-muted-foreground">
-                        {formatSegmentTime(segment.start)} - {formatSegmentTime(segment.end)}
+                        {formatSegmentTime(segment.start)} -{" "}
+                        {formatSegmentTime(segment.end)}
                       </span>
                       <span className="text-sm leading-6">{segment.text}</span>
                     </div>
@@ -2413,7 +3028,9 @@ function ResultDialog({
 
             <DialogFooter className="items-center justify-between gap-3 border-t px-5 py-4 sm:flex-row sm:px-6">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span className="mr-1 text-sm text-muted-foreground">{copy.downloadFiles}</span>
+                <span className="mr-1 text-sm text-muted-foreground">
+                  {copy.downloadFiles}
+                </span>
                 {EXPORTS.map((format) => (
                   <Button
                     key={format}
@@ -2421,8 +3038,7 @@ function ResultDialog({
                     size="sm"
                     onClick={() => onExport(transcript, format)}
                   >
-                    <Download />
-                    .{format}
+                    <Download />.{format}
                   </Button>
                 ))}
               </div>
@@ -2454,7 +3070,10 @@ function RenameTitleForm({
   }
 
   return (
-    <form className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={saveTitle}>
+    <form
+      className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]"
+      onSubmit={saveTitle}
+    >
       <Input
         value={title}
         aria-label={copy.renameTranscript}
@@ -2488,7 +3107,9 @@ function HistoryPanel({
 }) {
   return (
     <Card className="min-h-0 p-4">
-      <p className="mb-4 text-xs font-medium text-muted-foreground">{copy.recent}</p>
+      <p className="mb-4 text-xs font-medium text-muted-foreground">
+        {copy.recent}
+      </p>
       <div className="grid max-h-[330px] gap-2 overflow-auto pr-1">
         {history.length === 0 ? (
           <p className="text-sm text-muted-foreground">{copy.emptyHistory}</p>
@@ -2496,7 +3117,7 @@ function HistoryPanel({
           history.map((item) => (
             <div
               key={item.id}
-              className="group/history-item grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-md border p-2 text-sm transition-colors duration-200 hover:bg-accent animate-in fade-in slide-in-from-bottom-1"
+              className="group/history-item grid animate-in grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-md border p-2 text-sm transition-colors duration-200 fade-in slide-in-from-bottom-1 hover:bg-accent"
             >
               <button
                 type="button"
@@ -2507,7 +3128,12 @@ function HistoryPanel({
                 <span className="block truncate font-medium">{item.title}</span>
                 <span className="mt-1 flex flex-wrap gap-1.5">
                   <Badge variant="secondary" className="max-w-full truncate">
-                    {item.mode === "server" ? resolveServerModelLabel(item.modelId, serverCapabilities) : findModel(item.modelId).label}
+                    {item.mode === "server"
+                      ? resolveServerModelLabel(
+                          item.modelId,
+                          serverCapabilities
+                        )
+                      : findModel(item.modelId).label}
                   </Badge>
                   <Badge variant="outline" className="max-w-full truncate">
                     {getLanguageLabel(item.language, copy.languageLabels.auto)}
@@ -2549,13 +3175,17 @@ function AppToast({
   }
 
   return (
-    <div className="fixed right-4 bottom-4 z-50 w-[calc(100vw-2rem)] max-w-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
-      <div role="status" aria-live="polite" className={cn(
-        "rounded-lg border p-4 shadow-lg",
-        message.kind === "error"
-          ? "border-destructive/30 bg-destructive/5 text-destructive"
-          : "bg-popover text-popover-foreground"
-      )}>
+    <div className="fixed right-4 bottom-4 z-50 w-[calc(100vw-2rem)] max-w-sm animate-in duration-200 fade-in slide-in-from-bottom-2">
+      <div
+        role="status"
+        aria-live="polite"
+        className={cn(
+          "rounded-lg border p-4 shadow-lg",
+          message.kind === "error"
+            ? "border-destructive/30 bg-destructive/5 text-destructive"
+            : "bg-popover text-popover-foreground"
+        )}
+      >
         <div className="flex items-start gap-3">
           {message.kind === "error" ? (
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
@@ -2582,7 +3212,15 @@ function AppToast({
   )
 }
 
-function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function Metric({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: string
+}) {
   return (
     <div className="rounded-md border p-3 transition-colors duration-200 hover:bg-accent/40">
       <div className="mb-2 text-muted-foreground [&_svg]:size-4">{icon}</div>
@@ -2608,7 +3246,14 @@ function formatSegmentTime(seconds: number) {
 }
 
 function isBusy(jobState: JobState) {
-  return ["analyzing", "downloading-assets", "preparing-media", "chunking", "transcribing", "saving"].includes(jobState)
+  return [
+    "analyzing",
+    "downloading-assets",
+    "preparing-media",
+    "chunking",
+    "transcribing",
+    "saving",
+  ].includes(jobState)
 }
 
 export default App

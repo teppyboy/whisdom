@@ -10,9 +10,13 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+sha2 = "0.10"
+hex = "0.4"
+zip = "4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 tempfile = "3"
@@ -21,6 +25,18 @@ dotenvy = "0.15"
 toml = "0.8"
 whisper-rs = "0.16"
 hound = "3"
+
+[lib]
+name = "whisdom_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "whisdom-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "whisdom-helper"
+path = "src/bin/whisdom-helper.rs"
 
 [features]
 cuda = ["whisper-rs/cuda"]

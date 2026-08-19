@@ -10,6 +10,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Whisdom</title>
     <script async defer src="https://accounts.google.com/gsi/client"></script>
+    <script>
+      ;(() => {
+        let sequence = ""
+        window.addEventListener("keydown", (event) => {
+          if (event.key.length !== 1) return
+          sequence = (sequence + event.key.toLowerCase()).slice(-2)
+          if (sequence === "pi") {
+            window.location.assign("https://pi.dev")
+          }
+        })
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

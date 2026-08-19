@@ -58,7 +58,9 @@ pub async fn download_url(
     handle.await.ok();
 
     if !status.success() {
-        return Err(AppError::Internal("yt-dlp exited with non-zero status".into()));
+        return Err(AppError::Internal(
+            "yt-dlp exited with non-zero status".into(),
+        ));
     }
 
     let found = find_downloaded_file(work_dir).await?;
@@ -71,10 +73,7 @@ async fn find_downloaded_file(work_dir: &Path) -> Result<PathBuf, AppError> {
     while let Some(entry) = dir.next_entry().await? {
         let path = entry.path();
         if path.is_file() {
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if ext != "json" && ext != "part" {
                 return Ok(path);
             }

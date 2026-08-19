@@ -1,0 +1,14 @@
+{
+  "name": "whisdom-companion",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:debug": "tauri build --debug"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.0"
+  }
+}

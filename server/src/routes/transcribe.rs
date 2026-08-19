@@ -69,10 +69,7 @@ pub async fn transcribe(
 
         match name.as_str() {
             "audio" => {
-                let fname = field
-                    .file_name()
-                    .unwrap_or("upload.bin")
-                    .to_string();
+                let fname = field.file_name().unwrap_or("upload.bin").to_string();
                 let data = field.bytes().await.map_err(|error| {
                     tracing::error!(
                         error = %error,
@@ -139,23 +136,27 @@ pub async fn transcribe(
 
     let (input, need_create_dir) = match (file_bytes, file_filename, url_string) {
         (Some(data), Some(fname), _) => {
-            tokio::fs::create_dir_all(&work_dir).await.map_err(|e| {
-                AppError::Internal(format!("failed to create work dir: {e}"))
-            })?;
+            tokio::fs::create_dir_all(&work_dir)
+                .await
+                .map_err(|e| AppError::Internal(format!("failed to create work dir: {e}")))?;
             let file_path = work_dir.join(&fname);
-            tokio::fs::write(&file_path, &data).await.map_err(|e| {
-                AppError::Internal(format!("failed to write uploaded file: {e}"))
-            })?;
+            tokio::fs::write(&file_path, &data)
+                .await
+                .map_err(|e| AppError::Internal(format!("failed to write uploaded file: {e}")))?;
             (JobInput::File { filename: fname }, false)
         }
         (_, _, Some(u)) => (JobInput::Url { url: u }, true),
-        _ => return Err(AppError::BadRequest("either 'audio' file or 'url' field required".into())),
+        _ => {
+            return Err(AppError::BadRequest(
+                "either 'audio' file or 'url' field required".into(),
+            ))
+        }
     };
 
     if need_create_dir {
-        tokio::fs::create_dir_all(&work_dir).await.map_err(|e| {
-            AppError::Internal(format!("failed to create work dir: {e}"))
-        })?;
+        tokio::fs::create_dir_all(&work_dir)
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to create work dir: {e}")))?;
     }
 
     let input_kind = match &input {
@@ -189,7 +190,13 @@ pub async fn transcribe(
     let model_registry_clone = std::sync::Arc::clone(&state.model_registry);
 
     tokio::spawn(async move {
-        run::run_pipeline(&job_clone, &config_clone, &queue_clone, &model_registry_clone).await;
+        run::run_pipeline(
+            &job_clone,
+            &config_clone,
+            &queue_clone,
+            &model_registry_clone,
+        )
+        .await;
         queue_clone.remove(&id).await;
     });
 

@@ -21,10 +21,7 @@ pub async fn verify_turnstile(config: &TurnstileConfig, token: &str) -> Result<(
     }
 
     let client = reqwest::Client::new();
-    let params = [
-        ("secret", config.secret_key.as_str()),
-        ("response", token),
-    ];
+    let params = [("secret", config.secret_key.as_str()), ("response", token)];
 
     let resp = client
         .post(&config.siteverify_url)

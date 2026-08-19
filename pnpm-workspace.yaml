@@ -1,5 +1,6 @@
 packages:
   - worker
+  - companion
 
 allowBuilds:
   '@swc/core': true

@@ -1,0 +1,21 @@
+[package]
+name = "whisdom-companion"
+version = "0.0.1"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
+axum = "0.8"
+whisdom-server = { path = "../../server" }
+tokio = { version = "1", features = ["sync"] }
+futures = "0.3"
+tracing = "0.1"
+
+[features]
+default = []
+vulkan = ["whisdom-server/vulkan"]

@@ -1,5 +1,5 @@
-pub mod health;
-pub mod capabilities;
-pub mod transcribe;
-pub mod progress;
 pub mod cancel;
+pub mod capabilities;
+pub mod health;
+pub mod progress;
+pub mod transcribe;

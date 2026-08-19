@@ -44,12 +44,8 @@ pub struct JobStatus {
 
 #[derive(Debug, Clone)]
 pub enum JobInput {
-    File {
-        filename: String,
-    },
-    Url {
-        url: String,
-    },
+    File { filename: String },
+    Url { url: String },
 }
 
 pub struct Job {
