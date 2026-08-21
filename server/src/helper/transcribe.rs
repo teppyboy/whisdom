@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -24,6 +25,9 @@ pub struct LoadedModel {
 }
 
 pub type SharedModel = Arc<RwLock<Option<Arc<LoadedModel>>>>;
+
+const SAMPLE_RATE: usize = 16_000;
+const NATIVE_CHUNK_SECONDS: [usize; 3] = [20 * 60, 15 * 60, 10 * 60];
 
 pub async fn load_model(
     cache: &HelperCache,
@@ -162,83 +166,196 @@ pub async fn transcribe_wav(
         spawn_cancel_watcher(Arc::clone(&cancel), cancel_rx);
     }
     tokio::task::spawn_blocking(move || {
-        let context = Arc::clone(&model.context);
-        let mut state = context.create_state().map_err(|error| {
-            HelperError::BadRequest(format!("Whisper state creation failed: {error}"))
-        })?;
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_n_threads(
-            std::thread::available_parallelism().map_or(4, |value| value.get()) as i32,
-        );
-        params.set_translate(false);
-        params.set_no_context(false);
-        params.set_single_segment(false);
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-        params.set_token_timestamps(true);
-        let callback_cancel = Arc::clone(&cancel);
-        params.set_abort_callback_safe(move || callback_cancel.load(Ordering::Acquire));
-        if let Some(language) = language.as_deref().filter(|value| *value != "auto") {
-            params.set_language(Some(language));
-        }
-
         let reader = WavReader::open(&wav_path)
             .map_err(|error| HelperError::BadRequest(format!("WAV open failed: {error}")))?;
         let spec = reader.spec();
-        if spec.sample_rate != 16_000 || spec.channels != 1 || spec.bits_per_sample != 16 {
+        if spec.sample_rate != SAMPLE_RATE as u32
+            || spec.channels != 1
+            || spec.bits_per_sample != 16
+        {
             return Err(HelperError::BadRequest(
                 "helper audio must be 16 kHz mono PCM 16-bit WAV".into(),
             ));
         }
-        let samples = reader
-            .into_samples::<i16>()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| HelperError::BadRequest(format!("WAV read failed: {error}")))?;
-        let audio: Vec<f32> = samples
-            .iter()
-            .map(|sample| f32::from(*sample) / 32768.0)
-            .collect();
-        if cancel.load(Ordering::Acquire) {
-            return Err(HelperError::BadRequest("cancelled".into()));
-        }
-        state.full(params, &audio).map_err(|error| {
-            if cancel.load(Ordering::Acquire) {
-                HelperError::BadRequest("cancelled".into())
-            } else {
-                HelperError::BadRequest(format!("Whisper transcription failed: {error}"))
-            }
-        })?;
 
+        let total_samples = reader.duration() as usize;
+        let mut samples = reader.into_samples::<i16>();
+        let mut pending = VecDeque::new();
+        let mut processed_samples = 0usize;
         let mut segments = Vec::new();
-        for index in 0..state.full_n_segments() {
+
+        while processed_samples < total_samples {
             if cancel.load(Ordering::Acquire) {
                 return Err(HelperError::BadRequest("cancelled".into()));
             }
-            if let Some(segment) = state.get_segment(index) {
-                let text = segment
-                    .to_str_lossy()
-                    .map_err(|error| {
-                        HelperError::BadRequest(format!("Whisper text failed: {error}"))
-                    })?
-                    .into_owned();
-                segments.push(TranscriptSegment {
-                    start: segment.start_timestamp() as f32 / 100.0,
-                    end: segment.end_timestamp() as f32 / 100.0,
-                    text,
-                });
+
+            let remaining = total_samples.saturating_sub(processed_samples);
+            let target_samples = remaining.min(NATIVE_CHUNK_SECONDS[0] * SAMPLE_RATE);
+            while pending.len() < target_samples {
+                match samples.next() {
+                    Some(Ok(sample)) => pending.push_back(sample),
+                    Some(Err(error)) => {
+                        return Err(HelperError::BadRequest(format!("WAV read failed: {error}")))
+                    }
+                    None => break,
+                }
             }
+            if pending.is_empty() {
+                break;
+            }
+
+            let attempts = chunk_attempts(pending.len());
+            let mut completed = None;
+            let mut last_error = None;
+            for attempt_samples in attempts {
+                if cancel.load(Ordering::Acquire) {
+                    return Err(HelperError::BadRequest("cancelled".into()));
+                }
+                let chunk = pending
+                    .iter()
+                    .take(attempt_samples)
+                    .copied()
+                    .collect::<Vec<_>>();
+                let offset_seconds = processed_samples as f32 / SAMPLE_RATE as f32;
+                match transcribe_chunk(
+                    &model.context,
+                    &chunk,
+                    language.as_deref(),
+                    Arc::clone(&cancel),
+                    offset_seconds,
+                ) {
+                    Ok(chunk_segments) => {
+                        completed = Some((attempt_samples, chunk_segments));
+                        break;
+                    }
+                    Err(error) if is_cancelled_error(&error, &cancel) => return Err(error),
+                    Err(error) => {
+                        tracing::warn!(
+                            chunk_seconds = attempt_samples / SAMPLE_RATE,
+                            error = %error,
+                            "native chunk failed; retrying with a smaller chunk"
+                        );
+                        last_error = Some(error);
+                    }
+                }
+            }
+
+            let (consumed, chunk_segments) = completed.ok_or_else(|| {
+                last_error.unwrap_or_else(|| {
+                    HelperError::BadRequest("Whisper transcription failed for audio chunk".into())
+                })
+            })?;
+            pending.drain(..consumed);
+            processed_samples = processed_samples.saturating_add(consumed);
+            segments.extend(chunk_segments);
         }
+
         Ok(segments)
     })
     .await
     .map_err(|error| HelperError::BadRequest(format!("Whisper task failed: {error}")))?
 }
 
+fn chunk_attempts(available_samples: usize) -> Vec<usize> {
+    let mut attempts = Vec::with_capacity(NATIVE_CHUNK_SECONDS.len());
+    for seconds in NATIVE_CHUNK_SECONDS {
+        let samples = available_samples.min(seconds * SAMPLE_RATE);
+        if samples > 0 && !attempts.contains(&samples) {
+            attempts.push(samples);
+        }
+    }
+    attempts
+}
+
+fn transcribe_chunk(
+    context: &WhisperContext,
+    samples: &[i16],
+    language: Option<&str>,
+    cancel: Arc<AtomicBool>,
+    offset_seconds: f32,
+) -> Result<Vec<TranscriptSegment>, HelperError> {
+    let mut state = context.create_state().map_err(|error| {
+        HelperError::BadRequest(format!("Whisper state creation failed: {error}"))
+    })?;
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params
+        .set_n_threads(std::thread::available_parallelism().map_or(4, |value| value.get()) as i32);
+    params.set_translate(false);
+    params.set_no_context(true);
+    params.set_single_segment(false);
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params.set_token_timestamps(true);
+    let callback_cancel = Arc::clone(&cancel);
+    params.set_abort_callback_safe(move || callback_cancel.load(Ordering::Acquire));
+    if let Some(language) = language.filter(|value| *value != "auto") {
+        params.set_language(Some(language));
+    }
+
+    let audio = samples
+        .iter()
+        .map(|sample| f32::from(*sample) / 32768.0)
+        .collect::<Vec<_>>();
+    if cancel.load(Ordering::Acquire) {
+        return Err(HelperError::BadRequest("cancelled".into()));
+    }
+    state.full(params, &audio).map_err(|error| {
+        if cancel.load(Ordering::Acquire) {
+            HelperError::BadRequest("cancelled".into())
+        } else {
+            HelperError::BadRequest(format!("Whisper transcription failed: {error}"))
+        }
+    })?;
+
+    let mut segments = Vec::new();
+    for index in 0..state.full_n_segments() {
+        if cancel.load(Ordering::Acquire) {
+            return Err(HelperError::BadRequest("cancelled".into()));
+        }
+        if let Some(segment) = state.get_segment(index) {
+            let text = segment
+                .to_str_lossy()
+                .map_err(|error| HelperError::BadRequest(format!("Whisper text failed: {error}")))?
+                .into_owned();
+            segments.push(TranscriptSegment {
+                start: offset_seconds + segment.start_timestamp() as f32 / 100.0,
+                end: offset_seconds + segment.end_timestamp() as f32 / 100.0,
+                text,
+            });
+        }
+    }
+    Ok(segments)
+}
+
+fn is_cancelled_error(error: &HelperError, cancel: &AtomicBool) -> bool {
+    cancel.load(Ordering::Acquire) || error.to_string().contains("cancelled")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adaptive_chunk_attempts_use_twenty_fifteen_then_ten_minutes() {
+        assert_eq!(
+            chunk_attempts(25 * SAMPLE_RATE * 60),
+            vec![
+                20 * SAMPLE_RATE * 60,
+                15 * SAMPLE_RATE * 60,
+                10 * SAMPLE_RATE * 60
+            ]
+        );
+        assert_eq!(
+            chunk_attempts(12 * SAMPLE_RATE * 60),
+            vec![12 * SAMPLE_RATE * 60, 10 * SAMPLE_RATE * 60]
+        );
+        assert_eq!(
+            chunk_attempts(7 * SAMPLE_RATE * 60),
+            vec![7 * SAMPLE_RATE * 60]
+        );
+    }
 
     #[test]
     fn pre_cancelled_inference_marks_atomic_flag_without_model_loading() {
