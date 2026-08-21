@@ -12,6 +12,7 @@ use super::protocol::HelperError;
 const FFMPEG_DIR: &str = "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1";
 const FFMPEG_ENTRY: &str = "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1/bin/ffmpeg.exe";
 const FFMPEG_TIMEOUT: Duration = Duration::from_secs(30);
+const FFMPEG_SPLIT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 pub async fn ensure_ffmpeg(cache: &HelperCache) -> Result<PathBuf, HelperError> {
     let root = cache.config().tools_dir().join(FFMPEG_DIR);
@@ -119,6 +120,82 @@ fn is_expected_entry(path: &Path) -> bool {
     path.to_string_lossy().replace('\\', "/") == FFMPEG_ENTRY
 }
 
+pub async fn split_to_wav_chunks(
+    executable: &Path,
+    input: &Path,
+    output_dir: &Path,
+    chunk_seconds: u64,
+    mut cancel_rx: watch::Receiver<bool>,
+) -> Result<Vec<PathBuf>, HelperError> {
+    tokio::fs::create_dir_all(output_dir).await?;
+    let pattern = output_dir.join("chunk-%05d.wav");
+    if *cancel_rx.borrow() {
+        return Err(HelperError::BadRequest("cancelled".into()));
+    }
+
+    let mut child = Command::new(executable)
+        .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+        .arg(input)
+        .args([
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "segment",
+            "-segment_time",
+        ])
+        .arg(chunk_seconds.to_string())
+        .args(["-reset_timestamps", "1"])
+        .arg(&pattern)
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| HelperError::BadRequest(format!("FFmpeg split failed: {error}")))?;
+    let deadline = tokio::time::Instant::now() + FFMPEG_SPLIT_TIMEOUT;
+    loop {
+        tokio::select! {
+        status = child.wait() => {
+        let status = status.map_err(|error| HelperError::BadRequest(format!("FFmpeg split failed: {error}")))?;
+                        if !status.success() {
+                            return Err(HelperError::BadRequest("FFmpeg split exited with an error".into()));
+                        }
+                        break;
+                    }
+                    _ = cancel_rx.changed() => {
+                        if *cancel_rx.borrow() {
+                            let _ = child.kill().await;
+                            return Err(HelperError::BadRequest("cancelled".into()));
+                        }
+                    }
+                    _ = tokio::time::sleep_until(deadline) => {
+                        let _ = child.kill().await;
+                        return Err(HelperError::BadRequest("FFmpeg split timed out".into()));
+                    }
+                }
+    }
+
+    let mut chunks = Vec::new();
+    let mut entries = tokio::fs::read_dir(output_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) == Some("wav") {
+            chunks.push(path);
+        }
+    }
+    chunks.sort();
+    if chunks.is_empty() {
+        return Err(HelperError::BadRequest(
+            "FFmpeg produced no audio chunks".into(),
+        ));
+    }
+    Ok(chunks)
+}
+
 pub async fn convert_to_wav(
     executable: &Path,
     input: &Path,
@@ -178,6 +255,18 @@ mod tests {
         )
         .await
         .expect_err("pre-cancelled conversion should stop before spawning");
+        assert_eq!(error.to_string(), "helper bad request: cancelled");
+
+        let (_sender, receiver) = watch::channel(true);
+        let error = split_to_wav_chunks(
+            Path::new("missing-ffmpeg.exe"),
+            Path::new("missing-input.mkv"),
+            Path::new("missing-output"),
+            600,
+            receiver,
+        )
+        .await
+        .expect_err("pre-cancelled split should stop before spawning");
         assert_eq!(error.to_string(), "helper bad request: cancelled");
     }
 

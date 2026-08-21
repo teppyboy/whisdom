@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "build:wasm": "wasm-pack build audio-processor --target web --out-dir ../src/wasm/audio-processor",
+    "build:companion": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-companion.ps1",
     "release:check-rollback-floor": "node scripts/check-rollback-floor.mjs"
   },
   "dependencies": {

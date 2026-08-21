@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -27,7 +26,6 @@ pub struct LoadedModel {
 pub type SharedModel = Arc<RwLock<Option<Arc<LoadedModel>>>>;
 
 const SAMPLE_RATE: usize = 16_000;
-const NATIVE_CHUNK_SECONDS: [usize; 3] = [20 * 60, 15 * 60, 10 * 60];
 
 pub async fn load_model(
     cache: &HelperCache,
@@ -177,94 +175,14 @@ pub async fn transcribe_wav(
                 "helper audio must be 16 kHz mono PCM 16-bit WAV".into(),
             ));
         }
-
-        let total_samples = reader.duration() as usize;
-        let mut samples = reader.into_samples::<i16>();
-        let mut pending = VecDeque::new();
-        let mut processed_samples = 0usize;
-        let mut segments = Vec::new();
-
-        while processed_samples < total_samples {
-            if cancel.load(Ordering::Acquire) {
-                return Err(HelperError::BadRequest("cancelled".into()));
-            }
-
-            let remaining = total_samples.saturating_sub(processed_samples);
-            let target_samples = remaining.min(NATIVE_CHUNK_SECONDS[0] * SAMPLE_RATE);
-            while pending.len() < target_samples {
-                match samples.next() {
-                    Some(Ok(sample)) => pending.push_back(sample),
-                    Some(Err(error)) => {
-                        return Err(HelperError::BadRequest(format!("WAV read failed: {error}")))
-                    }
-                    None => break,
-                }
-            }
-            if pending.is_empty() {
-                break;
-            }
-
-            let attempts = chunk_attempts(pending.len());
-            let mut completed = None;
-            let mut last_error = None;
-            for attempt_samples in attempts {
-                if cancel.load(Ordering::Acquire) {
-                    return Err(HelperError::BadRequest("cancelled".into()));
-                }
-                let chunk = pending
-                    .iter()
-                    .take(attempt_samples)
-                    .copied()
-                    .collect::<Vec<_>>();
-                let offset_seconds = processed_samples as f32 / SAMPLE_RATE as f32;
-                match transcribe_chunk(
-                    &model.context,
-                    &chunk,
-                    language.as_deref(),
-                    Arc::clone(&cancel),
-                    offset_seconds,
-                ) {
-                    Ok(chunk_segments) => {
-                        completed = Some((attempt_samples, chunk_segments));
-                        break;
-                    }
-                    Err(error) if is_cancelled_error(&error, &cancel) => return Err(error),
-                    Err(error) => {
-                        tracing::warn!(
-                            chunk_seconds = attempt_samples / SAMPLE_RATE,
-                            error = %error,
-                            "native chunk failed; retrying with a smaller chunk"
-                        );
-                        last_error = Some(error);
-                    }
-                }
-            }
-
-            let (consumed, chunk_segments) = completed.ok_or_else(|| {
-                last_error.unwrap_or_else(|| {
-                    HelperError::BadRequest("Whisper transcription failed for audio chunk".into())
-                })
-            })?;
-            pending.drain(..consumed);
-            processed_samples = processed_samples.saturating_add(consumed);
-            segments.extend(chunk_segments);
-        }
-
-        Ok(segments)
+        let samples = reader
+            .into_samples::<i16>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| HelperError::BadRequest(format!("WAV read failed: {error}")))?;
+        transcribe_chunk(&model.context, &samples, language.as_deref(), cancel, 0.0)
     })
     .await
     .map_err(|error| HelperError::BadRequest(format!("Whisper task failed: {error}")))?
-}
-
-fn chunk_attempts(available_samples: usize) -> Vec<usize> {
-    let mut attempts = Vec::with_capacity(NATIVE_CHUNK_SECONDS.len());
-    for seconds in NATIVE_CHUNK_SECONDS {
-        let samples = available_samples.min(seconds * SAMPLE_RATE);
-        if samples > 0 && !attempts.contains(&samples) {
-            attempts.push(samples);
-        }
-    }
-    attempts
 }
 
 fn transcribe_chunk(
@@ -329,33 +247,9 @@ fn transcribe_chunk(
     Ok(segments)
 }
 
-fn is_cancelled_error(error: &HelperError, cancel: &AtomicBool) -> bool {
-    cancel.load(Ordering::Acquire) || error.to_string().contains("cancelled")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn adaptive_chunk_attempts_use_twenty_fifteen_then_ten_minutes() {
-        assert_eq!(
-            chunk_attempts(25 * SAMPLE_RATE * 60),
-            vec![
-                20 * SAMPLE_RATE * 60,
-                15 * SAMPLE_RATE * 60,
-                10 * SAMPLE_RATE * 60
-            ]
-        );
-        assert_eq!(
-            chunk_attempts(12 * SAMPLE_RATE * 60),
-            vec![12 * SAMPLE_RATE * 60, 10 * SAMPLE_RATE * 60]
-        );
-        assert_eq!(
-            chunk_attempts(7 * SAMPLE_RATE * 60),
-            vec![7 * SAMPLE_RATE * 60]
-        );
-    }
 
     #[test]
     fn pre_cancelled_inference_marks_atomic_flag_without_model_loading() {

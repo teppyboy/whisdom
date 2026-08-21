@@ -140,60 +140,104 @@ pub async fn run_transcription(
     if is_cancelled(&cancel_rx) {
         return Err(cancelled_error());
     }
-    let wav = work_dir.join("audio.wav");
-    if input.extension().and_then(|value| value.to_str()) == Some("wav") {
-        tokio::fs::copy(input, &wav).await?;
-    } else {
-        if is_cancelled(&cancel_rx) {
-            return Err(cancelled_error());
-        }
-        let ffmpeg = super::ffmpeg::ensure_ffmpeg(&state.cache).await?;
-        if is_cancelled(&cancel_rx) {
-            return Err(cancelled_error());
-        }
-        super::ffmpeg::convert_to_wav(&ffmpeg, input, &wav, cancel_rx.clone()).await?;
-    }
-    let cancel = Arc::new(AtomicBool::new(false));
-    let segments = match transcribe_wav(
-        &wav,
-        model.clone(),
-        language.clone(),
-        Arc::clone(&cancel),
+    let ffmpeg = super::ffmpeg::ensure_ffmpeg(&state.cache).await?;
+    let chunks_dir = work_dir.join("chunks");
+    let chunk_seconds = 20 * 60;
+    let chunks = super::ffmpeg::split_to_wav_chunks(
+        &ffmpeg,
+        input,
+        &chunks_dir,
+        chunk_seconds,
         cancel_rx.clone(),
-        &guard,
     )
-    .await
-    {
-        Ok(segments) => segments,
-        Err(error)
-            if super::transcribe::is_vulkan_backend(model.backend)
-                && error.to_string().contains("Whisper transcription failed") =>
-        {
-            if cancel.load(Ordering::Acquire) || is_cancelled(&cancel_rx) {
-                return Err(cancelled_error());
-            }
-            tracing::warn!(job_id = %id, "Whisper Vulkan inference failed; retrying with CPU");
-            let cpu = load_cpu_model(&state.cache, &state.model, model_spec).await?;
-            let retry_cancel = Arc::new(AtomicBool::new(false));
-            let retry_cancel_rx = cancel_rx.clone();
-            if is_cancelled(&retry_cancel_rx) {
-                return Err(cancelled_error());
-            }
-            transcribe_wav(&wav, cpu, language, retry_cancel, retry_cancel_rx, &guard).await?
+    .await?;
+    let mut segments = Vec::new();
+    for (index, chunk) in chunks.iter().enumerate() {
+        if is_cancelled(&cancel_rx) {
+            return Err(cancelled_error());
         }
-        Err(error) => return Err(error),
-    };
+        let offset_seconds = index as f32 * chunk_seconds as f32;
+        let chunk_segments = match transcribe_chunk_with_fallback(
+            state,
+            chunk,
+            model.clone(),
+            language.clone(),
+            model_spec,
+            cancel_rx.clone(),
+            &guard,
+        )
+        .await
+        {
+            Ok(segments) => segments,
+            Err(error) if is_retryable_transcription_error(&error) => {
+                let retry_seconds = 10 * 60;
+                let retry_dir = chunks_dir.join(format!("retry-{index:05}"));
+                tracing::warn!(
+                    job_id = %id,
+                    chunk = index,
+                    "native chunk failed; splitting it into smaller chunks"
+                );
+                let retry_chunks = super::ffmpeg::split_to_wav_chunks(
+                    &ffmpeg,
+                    chunk,
+                    &retry_dir,
+                    retry_seconds,
+                    cancel_rx.clone(),
+                )
+                .await?;
+                let mut retry_segments = Vec::new();
+                for (retry_index, retry_chunk) in retry_chunks.iter().enumerate() {
+                    let retry_offset = offset_seconds + retry_index as f32 * retry_seconds as f32;
+                    let smaller = transcribe_chunk_with_fallback(
+                        state,
+                        retry_chunk,
+                        model.clone(),
+                        language.clone(),
+                        model_spec,
+                        cancel_rx.clone(),
+                        &guard,
+                    )
+                    .await?;
+                    retry_segments.extend(smaller.into_iter().map(|mut segment| {
+                        segment.start += retry_offset;
+                        segment.end += retry_offset;
+                        segment
+                    }));
+                }
+                retry_segments
+            }
+            Err(error) => return Err(error),
+        };
+        segments.extend(chunk_segments.into_iter().map(|mut segment| {
+            segment.start += offset_seconds;
+            segment.end += offset_seconds;
+            segment
+        }));
+        set_phase(
+            state,
+            job,
+            id,
+            "transcribing",
+            Some(10.0 + 85.0 * (index + 1) as f32 / chunks.len() as f32),
+            Some(format!(
+                "transcribed chunk {} of {}",
+                index + 1,
+                chunks.len()
+            )),
+        )
+        .await;
+    }
     let text = segments
         .iter()
         .map(|segment| segment.text.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    if cancellation_wins(&cancel, &cancel_rx) {
+    if is_cancelled(&cancel_rx) {
         return Err(cancelled_error());
     }
     {
         let mut current = job.lock().await;
-        if cancellation_wins(&cancel, &cancel_rx) {
+        if is_cancelled(&cancel_rx) {
             return Err(cancelled_error());
         }
         current.phase = "complete".into();
@@ -205,12 +249,55 @@ pub async fn run_transcription(
     Ok(())
 }
 
-fn is_cancelled(cancel_rx: &watch::Receiver<bool>) -> bool {
-    *cancel_rx.borrow()
+async fn transcribe_chunk_with_fallback(
+    state: &Arc<HelperState>,
+    chunk: &Path,
+    model: Arc<super::transcribe::LoadedModel>,
+    language: Option<String>,
+    model_spec: &'static NativeModel,
+    cancel_rx: watch::Receiver<bool>,
+    guard: &JobGuard,
+) -> Result<Vec<super::protocol::TranscriptSegment>, HelperError> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    match transcribe_wav(
+        chunk,
+        model.clone(),
+        language.clone(),
+        Arc::clone(&cancel),
+        cancel_rx.clone(),
+        guard,
+    )
+    .await
+    {
+        Ok(segments) => Ok(segments),
+        Err(error)
+            if super::transcribe::is_vulkan_backend(model.backend)
+                && error.to_string().contains("Whisper transcription failed") =>
+        {
+            if cancel.load(Ordering::Acquire) || is_cancelled(&cancel_rx) {
+                return Err(cancelled_error());
+            }
+            let cpu = load_cpu_model(&state.cache, &state.model, model_spec).await?;
+            transcribe_wav(
+                chunk,
+                cpu,
+                language,
+                Arc::new(AtomicBool::new(false)),
+                cancel_rx,
+                guard,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    }
 }
 
-fn cancellation_wins(cancel: &AtomicBool, cancel_rx: &watch::Receiver<bool>) -> bool {
-    cancel.load(Ordering::Acquire) || is_cancelled(cancel_rx)
+fn is_retryable_transcription_error(error: &HelperError) -> bool {
+    error.to_string().contains("Whisper transcription failed")
+}
+
+fn is_cancelled(cancel_rx: &watch::Receiver<bool>) -> bool {
+    *cancel_rx.borrow()
 }
 
 const CANCELLED_ERROR_DISPLAY: &str = "helper bad request: cancelled";
@@ -248,19 +335,9 @@ mod tests {
     #[test]
     fn cancellation_predicate_reads_watch_state() {
         let (sender, receiver) = watch::channel(false);
-        let cancel = AtomicBool::new(false);
         assert!(!is_cancelled(&receiver));
-        assert!(!cancellation_wins(&cancel, &receiver));
         sender.send(true).expect("watch receiver exists");
         assert!(is_cancelled(&receiver));
-        assert!(cancellation_wins(&cancel, &receiver));
-    }
-
-    #[test]
-    fn atomic_cancellation_wins_before_completion() {
-        let (_sender, receiver) = watch::channel(false);
-        let cancel = AtomicBool::new(true);
-        assert!(cancellation_wins(&cancel, &receiver));
     }
 
     #[test]
