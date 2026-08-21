@@ -58,7 +58,7 @@ impl Queue {
 
     pub async fn cancel(&self, id: &str) -> Result<(), AppError> {
         let jobs = self.jobs.lock().await;
-        let entry = jobs.get(id).ok_or_else(|| AppError::NotFound)?;
+        let entry = jobs.get(id).ok_or(AppError::NotFound)?;
         let job = entry.job.lock().await;
         let _ = job.cancel_tx.send(true);
         Ok(())

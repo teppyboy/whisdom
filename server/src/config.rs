@@ -28,7 +28,7 @@ fn default_log_level() -> String {
 }
 const MULTIPART_OVERHEAD_BYTES: usize = 1024 * 1024;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Default)]
 pub struct Config {
     #[serde(default, deserialize_with = "deserialize_from_env_or")]
     pub config_path: Option<String>,
@@ -144,21 +144,12 @@ fn default_model_catalog() -> Vec<ModelCatalogEntry> {
     ]
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Default)]
 pub struct GpuConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub device: i32,
-}
-
-impl Default for GpuConfig {
-    fn default() -> Self {
-        GpuConfig {
-            enabled: false,
-            device: 0,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -211,22 +202,6 @@ pub struct TurnstileConfig {
 
 fn default_siteverify_url() -> String {
     "https://challenges.cloudflare.com/turnstile/v0/siteverify".into()
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            config_path: None,
-            server: ServerConfig::default(),
-            auth: AuthConfig::default(),
-            model: ModelConfig::default(),
-            paths: PathsConfig::default(),
-            limits: LimitsConfig::default(),
-            logging: LoggingConfig::default(),
-            turnstile: TurnstileConfig::default(),
-            gpu: GpuConfig::default(),
-        }
-    }
 }
 
 impl Default for ServerConfig {

@@ -4,10 +4,7 @@ use super::protocol::HelperError;
 
 const DEFAULT_PORT: u16 = 8788;
 const DEFAULT_ORIGINS: &str = "https://whisdom.app,http://localhost:5173";
-const DEFAULT_MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin?download=true";
 const DEFAULT_FFMPEG_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-15-13-02/ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip";
-const DEFAULT_MODEL_SHA256: &str =
-    "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
 const DEFAULT_FFMPEG_SHA256: &str =
     "0e7829b6e1ba867e37bbad17153de258bd3bffaa3b745626a6424df0ea113970";
 const DEFAULT_FFMPEG_EXE_SHA256: &str =
@@ -18,8 +15,6 @@ pub struct HelperConfig {
     pub port: u16,
     pub allowed_origins: Vec<String>,
     pub root: PathBuf,
-    pub model_url: String,
-    pub model_sha256: String,
     pub ffmpeg_url: String,
     pub ffmpeg_sha256: String,
     pub ffmpeg_exe_sha256: String,
@@ -48,17 +43,13 @@ impl HelperConfig {
             ));
         }
 
-        let model_url = env_or("WHISDOM_HELPER_MODEL_URL", DEFAULT_MODEL_URL);
-        let model_sha256 = env_or("WHISDOM_HELPER_MODEL_SHA256", DEFAULT_MODEL_SHA256);
         let ffmpeg_url = env_or("WHISDOM_HELPER_FFMPEG_URL", DEFAULT_FFMPEG_URL);
         let ffmpeg_sha256 = env_or("WHISDOM_HELPER_FFMPEG_SHA256", DEFAULT_FFMPEG_SHA256);
         let ffmpeg_exe_sha256 = env_or(
             "WHISDOM_HELPER_FFMPEG_EXE_SHA256",
             DEFAULT_FFMPEG_EXE_SHA256,
         );
-        validate_asset_url(&model_url)?;
         validate_asset_url(&ffmpeg_url)?;
-        validate_sha256(&model_sha256, "WHISDOM_HELPER_MODEL_SHA256")?;
         validate_sha256(&ffmpeg_sha256, "WHISDOM_HELPER_FFMPEG_SHA256")?;
         validate_sha256(&ffmpeg_exe_sha256, "WHISDOM_HELPER_FFMPEG_EXE_SHA256")?;
 
@@ -66,8 +57,6 @@ impl HelperConfig {
             port: parse_port("WHISDOM_HELPER_PORT", DEFAULT_PORT)?,
             allowed_origins,
             root,
-            model_url,
-            model_sha256,
             ffmpeg_url,
             ffmpeg_sha256,
             ffmpeg_exe_sha256,
@@ -91,9 +80,6 @@ impl HelperConfig {
     }
     pub fn auth_dir(&self) -> PathBuf {
         self.root.join("auth")
-    }
-    pub fn model_path(&self) -> PathBuf {
-        self.models_dir().join("ggml-large-v3-turbo-q5_0.bin")
     }
     pub fn token_path(&self) -> PathBuf {
         self.auth_dir().join("helper-token")
@@ -155,7 +141,18 @@ pub fn validate_asset_url(value: &str) -> Result<(), HelperError> {
     let host = url
         .host_str()
         .ok_or_else(|| HelperError::Config("asset URL must include a pinned host".into()))?;
-    if url.scheme() != "https" || !matches!(host, "huggingface.co" | "github.com") {
+    if url.scheme() != "https"
+        || !matches!(
+            host,
+            "huggingface.co"
+                | "cdn-lfs.hf.co"
+                | "cas-bridge.xethub.hf.co"
+                | "transfer.xethub.hf.co"
+                | "github.com"
+                | "objects.githubusercontent.com"
+                | "release-assets.githubusercontent.com"
+        )
+    {
         return Err(HelperError::Config(
             "asset URL host or scheme is not allowed".into(),
         ));
@@ -189,9 +186,6 @@ mod tests {
     fn default_paths_are_under_local_app_data_or_temp() {
         let config = HelperConfig::from_env().unwrap();
         assert!(config.root.is_absolute());
-        assert!(config
-            .model_path()
-            .ends_with("ggml-large-v3-turbo-q5_0.bin"));
     }
 
     #[test]
@@ -201,12 +195,22 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_pinned_https_hosts() {
-        assert!(validate_asset_url("https://huggingface.co/model/file").is_ok());
-        assert!(validate_asset_url("https://github.com/org/repo/releases/file").is_ok());
+    fn accepts_only_exact_pinned_https_hosts() {
+        for host in [
+            "huggingface.co",
+            "cdn-lfs.hf.co",
+            "cas-bridge.xethub.hf.co",
+            "transfer.xethub.hf.co",
+            "github.com",
+            "objects.githubusercontent.com",
+            "release-assets.githubusercontent.com",
+        ] {
+            assert!(validate_asset_url(&format!("https://{host}/asset")).is_ok());
+        }
         assert!(validate_asset_url("http://github.com/org/repo/file").is_err());
         assert!(validate_asset_url("https://evil.example/file").is_err());
         assert!(validate_asset_url("https://github.com.evil.example/file").is_err());
+        assert!(validate_asset_url("https://cdn-lfs.hf.co.evil.example/file").is_err());
     }
 
     #[test]

@@ -42,11 +42,19 @@ pub struct HealthResponse {
     pub protocol_version: u32,
     pub busy: bool,
 }
-
 #[derive(Debug, Clone, Serialize)]
 pub struct PairResponse {
     pub token: String,
     pub protocol_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NativeModelResponse {
+    pub id: String,
+    pub label: String,
+    pub quality: String,
+    pub size_bytes: u64,
+    pub installed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,19 +66,33 @@ pub struct CapabilitiesResponse {
     pub model_ready: bool,
     pub ffmpeg_ready: bool,
     pub native_picker: bool,
+    pub models: Vec<NativeModelResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NativeSelectionResponse {
+    pub id: String,
+    pub filename: String,
+    pub size_bytes: u64,
+    pub extension: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectFilesResponse {
+    pub selections: Vec<NativeSelectionResponse>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PickAndTranscribeRequest {
+pub struct StartSelectionRequest {
+    pub selection_id: String,
     pub language: Option<String>,
-    pub model: Option<String>,
+    pub model: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct PickAndTranscribeResponse {
+#[derive(Debug, Clone, Serialize)]
+pub struct StartSelectionResponse {
     pub job_id: String,
-    pub filename: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,29 +120,33 @@ pub struct JobStatus {
     pub filename: Option<String>,
 }
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn picker_request_rejects_client_paths() {
-        let result = serde_json::from_str::<PickAndTranscribeRequest>(
-            r#"{"language":"vi","model":"ggml-large-v3-turbo-q5_0","path":"C:\\secret.wav"}"#,
-        );
-        assert!(result.is_err());
+    fn selection_start_rejects_client_paths_and_assets() {
+        for field in ["path", "file", "url", "checksum"] {
+            let input =
+                format!(r#"{{"selection_id":"id","model":"ggml-tiny-q5_1","{field}":"x"}}"#);
+            assert!(serde_json::from_str::<StartSelectionRequest>(&input).is_err());
+        }
     }
 
     #[test]
-    fn picker_response_contains_no_path() {
-        let value = serde_json::to_value(PickAndTranscribeResponse {
-            job_id: "job-123".into(),
-            filename: "meeting.mkv".into(),
+    fn serialized_companion_responses_never_contain_paths() {
+        let value = serde_json::to_value(SelectFilesResponse {
+            selections: vec![NativeSelectionResponse {
+                id: "selection-1".into(),
+                filename: "meeting.mkv".into(),
+                size_bytes: 5,
+                extension: Some("mkv".into()),
+            }],
         })
-        .expect("picker response serializes");
-        assert_eq!(value["job_id"], "job-123");
-        assert_eq!(value["filename"], "meeting.mkv");
+        .expect("serializes");
         assert!(value.get("path").is_none());
+        assert!(value["selections"][0].get("path").is_none());
     }
 }

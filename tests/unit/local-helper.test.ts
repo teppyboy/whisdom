@@ -2,6 +2,30 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { LocalHelperClient } from "../../src/features/local-helper/client"
 
+const health = { available: true, protocol_version: 2, busy: false }
+const capabilities = {
+  available: true,
+  engine: "whisper.cpp",
+  accelerator: "cpu",
+  model_id: "ggml-large-v3-turbo-q5_0",
+  model_ready: true,
+  ffmpeg_ready: true,
+  native_picker: true,
+  models: [
+    {
+      id: "ggml-large-v3-turbo-q5_0",
+      label: "Whisper Large v3 Turbo",
+      quality: "high",
+      size_bytes: 574041195,
+      installed: true,
+    },
+  ],
+}
+
+function mockHealth() {
+  return new Response(JSON.stringify(health), { status: 200 })
+}
+
 describe("LocalHelperClient", () => {
   beforeEach(() => {
     const storage = new Map<string, string>()
@@ -22,168 +46,199 @@ describe("LocalHelperClient", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ available: true, protocol_version: 1, busy: false }),
-          { status: 200 }
-        )
-      )
-
+      .mockResolvedValueOnce(mockHealth())
     const client = new LocalHelperClient()
-    const health = await client.discover()
 
-    expect(health?.available).toBe(true)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect((await client.discover())?.available).toBe(true)
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "http://127.0.0.1:8789/api/v1/health"
     )
   })
 
-  it("stores the pairing token and never uses a cloud token", async () => {
+  it("pairs locally and validates native models", async () => {
     vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ available: true, protocol_version: 1, busy: false }),
-          { status: 200 }
+          JSON.stringify({ token: "local-token", protocol_version: 2 })
         )
       )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ token: "local-token", protocol_version: 1 }),
-          { status: 200 }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            available: true,
-            engine: "whisper.cpp",
-            accelerator: "cpu",
-            model_id: "turbo",
-            model_ready: true,
-            ffmpeg_ready: true,
-          }),
-          { status: 200 }
-        )
-      )
-
+      .mockResolvedValueOnce(new Response(JSON.stringify(capabilities)))
     const client = new LocalHelperClient()
     await client.discover()
-    const capabilities = await client.pair()
 
-    expect(capabilities.engine).toBe("whisper.cpp")
+    await expect(client.pair()).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "ggml-large-v3-turbo-q5_0" })],
+    })
     expect(localStorage.getItem("whisdom.local-helper.token.v1")).toBe(
       "local-token"
     )
   })
 
-  it("submits a native picker request without browser media or cloud tokens", async () => {
+  it("rejects malformed native model capabilities", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...capabilities, models: [{ id: "x" }] }))
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+    await expect(client.getCapabilities()).rejects.toThrow(
+      "invalid capabilities"
+    )
+  })
+
+  it("selects opaque native files without a request body", async () => {
     localStorage.setItem("whisdom.local-helper.token.v1", "local-token")
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ available: true, protocol_version: 1, busy: false }),
-          { status: 200 }
+          JSON.stringify({
+            selections: [
+              {
+                id: "selection-1",
+                filename: "meeting.mkv",
+                size_bytes: 42,
+                extension: "mkv",
+              },
+            ],
+          })
         )
       )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ job_id: "job-123", filename: "meeting.mkv" }),
-          { status: 200 }
-        )
-      )
-
     const client = new LocalHelperClient()
     await client.discover()
-    const result = await client.pickAndSubmit("vi", "ggml-large-v3-turbo-q5_0")
 
-    expect(result).toEqual({ jobId: "job-123", filename: "meeting.mkv" })
-    const request = fetchMock.mock.calls[1]
-    expect(request?.[0]).toBe(
-      "http://127.0.0.1:8788/api/v1/pick-and-transcribe"
+    await expect(client.selectFiles()).resolves.toEqual([
+      {
+        id: "selection-1",
+        filename: "meeting.mkv",
+        size_bytes: 42,
+        extension: "mkv",
+      },
+    ])
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "http://127.0.0.1:8788/api/v1/select-files"
     )
-    const init = request?.[1] as RequestInit
-    expect(init.headers).toEqual({
-      Authorization: "Bearer local-token",
-      "Content-Type": "application/json",
+    const init = fetchMock.mock.calls[1]?.[1] as RequestInit
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: { Authorization: "Bearer local-token" },
     })
-    expect(init.body).toBe(
-      JSON.stringify({ language: "vi", model: "ggml-large-v3-turbo-q5_0" })
-    )
-    expect(init.body).not.toContain("audio")
-    expect(init.body).not.toContain("path")
-    expect(init.body).not.toContain("google")
+    expect(init.body).toBeUndefined()
   })
 
-  it("treats a cancelled native picker as no job", async () => {
+  it("treats picker cancellation as no selections", async () => {
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ available: true, protocol_version: 1, busy: false }),
-          { status: 200 }
-        )
-      )
+      .mockResolvedValueOnce(mockHealth())
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
-
     const client = new LocalHelperClient()
     await client.discover()
-    await expect(
-      client.pickAndSubmit("en", "ggml-large-v3-turbo-q5_0")
-    ).resolves.toBeNull()
+    await expect(client.selectFiles()).resolves.toEqual([])
   })
 
-  it("rejects malformed native picker responses", async () => {
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ available: true, protocol_version: 1, busy: false }),
-          { status: 200 }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ job_id: "job-123" }), { status: 200 })
-      )
-
-    const client = new LocalHelperClient()
-    await client.discover()
-    await expect(
-      client.pickAndSubmit("en", "ggml-large-v3-turbo-q5_0")
-    ).rejects.toThrow("invalid picker job")
-  })
-
-  it("rejects picker responses with invalid fields or path data", async () => {
-    for (const payload of [
-      { job_id: 42, filename: "meeting.mkv" },
-      { job_id: "job-123", filename: "C:\\secret\\meeting.mkv" },
+  it("rejects malformed selections and path-shaped display data", async () => {
+    for (const selections of [
+      [{ id: "selection-1" }],
+      [
+        {
+          id: "selection-1",
+          filename: "C:\\secret.wav",
+          size_bytes: 1,
+          extension: "wav",
+        },
+      ],
     ]) {
       vi.spyOn(globalThis, "fetch")
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({ available: true, protocol_version: 1, busy: false }),
-            { status: 200 }
-          )
-        )
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify(payload), { status: 200 })
-        )
+        .mockResolvedValueOnce(mockHealth())
+        .mockResolvedValueOnce(new Response(JSON.stringify({ selections })))
       const client = new LocalHelperClient()
       await client.discover()
-      await expect(
-        client.pickAndSubmit("en", "ggml-large-v3-turbo-q5_0")
-      ).rejects.toThrow("invalid picker job")
+      await expect(client.selectFiles()).rejects.toThrow(
+        "invalid file selections"
+      )
       vi.restoreAllMocks()
     }
   })
 
-  it("reports SSE connection errors without treating unsubscribe as an error", async () => {
+  it("deletes a companion selection before local queue removal", async () => {
+    localStorage.setItem("whisdom.local-helper.token.v1", "local-token")
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const client = new LocalHelperClient()
+    await client.discover()
+    await client.deleteSelection("selection-1")
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "http://127.0.0.1:8788/api/v1/selections/selection-1"
+    )
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" })
+  })
+
+  it("starts an opaque selection with only its id, language, and model", async () => {
+    localStorage.setItem("whisdom.local-helper.token.v1", "local-token")
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ job_id: "job-123" }))
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+    await expect(
+      client.startSelection("selection-1", "vi", "ggml-base-q5_1")
+    ).resolves.toEqual({ jobId: "job-123" })
+    const init = fetchMock.mock.calls[1]?.[1] as RequestInit
+    expect(init).toMatchObject({ method: "POST" })
+    expect(JSON.parse(String(init.body))).toEqual({
+      selection_id: "selection-1",
+      language: "vi",
+      model: "ggml-base-q5_1",
+    })
+  })
+
+  it("reports selection start failures", async () => {
     vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+    const client = new LocalHelperClient()
+    await client.discover()
+    await expect(
+      client.startSelection("missing", "en", "ggml-base-q5_1")
+    ).rejects.toThrow("404")
+  })
+
+  it("skips malformed SSE statuses and delivers valid 0..100 progress", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ available: true, protocol_version: 1, busy: false }),
+          [
+            'data: {"id":"job-123","phase":"transcribing","progress":101}\n\n',
+            'data: {"id":"job-123","phase":"complete","progress":100,"segments":[{"start":0,"end":1,"text":"done"}]}\n\n',
+          ].join(""),
           { status: 200 }
         )
       )
+    const client = new LocalHelperClient()
+    await client.discover()
+    const onStatus = vi.fn()
+    const onError = vi.fn()
+    client.subscribeProgress("job-123", onStatus, onError)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(onStatus).toHaveBeenCalledTimes(1)
+    expect(onStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "complete", progress: 100 })
+    )
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it("reports SSE connection errors without treating unsubscribe as an error", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
       .mockRejectedValueOnce(new Error("connection lost"))
     const client = new LocalHelperClient()
     await client.discover()
@@ -196,66 +251,70 @@ describe("LocalHelperClient", () => {
     connection.unsubscribe()
   })
 
-  it("reports an SSE stream that ends before a terminal status", async () => {
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ available: true, protocol_version: 1, busy: false }),
-          { status: 200 }
+  it("ignores progress statuses for other jobs until the subscribed job completes", async () => {
+    let enqueueSubscribedStatus!: () => void
+    const progress = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'data: {"id":"other-job","phase":"complete","progress":100,"segments":[{"start":0,"end":1,"text":"other"}]}\n\n'
+          )
         )
-      )
+        enqueueSubscribedStatus = () => {
+          controller.enqueue(
+            new TextEncoder().encode(
+              'data: {"id":"job-123","phase":"complete","progress":100,"segments":[{"start":0,"end":1,"text":"done"}]}\n\n'
+            )
+          )
+          controller.close()
+        }
+      },
+    })
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(new Response(progress, { status: 200 }))
+    const client = new LocalHelperClient()
+    await client.discover()
+    const onStatus = vi.fn()
+    const onError = vi.fn()
+    client.subscribeProgress("job-123", onStatus, onError)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    enqueueSubscribedStatus()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(onStatus).toHaveBeenCalledTimes(1)
+    expect(onStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "job-123", phase: "complete" })
+    )
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it("reports terminal complete statuses without valid segments", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
       .mockResolvedValueOnce(
         new Response(
-          new ReadableStream({ start(controller) { controller.close() } }),
-          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+          [
+            'data: {"id":"job-123","phase":"complete","progress":100}',
+            "",
+            "",
+          ].join(String.fromCharCode(10)),
+          { status: 200 }
         )
       )
     const client = new LocalHelperClient()
     await client.discover()
+    const onStatus = vi.fn()
     const onError = vi.fn()
-    client.subscribeProgress("job-123", vi.fn(), onError)
+    client.subscribeProgress("job-123", onStatus, onError)
     await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(onStatus).not.toHaveBeenCalled()
     expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Helper progress stream ended early." })
+      expect.objectContaining({
+        message: "Helper progress complete status has invalid segments.",
+      })
     )
   })
 
-  it("reports cache clear failures instead of hiding them", async () => {
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ available: true, protocol_version: 1, busy: false }),
-          { status: 200 }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ token: "local-token", protocol_version: 1 }),
-          { status: 200 }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            available: true,
-            engine: "whisper.cpp",
-            accelerator: "cpu",
-            model_id: "turbo",
-            model_ready: true,
-            ffmpeg_ready: true,
-          }),
-          { status: 200 }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: "helper resource is busy" }), {
-          status: 409,
-        })
-      )
-
-    const client = new LocalHelperClient()
-    await client.discover()
-    await client.pair()
-    await expect(client.clearCache()).rejects.toThrow("409")
-  })
 })

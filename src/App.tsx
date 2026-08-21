@@ -4,6 +4,8 @@ import {
   ArrowLeft,
   CheckCircle2,
   Check,
+  ChevronDown,
+  ChevronUp,
   ChevronsUpDown,
   Download,
   FileAudio,
@@ -114,6 +116,8 @@ import {
 } from "@/lib/transcription-worker-client"
 import { transcribeChunkWithServer } from "@/features/server-transcription/client"
 import { localHelperClient } from "@/features/local-helper/client"
+import { normalizeHelperProgress } from "@/features/local-helper/progress"
+import type { HelperCapabilities } from "@/features/local-helper/types"
 import { ServerTranscriptionApi } from "@/features/server-transcription/api"
 import type {
   ServerCapabilities,
@@ -170,12 +174,42 @@ type ProgressLogEntry = {
   updatedAt: string
 }
 type QueuedFileStatus = "pending" | "active" | "complete" | "error"
+type QueueSource =
+  | { kind: "browser"; file: File }
+  | { kind: "companion"; selectionId: string; name: string; sizeBytes: number }
 type QueuedFile = {
   id: string
-  file: File
+  source: QueueSource
   status: QueuedFileStatus
   transcriptId?: string
   error?: string
+}
+
+function queueFileName(item: QueuedFile) {
+  return item.source.kind === "browser"
+    ? item.source.file.name
+    : item.source.name
+}
+
+function queueFileSize(item: QueuedFile) {
+  return item.source.kind === "browser"
+    ? item.source.file.size
+    : item.source.sizeBytes
+}
+
+function resolveTranscriptModelLabel(
+  transcript: TranscriptDocument,
+  serverCapabilities: ServerCapabilitiesState,
+  helperCapabilities: HelperCapabilities | null
+) {
+  if (transcript.mode === "server")
+    return resolveServerModelLabel(transcript.modelId, serverCapabilities)
+  if (transcript.mode === "local-helper")
+    return (
+      helperCapabilities?.models.find((model) => model.id === transcript.modelId)
+        ?.label ?? transcript.modelId
+    )
+  return findModel(transcript.modelId).label
 }
 type ToastMessage = {
   id: string
@@ -226,7 +260,15 @@ const COPY = {
       "Server-side transcription via whisper.cpp. Sign in required.",
     companionTitle: "Desktop Companion",
     companionDescription:
-      "Choose a media file in the Windows dialog when transcription starts. The file stays on this device.",
+      "Choose one or more media files in the Windows dialog. Files stay on this device until you start transcription.",
+    companionPreflight:
+      "Native files show filename and size. Duration and chunk estimates are unavailable until transcription.",
+    companionPickerTitle: "Choose files in Windows",
+    companionPickerDescription:
+      "Open the Windows file picker to add one or more files. Drag and drop is unavailable in Desktop Companion mode.",
+    companionChooseFiles: "Choose files in Windows",
+    moveFileUp: "Move file up",
+    moveFileDown: "Move file down",
     companionModelDescription:
       "Whisper Large v3 Turbo runs in the native Windows Companion with Vulkan/CPU acceleration. ~574 MB download.",
     serverUnavailable: "Transcription server unavailable",
@@ -385,6 +427,7 @@ const COPY = {
     } satisfies Record<string, string>,
     jobStateLabels: {
       idle: "Idle",
+      queued: "Queued",
       analyzing: "Analyzing",
       "awaiting-confirmation": "Awaiting confirmation",
       "downloading-assets": "Downloading assets",
@@ -424,7 +467,15 @@ const COPY = {
     serverModeDesc: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
     companionTitle: "Desktop Companion",
     companionDescription:
-      "Chọn tệp media trong hộp thoại Windows khi bắt đầu chép lời. Tệp vẫn ở trên thiết bị này.",
+      "Chọn một hoặc nhiều tệp media trong hộp thoại Windows. Tệp vẫn ở trên thiết bị này cho đến khi bắt đầu chép lời.",
+    companionPreflight:
+      "Tệp gốc chỉ hiển thị tên và dung lượng. Không có ước tính thời lượng hoặc số đoạn trước khi chép lời.",
+    companionPickerTitle: "Chọn tệp trong Windows",
+    companionPickerDescription:
+      "Mở hộp chọn tệp Windows để thêm một hoặc nhiều tệp. Không hỗ trợ kéo thả trong chế độ Desktop Companion.",
+    companionChooseFiles: "Chọn tệp trong Windows",
+    moveFileUp: "Di chuyển tệp lên",
+    moveFileDown: "Di chuyển tệp xuống",
     companionModelDescription:
       "Whisper Large v3 Turbo chạy trong Desktop Companion trên Windows với tăng tốc Vulkan/CPU. Tải xuống khoảng 574 MB.",
     serverUnavailable: "Máy chủ chuyển ngữ không khả dụng",
@@ -586,6 +637,7 @@ const COPY = {
     } satisfies Record<string, string>,
     jobStateLabels: {
       idle: "Sẵn sàng",
+      queued: "Đã xếp hàng",
       analyzing: "Đang phân tích",
       "awaiting-confirmation": "Chờ xác nhận",
       "downloading-assets": "Đang tải tài nguyên",
@@ -710,6 +762,9 @@ export function App() {
   const t = COPY[settings.uiLanguage]
   const [file, setFile] = React.useState<File | null>(null)
   const [queue, setQueue] = React.useState<QueuedFile[]>([])
+  const [helperCapabilities, setHelperCapabilities] =
+    React.useState<HelperCapabilities | null>(null)
+  const [companionModelId, setCompanionModelId] = React.useState("")
   const [selectedQueueId, setSelectedQueueId] = React.useState<string | null>(
     null
   )
@@ -747,6 +802,7 @@ export function App() {
     string | null
   >(null)
   const settingsRef = React.useRef(settings)
+  const companionPickerGeneration = React.useRef(0)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const driveStatusText = getDriveStatusText(driveStatus, t)
   const driveStatusIcon = getDriveStatusIcon(driveStatus)
@@ -758,6 +814,12 @@ export function App() {
     settings.mode === "server" && serverCapabilitiesKey !== serverRequestKey
       ? "loading"
       : serverCapabilities
+
+  React.useEffect(() => {
+    return () => {
+      companionPickerGeneration.current += 1
+    }
+  }, [])
 
   React.useEffect(() => {
     async function hydrate() {
@@ -870,6 +932,32 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeServerCapabilities])
 
+  React.useEffect(() => {
+    if (settings.mode !== "local-helper") return
+    let cancelled = false
+    void localHelperClient
+      .connect()
+      .then((capabilities) => {
+        if (cancelled) return
+        setHelperCapabilities(capabilities)
+        setCompanionModelId((current) =>
+          capabilities.models.some((model) => model.id === current)
+            ? current
+            : (capabilities.models.find(
+                (model) => model.id === "ggml-large-v3-turbo-q5_0"
+              )?.id ??
+              capabilities.models[0]?.id ??
+              "")
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setHelperCapabilities(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settings.mode])
+
   const model = findModel(settings.modelId)
   const selectedServerModel =
     typeof activeServerCapabilities === "object" &&
@@ -879,17 +967,27 @@ export function App() {
         )
       : undefined
   const serverSelectionReady = Boolean(selectedServerModel)
+  const selectedCompanionModel = helperCapabilities?.models.find(
+    (item) => item.id === companionModelId
+  )
+  const selectedQueueItem = queue.find((item) => item.id === selectedQueueId)
+  const companionSelectionReady =
+    selectedQueueItem?.source.kind === "companion" &&
+    Boolean(selectedCompanionModel)
   const canStart =
     !isBusy(jobState) &&
-    (settings.mode === "local-helper" ||
-      (Boolean(file) &&
+    (settings.mode === "local-helper"
+      ? companionSelectionReady
+      : Boolean(file) &&
         Boolean(analysis) &&
-        (settings.mode !== "server" || serverSelectionReady)))
+        (settings.mode !== "server" || serverSelectionReady))
   const canStartAll =
-    settings.mode !== "local-helper" &&
     queue.length > 1 &&
     !isBusy(jobState) &&
-    (settings.mode !== "server" || serverSelectionReady)
+    (settings.mode === "local-helper"
+      ? Boolean(selectedCompanionModel) &&
+        queue.every((item) => item.source.kind === "companion")
+      : settings.mode !== "server" || serverSelectionReady)
   const isEnglishOnlyMismatch =
     isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) &&
     !model.multilingual
@@ -995,7 +1093,7 @@ export function App() {
 
     const addedQueue = nextFiles.map((nextFile) => ({
       id: createId("file"),
-      file: nextFile,
+      source: { kind: "browser" as const, file: nextFile },
       status: "pending" as const,
     }))
     const shouldAnalyzeFirstAddedFile = queue.length === 0 || !file
@@ -1004,7 +1102,7 @@ export function App() {
 
     if (shouldAnalyzeFirstAddedFile) {
       await analyzeSelectedFile(
-        addedQueue[0].file,
+        nextFiles[0],
         settingsRef.current,
         true,
         addedQueue[0].id
@@ -1012,28 +1110,120 @@ export function App() {
     }
   }
 
-  async function removeQueuedFile(id: string) {
-    const nextQueue = queue.filter((item) => item.id !== id)
-    setQueue(nextQueue)
+  async function selectCompanionFiles() {
+    const generation = ++companionPickerGeneration.current
+    try {
+      const capabilities = await localHelperClient.connect()
+      if (
+        generation !== companionPickerGeneration.current ||
+        settingsRef.current.mode !== "local-helper"
+      )
+        return
+      setHelperCapabilities(capabilities)
+      setCompanionModelId((current) =>
+        capabilities.models.some((model) => model.id === current)
+          ? current
+          : (capabilities.models.find(
+              (model) => model.id === "ggml-large-v3-turbo-q5_0"
+            )?.id ??
+            capabilities.models[0]?.id ??
+            "")
+      )
+      const selections = await localHelperClient.selectFiles()
+      if (
+        generation !== companionPickerGeneration.current ||
+        settingsRef.current.mode !== "local-helper"
+      ) {
+        await Promise.all(
+          selections.map((selection) =>
+            localHelperClient.deleteSelection(selection.id).catch(() => undefined)
+          )
+        )
+        return
+      }
+      if (selections.length === 0) return
+      const added = selections.map((selection) => ({
+        id: createId("file"),
+        source: {
+          kind: "companion" as const,
+          selectionId: selection.id,
+          name: selection.filename,
+          sizeBytes: selection.size_bytes,
+        },
+        status: "pending" as const,
+      }))
+      setQueue((current) => [...current, ...added])
+      if (queue.length === 0) selectCompanionQueueItem(added[0])
+    } catch (caught) {
+      if (
+        generation !== companionPickerGeneration.current ||
+        settingsRef.current.mode !== "local-helper"
+      )
+        return
+      const message =
+        caught instanceof Error ? caught.message : t.transcriptionFailed
+      setError(message)
+      setToastMessage({
+        id: createId("toast"),
+        title: t.transcriptionFailed,
+        description: message,
+        kind: "error",
+      })
+    }
+  }
 
-    if (selectedQueueId !== id) {
+  function selectCompanionQueueItem(item: QueuedFile) {
+    if (item.source.kind !== "companion") return
+    setSelectedQueueId(item.id)
+    setFile(null)
+    setAnalysis(null)
+    setTranscript(null)
+    setError(null)
+    setProgressLog([])
+    setJobState("awaiting-confirmation")
+    recordProgress({
+      phase: "awaiting-confirmation",
+      message: t.reviewPlan,
+      progress: 0.18,
+    })
+  }
+
+  async function selectQueueItem(item: QueuedFile) {
+    if (item.source.kind === "companion") {
+      selectCompanionQueueItem(item)
       return
     }
+    await analyzeSelectedFile(
+      item.source.file,
+      settingsRef.current,
+      false,
+      item.id
+    )
+  }
 
+  async function removeQueuedFile(id: string) {
+    const currentItem = queue.find((item) => item.id === id)
+    if (!currentItem) return
+    if (currentItem.source.kind === "companion") {
+      try {
+        await localHelperClient.deleteSelection(currentItem.source.selectionId)
+      } catch (caught) {
+        const message =
+          caught instanceof Error ? caught.message : t.transcriptionFailed
+        setError(message)
+        return
+      }
+    }
+    const nextQueue = queue.filter((item) => item.id !== id)
+    setQueue(nextQueue)
+    if (selectedQueueId !== id) return
     const removedIndex = queue.findIndex((item) => item.id === id)
     const nextSelected =
       nextQueue[Math.min(Math.max(removedIndex, 0), nextQueue.length - 1)]
-
     if (nextSelected) {
-      await analyzeSelectedFile(
-        nextSelected.file,
-        settingsRef.current,
-        false,
-        nextSelected.id
-      )
+      await selectQueueItem(nextSelected)
       return
     }
-
     setSelectedQueueId(null)
     setFile(null)
     setAnalysis(null)
@@ -1043,10 +1233,21 @@ export function App() {
     setProgress({ phase: "idle", message: t.waiting, progress: 0 })
   }
 
+  function moveQueueItem(id: string, direction: -1 | 1) {
+    setQueue((current) => {
+      const index = current.findIndex((item) => item.id === id)
+      const target = index + direction
+      if (index < 0 || target < 0 || target >= current.length) return current
+      const next = [...current]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+  }
+
   function mapServerPhase(phase: ServerJobPhase): JobState {
     switch (phase) {
       case "queued":
-        return "idle"
+        return "queued"
       case "downloading":
         return "downloading-assets"
       case "extracting":
@@ -1438,11 +1639,21 @@ export function App() {
     return document
   }
 
-  async function transcribeWithCompanion(
+  async function transcribeCompanionSelection(
+    item: QueuedFile,
     runSettings: AppSettings
-  ): Promise<TranscriptDocument | null> {
+  ): Promise<TranscriptDocument> {
+    if (item.source.kind !== "companion")
+      throw new Error("Invalid companion queue item.")
+    const selection = item.source
+    if (!companionModelId) throw new Error("No companion model is available.")
+    const language = resolveTranscriptionLanguage(
+      runSettings.language,
+      runSettings.uiLanguage
+    )
+    setSelectedQueueId(item.id)
+    updateQueueItem(item.id, { status: "active", error: undefined })
     setError(null)
-    setTranscript(null)
     setProgressLog([])
     setJobState("downloading-assets")
     recordProgress({
@@ -1450,46 +1661,35 @@ export function App() {
       message: t.downloadingModelAssets,
       progress: 0.1,
     })
-    await localHelperClient.connect()
-    const submission = await localHelperClient.pickAndSubmit(
-      resolveTranscriptionLanguage(
-        runSettings.language,
-        runSettings.uiLanguage
-      ),
-      "ggml-large-v3-turbo-q5_0"
-    )
-    if (!submission) {
-      setJobState("idle")
-      recordProgress({ phase: "idle", message: t.waiting, progress: 0 })
-      return null
-    }
-
-    const language = resolveTranscriptionLanguage(
-      runSettings.language,
-      runSettings.uiLanguage
+    const { jobId } = await localHelperClient.startSelection(
+      selection.selectionId,
+      language,
+      companionModelId
     )
     return new Promise<TranscriptDocument>((resolve, reject) => {
       let settled = false
       const connection = localHelperClient.subscribeProgress(
-        submission.jobId,
+        jobId,
         (status) => {
           const mapped = mapServerPhase(status.phase)
           recordProgress({
             phase: mapped,
             message: status.message ?? t.transcribingAudio,
-            progress: status.progress ?? 0,
+            progress: normalizeHelperProgress(status.progress),
           })
           setJobState(mapped)
           if (status.phase === "complete" && status.segments) {
+            if (settled) return
+            settled = true
+            connection.unsubscribe()
             const now = new Date().toISOString()
             const document: TranscriptDocument = {
               id: createId("transcript"),
               title:
-                submission.filename.replace(/\.[^.]+$/, "") ||
-                t.untitledTranscript,
-              sourceName: submission.filename,
+                selection.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
+              sourceName: selection.name,
               language,
-              modelId: "ggml-large-v3-turbo-q5_0",
+              modelId: companionModelId,
               mode: "local-helper",
               createdAt: now,
               updatedAt: now,
@@ -1501,12 +1701,13 @@ export function App() {
                 id: createId("segment"),
               })),
             }
-            if (settled) return
-            settled = true
-            connection.unsubscribe()
             setJobState("saving")
             void saveTranscript(document)
               .then(async () => {
+                updateQueueItem(item.id, {
+                  status: "complete",
+                  transcriptId: document.id,
+                })
                 setHistory(await listTranscripts())
                 setJobState("complete")
                 recordProgress({
@@ -1517,21 +1718,25 @@ export function App() {
                 resolve(document)
               })
               .catch(reject)
-          } else if (
-            status.phase === "error" ||
-            status.phase === "cancelled"
-          ) {
+          } else if (status.phase === "complete") {
+            if (settled) return
+            settled = true
+            connection.unsubscribe()
+            reject(
+              new Error("Helper progress complete status has invalid segments.")
+            )
+          } else if (status.phase === "error" || status.phase === "cancelled") {
             if (settled) return
             settled = true
             connection.unsubscribe()
             reject(new Error(status.error ?? "Transcription cancelled"))
           }
         },
-        (error) => {
+        (caught) => {
           if (settled) return
           settled = true
           connection.unsubscribe()
-          reject(error)
+          reject(caught)
         }
       )
     })
@@ -1539,30 +1744,25 @@ export function App() {
 
   async function startTranscription() {
     if (settingsRef.current.mode === "local-helper") {
+      if (!selectedQueueItem || selectedQueueItem.source.kind !== "companion")
+        return
       try {
-        const document = await transcribeWithCompanion(settingsRef.current)
-        if (document) {
-          setTranscript(document)
-          setIsResultOpen(true)
-        }
+        const document = await transcribeCompanionSelection(
+          selectedQueueItem,
+          settingsRef.current
+        )
+        setTranscript(document)
+        setIsResultOpen(true)
       } catch (caught) {
-        const detail =
-          caught instanceof Error
-            ? `${caught.name}: ${caught.message}\n${caught.stack ?? ""}`
-            : String(caught)
-        console.error("[transcription]", detail)
-        setJobState("error")
         const message =
           caught instanceof Error ? caught.message : t.transcriptionFailed
+        updateQueueItem(selectedQueueItem.id, { status: "error", error: message })
+        setJobState("error")
         setError(message)
       }
       return
     }
-
-    if (!file || !analysis) {
-      return
-    }
-
+    if (!file || !analysis) return
     try {
       const document = await transcribeFile(
         file,
@@ -1572,14 +1772,9 @@ export function App() {
       setTranscript(document)
       setIsResultOpen(true)
     } catch (caught) {
-      const detail =
-        caught instanceof Error
-          ? `${caught.name}: ${caught.message}\n${caught.stack ?? ""}`
-          : String(caught)
-      console.error("[transcription]", detail)
-      setJobState("error")
       const message =
         caught instanceof Error ? caught.message : t.transcriptionFailed
+      setJobState("error")
       setError(message)
       updateQueueItem(selectedQueueId, { status: "error", error: message })
     }
@@ -1594,7 +1789,7 @@ export function App() {
           ? [
               {
                 id: selectedQueueId ?? createId("file"),
-                file,
+                source: { kind: "browser" as const, file },
                 status: "pending" as const,
               },
             ]
@@ -1606,12 +1801,19 @@ export function App() {
 
     for (const item of queueSnapshot) {
       try {
-        const document = await transcribeFile(item.file, item.id, runSettings)
+        const document =
+          runSettings.mode === "local-helper"
+            ? await transcribeCompanionSelection(item, runSettings)
+            : item.source.kind === "browser"
+              ? await transcribeFile(item.source.file, item.id, runSettings)
+              : (() => {
+                  throw new Error("Invalid browser queue item.")
+                })()
         completed.push(document)
       } catch (caught) {
         const message =
           caught instanceof Error ? caught.message : t.transcriptionFailed
-        failures.push(`${item.file.name}: ${message}`)
+        failures.push(`${queueFileName(item)}: ${message}`)
         updateQueueItem(item.id, { status: "error", error: message })
       }
     }
@@ -1732,16 +1934,47 @@ export function App() {
     setHistory(await listTranscripts())
   }
 
+  function resetQueueForModeChange() {
+    companionPickerGeneration.current += 1
+    const companionSelections = queue
+      .filter(
+        (item): item is QueuedFile & {
+          source: Extract<QueueSource, { kind: "companion" }>
+        } => item.source.kind === "companion"
+      )
+      .map((item) => item.source.selectionId)
+    for (const selectionId of companionSelections) {
+      void localHelperClient.deleteSelection(selectionId).catch(() => undefined)
+    }
+    setQueue([])
+    setSelectedQueueId(null)
+    setFile(null)
+    setAnalysis(null)
+    setError(null)
+    setProgressLog([])
+    setJobState("idle")
+    setProgress({ phase: "idle", message: t.waiting, progress: 0 })
+    setHelperCapabilities(null)
+    setCompanionModelId("")
+  }
+
   function updateSetting<T extends keyof AppSettings>(
     key: T,
     value: AppSettings[T]
   ) {
+    if (key === "mode" && value !== settings.mode && isBusy(jobState)) return
     const nextSettings = { ...settings, [key]: value }
 
+    if (key === "mode" && value !== settings.mode) resetQueueForModeChange()
     settingsRef.current = nextSettings
     setSettings(nextSettings)
 
-    if (file && analysis && jobState === "awaiting-confirmation") {
+    if (
+      key !== "mode" &&
+      file &&
+      analysis &&
+      jobState === "awaiting-confirmation"
+    ) {
       void analyzeSelectedFile(file, nextSettings, false, selectedQueueId)
     }
   }
@@ -1951,6 +2184,9 @@ export function App() {
                 isEnglishOnlyMismatch={isEnglishOnlyMismatch}
                 updateSetting={updateSetting}
                 serverCapabilities={activeServerCapabilities}
+                helperCapabilities={helperCapabilities}
+                companionModelId={companionModelId}
+                onCompanionModelChange={setCompanionModelId}
               />
 
               {settings.mode === "server" ? (
@@ -1989,14 +2225,38 @@ export function App() {
               ) : null}
 
               {settings.mode === "local-helper" ? (
-                <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
-                  <CardContent className="py-8 text-center">
-                    <CardTitle className="text-base">{t.companionTitle}</CardTitle>
-                    <CardDescription className="mx-auto mt-2 max-w-md">
-                      {t.companionDescription}
-                    </CardDescription>
-                  </CardContent>
-                </Card>
+                <>
+                  <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
+                    <CardContent className="py-8 text-center">
+                      <CardTitle className="text-base">
+                        {t.companionTitle}
+                      </CardTitle>
+                      <CardDescription className="mx-auto mt-2 max-w-md">
+                        {t.companionDescription}
+                      </CardDescription>
+                    </CardContent>
+                  </Card>
+                  <DropZone
+                    file={null}
+                    fileCount={queue.length}
+                    isBusy={isBusy(jobState)}
+                    copy={t}
+                    onPick={() => void selectCompanionFiles()}
+                    onDropFiles={() => undefined}
+                    nativeOnly
+                  />
+                  {queue.length > 0 ? (
+                    <FileQueuePanel
+                      queue={queue}
+                      selectedId={selectedQueueId}
+                      disabled={isBusy(jobState)}
+                      copy={t}
+                      onSelect={(item) => void selectQueueItem(item)}
+                      onRemove={(id) => void removeQueuedFile(id)}
+                      onMove={moveQueueItem}
+                    />
+                  ) : null}
+                </>
               ) : (
                 <>
                   <DropZone
@@ -2007,7 +2267,6 @@ export function App() {
                     onPick={() => fileInputRef.current?.click()}
                     onDropFiles={(nextFiles) => void handleFiles(nextFiles)}
                   />
-
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -2016,28 +2275,19 @@ export function App() {
                     className="hidden"
                     onChange={(event) => {
                       const nextFiles = Array.from(event.target.files ?? [])
-                      if (nextFiles.length > 0) {
-                        void handleFiles(nextFiles)
-                      }
+                      if (nextFiles.length > 0) void handleFiles(nextFiles)
                       event.currentTarget.value = ""
                     }}
                   />
-
                   {queue.length > 1 ? (
                     <FileQueuePanel
                       queue={queue}
                       selectedId={selectedQueueId}
                       disabled={isBusy(jobState)}
                       copy={t}
-                      onSelect={(item) =>
-                        void analyzeSelectedFile(
-                          item.file,
-                          settingsRef.current,
-                          false,
-                          item.id
-                        )
-                      }
+                      onSelect={(item) => void selectQueueItem(item)}
                       onRemove={(id) => void removeQueuedFile(id)}
+                      onMove={moveQueueItem}
                     />
                   ) : null}
                 </>
@@ -2050,7 +2300,9 @@ export function App() {
                     ? (selectedServerModel?.label ??
                       settings.serverModelId ??
                       "-")
-                    : model.label
+                    : settings.mode === "local-helper"
+                      ? (selectedCompanionModel?.label ?? "-")
+                      : model.label
                 }
                 copy={t}
                 progress={progress}
@@ -2060,6 +2312,11 @@ export function App() {
                 canStart={Boolean(canStart)}
                 canStartAll={canStartAll}
                 queueCount={queue.length}
+                nativeNote={
+                  settings.mode === "local-helper"
+                    ? t.companionPreflight
+                    : undefined
+                }
                 onStart={() => void startTranscription()}
                 onStartAll={() => void startBatchTranscription()}
                 onErrorClick={() => setErrorDialogOpen(true)}
@@ -2081,6 +2338,7 @@ export function App() {
                 onRemove={(id) => void removeTranscript(id)}
                 copy={t}
                 serverCapabilities={serverCapabilities}
+                helperCapabilities={helperCapabilities}
               />
             </aside>
           </section>
@@ -2094,6 +2352,7 @@ export function App() {
         onRename={(id, title) => void renameTranscriptTitle(id, title)}
         copy={t}
         serverCapabilities={serverCapabilities}
+        helperCapabilities={helperCapabilities}
       />
       <AppToast
         message={toastMessage}
@@ -2134,6 +2393,9 @@ function MainControls({
   isEnglishOnlyMismatch,
   updateSetting,
   serverCapabilities,
+  helperCapabilities,
+  companionModelId,
+  onCompanionModelChange,
 }: {
   settings: AppSettings
   model: ReturnType<typeof findModel>
@@ -2144,6 +2406,9 @@ function MainControls({
     value: AppSettings[T]
   ) => void
   serverCapabilities: ServerCapabilitiesState
+  helperCapabilities: HelperCapabilities | null
+  companionModelId: string
+  onCompanionModelChange: (id: string) => void
 }) {
   const modelDescription =
     copy.modelDescriptions[model.id as keyof typeof copy.modelDescriptions] ??
@@ -2167,10 +2432,45 @@ function MainControls({
           <Label>{copy.model}</Label>
           {settings.mode === "local-helper" ? (
             <>
-              <Input value="Whisper Large v3 Turbo Companion" readOnly aria-label={copy.model} />
-              <p className="text-xs leading-5 text-muted-foreground">
-                {copy.companionModelDescription}
-              </p>
+              <Select
+                value={companionModelId || undefined}
+                onValueChange={onCompanionModelChange}
+                disabled={!helperCapabilities?.models.length}
+              >
+                <SelectTrigger aria-label={copy.model} className="w-full">
+                  <SelectValue placeholder={copy.companionTitle} />
+                </SelectTrigger>
+                <SelectContent align="start">
+                  {helperCapabilities?.models.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {helperCapabilities?.models.find(
+                (item) => item.id === companionModelId
+              ) ? (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {
+                    helperCapabilities.models.find(
+                      (item) => item.id === companionModelId
+                    )?.quality
+                  }{" "}
+                  - ~
+                  {Math.ceil(
+                    (helperCapabilities.models.find(
+                      (item) => item.id === companionModelId
+                    )?.size_bytes ?? 0) /
+                      (1024 * 1024)
+                  )}{" "}
+                  MB
+                </p>
+              ) : (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {copy.companionModelDescription}
+                </p>
+              )}
             </>
           ) : settings.mode !== "server" ? (
             <>
@@ -2451,6 +2751,7 @@ function SettingsPage({
           >
             <Select
               value={settings.mode}
+              disabled={storageActionsDisabled}
               onValueChange={(value) =>
                 updateSetting("mode", value as ProcessingMode)
               }
@@ -2597,6 +2898,7 @@ function DropZone({
   copy,
   onPick,
   onDropFiles,
+  nativeOnly = false,
 }: {
   file: File | null
   fileCount: number
@@ -2604,14 +2906,20 @@ function DropZone({
   copy: Copy
   onPick: () => void
   onDropFiles: (files: File[]) => void
+  nativeOnly?: boolean
 }) {
-  const title = file
-    ? fileCount > 1
-      ? copy.filesSelected(fileCount)
-      : file.name
-    : copy.dropTitle
-  const description =
-    file && fileCount > 1 ? copy.selectedFile(file.name) : copy.dropDescription
+  const title = nativeOnly
+    ? copy.companionPickerTitle
+    : file
+      ? fileCount > 1
+        ? copy.filesSelected(fileCount)
+        : file.name
+      : copy.dropTitle
+  const description = nativeOnly
+    ? copy.companionPickerDescription
+    : file && fileCount > 1
+      ? copy.selectedFile(file.name)
+      : copy.dropDescription
 
   return (
     <div
@@ -2619,13 +2927,14 @@ function DropZone({
         "group relative grid min-h-[240px] place-items-center rounded-lg border border-dashed bg-card p-6 text-center transition-all duration-200 ease-out",
         !isBusy && "hover:border-ring hover:bg-accent/40"
       )}
-      onDragOver={(event) => event.preventDefault()}
+      onDragOver={(event) => {
+        event.preventDefault()
+      }}
       onDrop={(event) => {
         event.preventDefault()
+        if (nativeOnly) return
         const droppedFiles = Array.from(event.dataTransfer.files)
-        if (droppedFiles.length > 0) {
-          onDropFiles(droppedFiles)
-        }
+        if (droppedFiles.length > 0) onDropFiles(droppedFiles)
       }}
     >
       <div className="flex max-w-xl flex-col items-center gap-4">
@@ -2645,7 +2954,7 @@ function DropZone({
           </p>
         </div>
         <Button onClick={onPick} disabled={isBusy}>
-          <UploadCloud /> {copy.chooseFile}
+          <UploadCloud /> {nativeOnly ? copy.companionChooseFiles : copy.chooseFile}
         </Button>
       </div>
     </div>
@@ -2659,6 +2968,7 @@ function FileQueuePanel({
   copy,
   onSelect,
   onRemove,
+  onMove,
 }: {
   queue: QueuedFile[]
   selectedId: string | null
@@ -2666,6 +2976,7 @@ function FileQueuePanel({
   copy: Copy
   onSelect: (item: QueuedFile) => void
   onRemove: (id: string) => void
+  onMove: (id: string, direction: -1 | 1) => void
 }) {
   return (
     <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
@@ -2676,55 +2987,80 @@ function FileQueuePanel({
         </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-2">
-        {queue.map((item) => (
-          <div
-            key={item.id}
-            className={cn(
-              "grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded-md border px-2 py-2 text-sm transition-colors",
-              selectedId === item.id
-                ? "border-ring bg-accent"
-                : "hover:bg-accent/60",
-              disabled && "cursor-not-allowed opacity-70"
-            )}
-          >
-            <button
-              type="button"
-              className="min-w-0 text-left"
-              aria-label={`${copy.selectFile}: ${item.file.name}`}
-              disabled={disabled}
-              onClick={() => onSelect(item)}
+        {queue.map((item, index) => {
+          const name = queueFileName(item)
+          return (
+            <div
+              key={item.id}
+              className={cn(
+                "grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 rounded-md border px-2 py-2 text-sm transition-colors",
+                selectedId === item.id
+                  ? "border-ring bg-accent"
+                  : "hover:bg-accent/60",
+                disabled && "cursor-not-allowed opacity-70"
+              )}
             >
-              <span className="block truncate font-medium">
-                {item.file.name}
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                {bytesToMb(item.file.size)} MB
-              </span>
-            </button>
-            <Badge
-              variant={
-                item.status === "error"
-                  ? "destructive"
-                  : item.status === "complete"
-                    ? "secondary"
-                    : "outline"
-              }
-            >
-              {copy.queueStatusLabels[item.status]}
-            </Badge>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8 text-muted-foreground hover:text-destructive"
-              aria-label={`${copy.removeFile}: ${item.file.name}`}
-              disabled={disabled}
-              onClick={() => onRemove(item.id)}
-            >
-              <Trash2 />
-            </Button>
-          </div>
-        ))}
+              <button
+                type="button"
+                className="min-w-0 text-left"
+                aria-label={`${copy.selectFile}: ${name}`}
+                disabled={disabled}
+                onClick={() => onSelect(item)}
+              >
+                <span className="block truncate font-medium">{name}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {bytesToMb(queueFileSize(item))} MB
+                </span>
+              </button>
+              <Badge
+                variant={
+                  item.status === "error"
+                    ? "destructive"
+                    : item.status === "complete"
+                      ? "secondary"
+                      : "outline"
+                }
+              >
+                {copy.queueStatusLabels[item.status]}
+              </Badge>
+              <div className="flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  aria-label={`${copy.moveFileUp}: ${name}`}
+                  disabled={disabled || index === 0}
+                  onClick={() => onMove(item.id, -1)}
+                >
+                  <ChevronUp />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  aria-label={`${copy.moveFileDown}: ${name}`}
+                  disabled={disabled || index === queue.length - 1}
+                  onClick={() => onMove(item.id, 1)}
+                >
+                  <ChevronDown />
+                </Button>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 text-muted-foreground hover:text-destructive"
+                aria-label={`${copy.removeFile}: ${name}`}
+                disabled={disabled}
+                onClick={() => onRemove(item.id)}
+              >
+                <Trash2 />
+              </Button>
+            </div>
+          )
+        })}
       </CardContent>
     </Card>
   )
@@ -2741,6 +3077,7 @@ function PreflightPanel({
   canStart,
   canStartAll,
   queueCount,
+  nativeNote,
   onStart,
   onStartAll,
   onErrorClick,
@@ -2755,6 +3092,7 @@ function PreflightPanel({
   canStart: boolean
   canStartAll: boolean
   queueCount: number
+  nativeNote?: string
   onStart: () => void
   onStartAll: () => void
   onErrorClick: () => void
@@ -2801,7 +3139,7 @@ function PreflightPanel({
           </div>
         ) : (
           <p className="animate-in text-sm text-muted-foreground duration-200 fade-in">
-            {copy.emptyPreflight}
+            {nativeNote ?? copy.emptyPreflight}
           </p>
         )}
 
@@ -2939,6 +3277,7 @@ function ResultDialog({
   onRename,
   copy,
   serverCapabilities,
+  helperCapabilities,
 }: {
   transcript: TranscriptDocument | null
   open: boolean
@@ -2947,15 +3286,14 @@ function ResultDialog({
   onRename: (id: string, title: string) => void
   copy: Copy
   serverCapabilities: ServerCapabilitiesState
+  helperCapabilities: HelperCapabilities | null
 }) {
-  const transcriptModel =
-    transcript && transcript.mode !== "server"
-      ? findModel(transcript.modelId)
-      : null
   const transcriptModelLabel = transcript
-    ? transcript.mode === "server"
-      ? resolveServerModelLabel(transcript.modelId, serverCapabilities)
-      : (transcriptModel?.label ?? transcript.modelId)
+    ? resolveTranscriptModelLabel(
+        transcript,
+        serverCapabilities,
+        helperCapabilities
+      )
     : ""
 
   return (
@@ -3098,12 +3436,14 @@ function HistoryPanel({
   onRemove,
   copy,
   serverCapabilities,
+  helperCapabilities,
 }: {
   history: TranscriptDocument[]
   onSelect: (document: TranscriptDocument) => void
   onRemove: (id: string) => void
   copy: Copy
   serverCapabilities: ServerCapabilitiesState
+  helperCapabilities: HelperCapabilities | null
 }) {
   return (
     <Card className="min-h-0 p-4">
@@ -3128,12 +3468,11 @@ function HistoryPanel({
                 <span className="block truncate font-medium">{item.title}</span>
                 <span className="mt-1 flex flex-wrap gap-1.5">
                   <Badge variant="secondary" className="max-w-full truncate">
-                    {item.mode === "server"
-                      ? resolveServerModelLabel(
-                          item.modelId,
-                          serverCapabilities
-                        )
-                      : findModel(item.modelId).label}
+                    {resolveTranscriptModelLabel(
+                      item,
+                      serverCapabilities,
+                      helperCapabilities
+                    )}
                   </Badge>
                   <Badge variant="outline" className="max-w-full truncate">
                     {getLanguageLabel(item.language, copy.languageLabels.auto)}
@@ -3247,6 +3586,7 @@ function formatSegmentTime(seconds: number) {
 
 function isBusy(jobState: JobState) {
   return [
+    "queued",
     "analyzing",
     "downloading-assets",
     "preparing-media",

@@ -5,7 +5,9 @@ import type {
   HelperCacheStatus,
   HelperCapabilities,
   HelperHealth,
+  HelperModel,
   HelperPairResponse,
+  HelperSelection,
 } from "./types"
 import type { ServerJobStatus } from "@/features/server-transcription/types"
 
@@ -19,6 +21,134 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     return false
   const prototype = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype === null
+}
+
+function validOpaqueId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !/[\\/]/.test(value)
+}
+
+function parseModel(value: unknown): HelperModel | null {
+  if (!isPlainObject(value)) return null
+  const { id, label, quality, size_bytes: sizeBytes, installed } = value
+  if (
+    !validOpaqueId(id) ||
+    typeof label !== "string" ||
+    label.length === 0 ||
+    /[\\/]/.test(label) ||
+    typeof quality !== "string" ||
+    quality.length === 0 ||
+    typeof sizeBytes !== "number" ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes < 0 ||
+    typeof installed !== "boolean"
+  )
+    return null
+  return { id, label, quality, size_bytes: sizeBytes, installed }
+}
+
+function parseCapabilities(value: unknown): HelperCapabilities {
+  if (!isPlainObject(value) || !Array.isArray(value.models))
+    throw new Error("Helper returned invalid capabilities.")
+  const models = value.models.map(parseModel)
+  if (models.some((model) => model === null))
+    throw new Error("Helper returned invalid capabilities.")
+  const {
+    available,
+    engine,
+    accelerator,
+    model_id: modelId,
+    model_ready: modelReady,
+    ffmpeg_ready: ffmpegReady,
+    native_picker: nativePicker,
+  } = value
+  if (
+    typeof available !== "boolean" ||
+    typeof engine !== "string" ||
+    typeof accelerator !== "string" ||
+    !validOpaqueId(modelId) ||
+    typeof modelReady !== "boolean" ||
+    typeof ffmpegReady !== "boolean" ||
+    typeof nativePicker !== "boolean"
+  )
+    throw new Error("Helper returned invalid capabilities.")
+  return {
+    available,
+    engine,
+    accelerator,
+    model_id: modelId,
+    model_ready: modelReady,
+    ffmpeg_ready: ffmpegReady,
+    native_picker: nativePicker,
+    models: models as HelperModel[],
+  }
+}
+
+const HELPER_PHASES = new Set([
+  "queued",
+  "downloading",
+  "extracting",
+  "transcribing",
+  "complete",
+  "error",
+  "cancelled",
+])
+
+function hasOwn(value: Record<string, unknown>, key: string) {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function parseProgressStatus(value: unknown): ServerJobStatus | null {
+  if (!isPlainObject(value)) return null
+  if (!validOpaqueId(value.id) || typeof value.phase !== "string") return null
+  if (!HELPER_PHASES.has(value.phase)) return null
+  if (value.phase === "complete" && !hasOwn(value, "segments")) return null
+  if (
+    hasOwn(value, "progress") &&
+    (typeof value.progress !== "number" ||
+      !Number.isFinite(value.progress) ||
+      value.progress < 0 ||
+      value.progress > 100)
+  )
+    return null
+  for (const key of ["message", "text", "error"]) {
+    if (hasOwn(value, key) && typeof value[key] !== "string") return null
+  }
+  if (hasOwn(value, "segments")) {
+    if (!Array.isArray(value.segments)) return null
+    if (
+      value.segments.some(
+        (segment) =>
+          !isPlainObject(segment) ||
+          typeof segment.start !== "number" ||
+          !Number.isFinite(segment.start) ||
+          typeof segment.end !== "number" ||
+          !Number.isFinite(segment.end) ||
+          typeof segment.text !== "string"
+      )
+    )
+      return null
+  }
+  return value as unknown as ServerJobStatus
+}
+
+function parseSelection(value: unknown): HelperSelection | null {
+  if (!isPlainObject(value)) return null
+  const { id, filename, size_bytes: sizeBytes, extension } = value
+  if (
+    !validOpaqueId(id) ||
+    typeof filename !== "string" ||
+    filename.length === 0 ||
+    /[\\/]/.test(filename) ||
+    typeof sizeBytes !== "number" ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes < 0 ||
+    (extension !== null &&
+      (typeof extension !== "string" ||
+        extension.length === 0 ||
+        /[^a-zA-Z0-9]/.test(extension)))
+  )
+    return null
+  return { id, filename, size_bytes: sizeBytes, extension }
 }
 
 export class LocalHelperClient {
@@ -76,50 +206,67 @@ export class LocalHelperClient {
 
   async getCapabilities(): Promise<HelperCapabilities> {
     const baseUrl = await this.requireBaseUrl()
-    return this.request<HelperCapabilities>(
+    const data = await this.request<unknown>(
       `${baseUrl}${API_PREFIX}/capabilities`,
-      {
-        method: "GET",
-        headers: this.authHeaders(),
-      }
+      { method: "GET", headers: this.authHeaders() }
     )
+    return parseCapabilities(data)
   }
 
-  async pickAndSubmit(
-    language: LanguageCode,
-    modelId: string
-  ): Promise<{ jobId: string; filename: string } | null> {
+  async selectFiles(): Promise<HelperSelection[]> {
+    const baseUrl = await this.requireBaseUrl()
+    const response = await fetch(`${baseUrl}${API_PREFIX}/select-files`, {
+      method: "POST",
+      headers: this.authHeaders(),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (response.status === 204) return []
+    if (!response.ok)
+      throw new Error(`Helper file selection failed: ${response.status}`)
+    const data: unknown = await response.json()
+    if (!isPlainObject(data) || !Array.isArray(data.selections))
+      throw new Error("Helper returned invalid file selections.")
+    const selections = data.selections.map(parseSelection)
+    if (selections.some((selection) => selection === null))
+      throw new Error("Helper returned invalid file selections.")
+    return selections as HelperSelection[]
+  }
+
+  async deleteSelection(id: string): Promise<void> {
     const baseUrl = await this.requireBaseUrl()
     const response = await fetch(
-      `${baseUrl}${API_PREFIX}/pick-and-transcribe`,
+      `${baseUrl}${API_PREFIX}/selections/${encodeURIComponent(id)}`,
       {
-        method: "POST",
-        headers: {
-          ...this.authHeaders(),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ language, model: modelId }),
-        signal: AbortSignal.timeout(30_000),
+        method: "DELETE",
+        headers: this.authHeaders(),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       }
     )
-    if (response.status === 204) return null
     if (!response.ok)
-      throw new Error(`Helper picker failed: ${response.status}`)
+      throw new Error(`Helper selection removal failed: ${response.status}`)
+  }
+
+  async startSelection(
+    id: string,
+    language: LanguageCode,
+    modelId: string
+  ): Promise<{ jobId: string }> {
+    const baseUrl = await this.requireBaseUrl()
+    const response = await fetch(
+      `${baseUrl}${API_PREFIX}/transcribe-selection`,
+      {
+        method: "POST",
+        headers: { ...this.authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ selection_id: id, language, model: modelId }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }
+    )
+    if (!response.ok)
+      throw new Error(`Helper transcription start failed: ${response.status}`)
     const data: unknown = await response.json()
-    if (!isPlainObject(data))
-      throw new Error("Helper returned an invalid picker job.")
-    const jobId = data.job_id
-    const filename = data.filename
-    if (
-      typeof jobId !== "string" ||
-      jobId.length === 0 ||
-      typeof filename !== "string" ||
-      filename.length === 0 ||
-      /[\\/]/.test(filename)
-    ) {
-      throw new Error("Helper returned an invalid picker job.")
-    }
-    return { jobId, filename }
+    if (!isPlainObject(data) || !validOpaqueId(data.job_id))
+      throw new Error("Helper returned an invalid transcription job.")
+    return { jobId: data.job_id }
   }
 
   subscribeProgress(
@@ -149,7 +296,8 @@ export class LocalHelperClient {
         while (true) {
           const { done, value } = await reader.read()
           if (done) {
-            if (!terminal) throw new Error("Helper progress stream ended early.")
+            if (!terminal)
+              throw new Error("Helper progress stream ended early.")
             break
           }
           buffer += decoder.decode(value, { stream: true })
@@ -159,13 +307,28 @@ export class LocalHelperClient {
             const trimmed = line.trim()
             if (!trimmed.startsWith("data: ")) continue
             try {
-              const status = JSON.parse(trimmed.slice(6)) as ServerJobStatus
+              const value = JSON.parse(trimmed.slice(6))
+              const status = parseProgressStatus(value)
+              if (!status) {
+                if (isPlainObject(value) && value.phase === "complete")
+                  throw new Error(
+                    "Helper progress complete status has invalid segments."
+                  )
+                continue
+              }
+              if (status.id !== jobId) continue
               terminal = ["complete", "error", "cancelled"].includes(
                 status.phase
               )
               onStatus(status)
-            } catch {
-              /* skip malformed events */
+            } catch (caught) {
+              if (
+                caught instanceof Error &&
+                caught.message ===
+                  "Helper progress complete status has invalid segments."
+              )
+                throw caught
+              /* skip malformed non-terminal events */
             }
           }
         }
@@ -195,10 +358,7 @@ export class LocalHelperClient {
     const baseUrl = await this.requireBaseUrl()
     return this.request<HelperCacheStatus>(
       `${baseUrl}${API_PREFIX}/cache/status`,
-      {
-        method: "GET",
-        headers: this.authHeaders(),
-      }
+      { method: "GET", headers: this.authHeaders() }
     )
   }
 

@@ -38,21 +38,20 @@ pub async fn progress(
 
     let (tx, rx_events) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
-    let _ = tx.send(Ok(Event::default().json_data(current_status).unwrap())).await;
+    let _ = tx
+        .send(Ok(Event::default().json_data(current_status).unwrap()))
+        .await;
 
     let tx2 = tx.clone();
     tokio::spawn(async move {
         let mut status_stream = BroadcastStream::new(rx);
         while let Some(msg) = tokio_stream::StreamExt::next(&mut status_stream).await {
-            match msg {
-                Ok(status) => {
-                    if let Ok(event) = Event::default().json_data(status) {
-                        if tx2.send(Ok(event)).await.is_err() {
-                            break;
-                        }
+            if let Ok(status) = msg {
+                if let Ok(event) = Event::default().json_data(status) {
+                    if tx2.send(Ok(event)).await.is_err() {
+                        break;
                     }
                 }
-                Err(_) => {}
             }
         }
     });

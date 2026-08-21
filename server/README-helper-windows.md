@@ -4,17 +4,38 @@
 
 `whisdom-helper.exe` remains a legacy standalone compatibility binary. Its multipart loopback API still accepts browser-uploaded media, but new web flows should use the Companion picker API instead. Companion mode sends no media upload and no filesystem path from the browser.
 
-## Companion API
+## Companion protocol v2
 
 The hosted web app uses the paired Companion through:
 
 ```text
-POST /api/v1/pick-and-transcribe
-GET  /api/v1/progress/{job_id}
-POST /api/v1/cancel/{job_id}
+POST   /api/v1/select-files
+DELETE /api/v1/selections/{id}
+POST   /api/v1/transcribe-selection
+GET    /api/v1/capabilities
+GET    /api/v1/progress/{job_id}
+POST   /api/v1/cancel/{job_id}
 ```
 
-The picker endpoint accepts JSON language/model options, opens the native file dialog, and returns an opaque job ID plus the selected basename. Picker cancellation returns `204 No Content`. Media stays inside the Companion; the browser never receives the absolute path or uploads the file.
+`select-files` opens the native Windows picker and returns sanitized display metadata for one or many selected files. Native single-select and Ctrl/Shift multi-select are supported. Repeated requests append to the browser queue. Canceling returns `204 No Content`.
+
+Each selection is represented by an opaque in-memory ID. Entries expire after 30 minutes, are consumed on start, and can be removed with `DELETE /api/v1/selections/{id}`. The browser queue can remove entries or reorder them; it sends only the selected ID when starting a row. Selection, removal, and reorder controls are disabled while a job is active.
+
+`POST /api/v1/transcribe-selection` accepts only a selection ID, optional language, and known native model ID:
+
+```json
+{
+  "selection_id": "opaque-selection-id",
+  "language": "vi",
+  "model": "ggml-base-q5_1"
+}
+```
+
+Capabilities return the native GGML model catalog and installed state. The catalog is pinned in the helper; callers cannot provide model URLs, filenames, checksums, or paths. A selected model downloads on demand from its pinned HTTPS asset. Redirects are traversed manually with per-hop host allowlisting, HTTPS checks, bounded size, SHA-256 verification, and atomic cache finalization.
+
+Paths and source media never leave the Companion process. The browser sends no filesystem path, URL, multipart media, or media bytes.
+
+The legacy multipart `POST /api/v1/transcribe` (and `/v1/transcribe`, `/api/transcribe`) remains available for standalone `whisdom-helper.exe` compatibility. It accepts browser-uploaded media, defaults to `ggml-large-v3-turbo-q5_0` when no model is supplied, and accepts only model IDs from the same native catalog. New Companion flows must use protocol v2 selection/start endpoints.
 
 ## Standalone helper build
 
@@ -68,7 +89,7 @@ The legacy `/api/*` routes remain available for compatibility. The helper never 
   auth\
 ```
 
-The Turbo GGML model downloads from the pinned Hugging Face revision on first transcription. BtbN FFmpeg downloads only when the input requires conversion. Downloads are checksum-verified before use.
+The selected GGML model downloads from its pinned Hugging Face revision on first use. Companion mode chooses from the capability-backed native catalog; legacy multipart transcription defaults to `ggml-large-v3-turbo-q5_0` when no model is supplied. BtbN FFmpeg downloads only when the input requires conversion. Downloads are checksum-verified before use.
 
 ## Standalone helper installation modes
 
@@ -102,4 +123,4 @@ The release must ship license/source notices for:
 - BtbN FFmpeg `win64-gpl` asset and the applicable GPL license/source offer.
 - Rust dependencies as required by their licenses.
 
-Pinned assets are defined in `server/src/helper/config.rs`. Do not replace them with floating `latest` URLs without updating the checksum and release documentation.
+Pinned assets are defined in `server/src/helper/models.rs`. Do not replace them with floating `latest` URLs without updating the checksum and release documentation.

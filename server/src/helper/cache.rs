@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 
 use super::config::HelperConfig;
 use super::download::{download_verified, verify_file_sha256};
+use super::models::NativeModel;
 use super::protocol::HelperError;
 use super::transcribe::SharedModel;
 
@@ -43,7 +44,10 @@ impl HelperCache {
     pub fn new(config: HelperConfig) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("helper HTTP client configuration is valid"),
             active_jobs: Arc::new(AtomicUsize::new(0)),
             admission_gate: Arc::new(Mutex::new(())),
             model_lock: Arc::new(Mutex::new(())),
@@ -69,29 +73,36 @@ impl HelperCache {
         &self.client
     }
 
-    pub async fn ensure_model(&self) -> Result<std::path::PathBuf, HelperError> {
+    pub async fn ensure_model(
+        &self,
+        model: &NativeModel,
+    ) -> Result<std::path::PathBuf, HelperError> {
         let _lock = self.model_lock.lock().await;
-        let path = self.config.model_path();
+        let path = self.model_path(model);
         if path.exists() {
-            if verify_file_sha256(&path, &self.config.model_sha256).await? {
+            if verify_file_sha256(&path, model.sha256).await? {
                 return Ok(path);
             }
             tokio::fs::remove_file(&path).await?;
         }
         download_verified(
             &self.client,
-            &self.config.model_url,
+            model.url,
             &path,
-            &self.config.model_sha256,
+            model.sha256,
             self.config.max_download_bytes,
         )
         .await?;
         Ok(path)
     }
 
+    fn model_path(&self, model: &NativeModel) -> std::path::PathBuf {
+        self.config.models_dir().join(model.filename)
+    }
+
     pub async fn status(&self) -> Result<CacheStatus, HelperError> {
         Ok(CacheStatus {
-            model: file_category(&self.config.model_path()).await?,
+            model: file_category(&self.config.models_dir()).await?,
             ffmpeg: file_category(&self.config.tools_dir()).await?,
             temp_bytes: directory_bytes(&self.config.temp_dir()).await?,
             busy: self.is_busy(),
@@ -217,6 +228,15 @@ fn directory_bytes_sync(path: &Path) -> Result<u64, HelperError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_model_uses_its_own_cache_path() {
+        let config = HelperConfig::from_env().expect("default helper config");
+        let cache = HelperCache::new(config);
+        let model =
+            super::super::models::find_native_model("ggml-tiny-q5_1").expect("tiny model exists");
+        assert!(cache.model_path(model).ends_with(model.filename));
+    }
 
     #[tokio::test]
     async fn admission_gate_blocks_cache_clear_while_job_is_active() {

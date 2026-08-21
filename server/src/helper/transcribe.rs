@@ -7,6 +7,7 @@ use tokio::sync::{watch, RwLock};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use super::cache::{HelperCache, JobGuard};
+use super::models::NativeModel;
 use super::protocol::{HelperError, TranscriptSegment};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +20,7 @@ pub enum ModelBackend {
 pub struct LoadedModel {
     pub context: Arc<WhisperContext>,
     pub backend: ModelBackend,
+    pub model_id: &'static str,
 }
 
 pub type SharedModel = Arc<RwLock<Option<Arc<LoadedModel>>>>;
@@ -26,31 +28,35 @@ pub type SharedModel = Arc<RwLock<Option<Arc<LoadedModel>>>>;
 pub async fn load_model(
     cache: &HelperCache,
     model: &SharedModel,
+    model_spec: &'static NativeModel,
 ) -> Result<Arc<LoadedModel>, HelperError> {
-    load_model_with_backend(cache, model, true).await
+    load_model_with_backend(cache, model, model_spec, true).await
 }
 
 pub async fn load_cpu_model(
     cache: &HelperCache,
     model: &SharedModel,
+    model_spec: &'static NativeModel,
 ) -> Result<Arc<LoadedModel>, HelperError> {
-    load_model_with_backend(cache, model, false).await
+    load_model_with_backend(cache, model, model_spec, false).await
 }
 
 async fn load_model_with_backend(
     cache: &HelperCache,
     model: &SharedModel,
+    model_spec: &'static NativeModel,
     prefer_vulkan: bool,
 ) -> Result<Arc<LoadedModel>, HelperError> {
     if let Some(loaded) = model.read().await.as_ref() {
-        if cached_backend_matches(prefer_vulkan, loaded.backend) {
+        if loaded.model_id == model_spec.id && cached_backend_matches(prefer_vulkan, loaded.backend)
+        {
             tracing::debug!(backend = ?loaded.backend, "using cached Whisper model");
             return Ok(Arc::clone(loaded));
         }
     }
 
     tracing::info!("loading Whisper model");
-    let path = cache.ensure_model().await?;
+    let path = cache.ensure_model(model_spec).await?;
     let context = tokio::task::spawn_blocking(move || {
         #[cfg(feature = "vulkan")]
         if prefer_vulkan {
@@ -80,10 +86,13 @@ async fn load_model_with_backend(
     let loaded = Arc::new(LoadedModel {
         context: context.0,
         backend: context.1,
+        model_id: model_spec.id,
     });
     let mut guard = model.write().await;
     if let Some(existing) = guard.as_ref() {
-        if cached_backend_matches(prefer_vulkan, existing.backend) {
+        if existing.model_id == model_spec.id
+            && cached_backend_matches(prefer_vulkan, existing.backend)
+        {
             return Ok(Arc::clone(existing));
         }
     }

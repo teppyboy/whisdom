@@ -11,6 +11,7 @@ export type ProcessingMode =
 
 export type JobState =
   | "idle"
+  | "queued"
   | "analyzing"
   | "awaiting-confirmation"
   | "downloading-assets"

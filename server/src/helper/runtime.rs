@@ -6,6 +6,7 @@ use tokio::sync::watch;
 
 use super::cache::JobGuard;
 use super::logging::sanitize_filename;
+use super::models::NativeModel;
 use super::protocol::HelperError;
 use super::state::{HelperJob, HelperState};
 use super::transcribe::{load_cpu_model, load_model, transcribe_wav};
@@ -15,8 +16,9 @@ pub async fn start_path_job(
     input: PathBuf,
     filename: String,
     language: Option<String>,
+    model: &'static NativeModel,
 ) -> Result<String, HelperError> {
-    start_path_job_inner(state, input, filename, language, None).await
+    start_path_job_inner(state, input, filename, language, model, None).await
 }
 
 pub async fn start_staged_job(
@@ -25,8 +27,9 @@ pub async fn start_staged_job(
     filename: String,
     language: Option<String>,
     staged_dir: PathBuf,
+    model: &'static NativeModel,
 ) -> Result<String, HelperError> {
-    start_path_job_inner(state, input, filename, language, Some(staged_dir)).await
+    start_path_job_inner(state, input, filename, language, model, Some(staged_dir)).await
 }
 
 async fn start_path_job_inner(
@@ -34,6 +37,7 @@ async fn start_path_job_inner(
     input: PathBuf,
     filename: String,
     language: Option<String>,
+    model: &'static NativeModel,
     staged_dir: Option<PathBuf>,
 ) -> Result<String, HelperError> {
     let metadata = tokio::fs::metadata(&input).await?;
@@ -89,6 +93,7 @@ async fn start_path_job_inner(
             &job_id,
             &input,
             language,
+            model,
             cancel_for_job.subscribe(),
             admission_guard,
         )
@@ -113,6 +118,7 @@ pub async fn run_transcription(
     id: &str,
     input: &Path,
     language: Option<String>,
+    model_spec: &'static NativeModel,
     cancel_rx: tokio::sync::watch::Receiver<bool>,
     guard: JobGuard,
 ) -> Result<(), HelperError> {
@@ -130,7 +136,7 @@ pub async fn run_transcription(
         Some("loading native Whisper model".into()),
     )
     .await;
-    let model = load_model(&state.cache, &state.model).await?;
+    let model = load_model(&state.cache, &state.model, model_spec).await?;
     if is_cancelled(&cancel_rx) {
         return Err(cancelled_error());
     }
@@ -167,7 +173,7 @@ pub async fn run_transcription(
                 return Err(cancelled_error());
             }
             tracing::warn!(job_id = %id, "Whisper Vulkan inference failed; retrying with CPU");
-            let cpu = load_cpu_model(&state.cache, &state.model).await?;
+            let cpu = load_cpu_model(&state.cache, &state.model, model_spec).await?;
             let retry_cancel = Arc::new(AtomicBool::new(false));
             let retry_cancel_rx = cancel_rx.clone();
             if is_cancelled(&retry_cancel_rx) {

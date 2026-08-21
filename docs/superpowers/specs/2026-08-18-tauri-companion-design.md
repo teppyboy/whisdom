@@ -6,17 +6,19 @@
 
 ## Goal
 
-Ship an optional Windows Tauri companion that lets the hosted Whisdom web app select and transcribe local media by path. It preserves Whisdom's web-first product: the companion adds native file access and local native inference but does not replace the Vite web application.
+Ship an optional Windows Tauri companion that lets the hosted Whisdom web app add local media to its normal reorderable queue without exposing paths or media to the browser. The companion owns native file access and local native inference; it does not replace the Vite web application.
 
 ## Decisions
 
 - The main product remains the deployed browser app.
 - The desktop companion is optional and Windows-first.
-- The companion has no main application UI; it runs in the system tray and opens a native file dialog only after a request from the paired web app.
-- The companion runs the existing native Whisper/FFmpeg/cache logic inside its process.
-- The website receives job identifiers, SSE progress, text, and native timestamp segments. It never receives a local filesystem path or media bytes.
+- The companion has no main application UI; it runs in the system tray and opens a native file dialog only after an authenticated request from the paired web app.
+- The companion runs native Whisper/FFmpeg/cache logic inside its process.
+- Native single-select and Ctrl/Shift multi-select are supported. Repeated picker actions append selections to the browser queue.
+- The browser queue supports removal and move up/move down ordering. Queue order is used for sequential batch processing.
+- The website receives opaque selection/job IDs, sanitized display metadata, SSE progress, text, and native timestamp segments. It never receives a local filesystem path or media bytes.
 - The existing browser WebGPU/WASM path stays available as the fallback.
-- The standalone `whisdom-helper.exe` loopback upload path is superseded for desktop-companion users. Existing helper API routes stay compatible until a release removes them deliberately.
+- The standalone `whisdom-helper.exe` multipart loopback upload path remains a legacy compatibility API. New Companion flows use protocol v2 selection/start endpoints.
 
 ## Architecture
 
@@ -33,79 +35,97 @@ Optional Whisdom Companion (Tauri tray application)
   └── per-user runtime data
 ```
 
-The companion binds only to `127.0.0.1`. Its Axum server is started from the Tauri process. Tauri owns the selected path and passes it only to the in-process transcription job. The browser calls the companion API but cannot read or submit arbitrary Windows paths.
+The companion binds only to `127.0.0.1`. Its Axum server is started from the Tauri process. Tauri owns each selected `PathBuf` in a bounded in-memory selection store. The browser calls the companion API but cannot read or submit arbitrary Windows paths.
 
 ## Companion UX
 
 The tray menu includes:
 
 - **Whisdom Companion is running** (disabled status label)
-- **Open Whisdom** (opens the configured public web URL)
+- **Start with Windows** toggle, scoped to the current Windows user.
 - **Quit**
 
 The companion starts on sign-in when the user enables startup at installation. It does not show a persistent window.
 
-When the web user chooses the companion mode and starts transcription:
+When the web user chooses the companion mode:
 
-1. The website calls the paired `POST /api/v1/pick-and-transcribe` endpoint from a click-driven action.
-2. The companion validates Origin and token, opens a native file picker, and waits for selection.
-3. Cancellation/dismissal returns a normal cancellation response; no job is created.
-4. On selection, the companion creates a job, returns its opaque `job_id`, and starts processing the native path.
-5. The website subscribes to the existing SSE progress endpoint and renders the existing progress/result experience.
+1. The website connects to the paired Companion and reads its capabilities.
+2. Choose files calls `POST /api/v1/select-files`; the Companion validates Origin and token, opens the native picker, and waits for selection.
+3. Cancellation/dismissal returns `204 No Content`; no selection or queue row is created.
+4. A single or multi-file result returns opaque selection IDs plus sanitized filename, size, and extension metadata. Repeated Choose files actions append rows without replacing existing rows.
+5. The user can remove a row or move it up/down. Removal calls the Companion's delete endpoint first. These controls are disabled while a job is active.
+6. Starting a row calls `POST /api/v1/transcribe-selection` with only the selection ID, language, and a model ID from the capability catalog. The Companion consumes the selection, reads its local path, and starts the job.
+7. The website subscribes to SSE progress and renders the existing progress/result experience. Batch processing follows the visual queue order sequentially.
 
-The website supplies optional transcription language and the fixed companion model identifier. The companion returns the selected filename only as display metadata. It never returns a local path, folder name, or drive letter.
+Selections are opaque, in-memory Companion records. They expire after 30 minutes, are single-use on start, and contain only native path state plus sanitized display metadata inside the Companion process.
 
 ## Loopback API
 
 All normal endpoints use both `/api/v1/*` and `/v1/*`. Legacy `/api/*` aliases remain during migration.
 
-| Method | Endpoint                      | Auth           | Purpose                                                                 |
-| ------ | ----------------------------- | -------------- | ----------------------------------------------------------------------- |
-| `GET`  | `/api/v1/health`              | no             | Discovery, protocol version, busy state                                 |
-| `POST` | `/api/v1/pair`                | Origin         | Creates/rotates a per-user pairing token                                |
-| `GET`  | `/api/v1/capabilities`        | token + Origin | Companion availability, engine, Vulkan/CPU capability, model/tool state |
-| `POST` | `/api/v1/pick-and-transcribe` | token + Origin | Opens native picker and starts a path-backed job                        |
-| `GET`  | `/api/v1/progress/{id}`       | token + Origin | Server-sent job status events                                           |
-| `POST` | `/api/v1/cancel/{id}`         | token + Origin | Cancels the job                                                         |
-| `GET`  | `/api/v1/cache/status`        | token + Origin | Reports cache state                                                     |
-| `POST` | `/api/v1/cache/clear`         | token + Origin | Clears idle companion cache                                             |
+| Method   | Endpoint                       | Auth           | Purpose                                                                           |
+| -------- | ------------------------------ | -------------- | --------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1/health`               | no             | Discovery, protocol version, busy state                                           |
+| `POST`   | `/api/v1/pair`                 | Origin         | Creates/rotates a per-user pairing token                                          |
+| `GET`    | `/api/v1/capabilities`         | token + Origin | Companion engine, accelerator, native picker, GGML model catalog, installed state |
+| `POST`   | `/api/v1/select-files`         | token + Origin | Opens native picker and returns opaque selection metadata                         |
+| `DELETE` | `/api/v1/selections/{id}`      | token + Origin | Removes a pending 30-minute selection                                             |
+| `POST`   | `/api/v1/transcribe-selection` | token + Origin | Starts a selected path-backed job using a catalog model                           |
+| `GET`    | `/api/v1/progress/{id}`        | token + Origin | Server-sent job status events                                                     |
+| `POST`   | `/api/v1/cancel/{id}`          | token + Origin | Cancels the job                                                                   |
+| `GET`    | `/api/v1/cache/status`         | token + Origin | Reports cache state                                                               |
+| `POST`   | `/api/v1/cache/clear`          | token + Origin | Clears idle companion cache                                                       |
 
-`POST /api/v1/pick-and-transcribe` JSON request:
+`POST /api/v1/select-files` has no request body. A successful response contains only display metadata:
 
 ```json
 {
+  "selections": [
+    {
+      "id": "opaque-selection-id",
+      "filename": "recording.mkv",
+      "size_bytes": 123456,
+      "extension": "mkv"
+    }
+  ]
+}
+```
+
+Empty native selection returns `204 No Content`. The response never contains a path, folder, drive letter, URL, media bytes, or token.
+
+`POST /api/v1/transcribe-selection` accepts only:
+
+```json
+{
+  "selection_id": "opaque-selection-id",
   "language": "vi",
-  "model": "ggml-large-v3-turbo-q5_0"
+  "model": "ggml-base-q5_1"
 }
 ```
 
-Successful response:
+The response contains only an opaque `job_id`. A selection cannot be started twice.
 
-```json
-{
-  "job_id": "opaque-uuid",
-  "filename": "recording.mkv"
-}
-```
+The legacy multipart `POST /api/v1/transcribe` remains available for standalone helper compatibility. It accepts browser-uploaded media and optional language/model fields; a missing model defaults to `ggml-large-v3-turbo-q5_0`, while a supplied model must be in the native catalog. This legacy route is separate from Companion selection and does not accept browser filesystem paths through the v2 API.
 
-The API has no `path`, `file`, `multipart`, or URL input. This removes browser upload size limits and prevents a hostile allowed-origin page from choosing arbitrary files without the explicit native dialog.
-
-## Security
+## Security and privacy
 
 - Bind exclusively to IPv4 loopback.
 - Continue strict Origin equality checks, including the deployed Whisdom origin and explicit local development origin.
 - Pairing and every privileged action require the per-user bearer token.
-- The picker is the only source of a native path. The frontend cannot submit one.
-- The picker must be initiated by the `pick-and-transcribe` request, not a tray timer/background action.
+- The native picker is the only source of a native path. The frontend cannot submit one.
+- Selection records stay in Companion memory for 30 minutes and are bounded; expired or deleted IDs cannot be used.
 - Do not log token values, absolute paths, media content, transcript text, or Authorization headers.
 - Do not enable Tauri remote API access, shell execution, filesystem plugin access, or arbitrary webview navigation for the hosted page.
 - The tray app's webview is not the product UI; it does not embed the remote Whisdom site.
+- Paths and source media never leave the Companion process. The browser sends no multipart media or media path in Companion mode.
 
 ## Native Runtime
 
 Reuse the helper's current modules for:
 
-- On-demand pinned model download with SHA-256 verification and atomic finalization.
+- Capability-backed pinned GGML model catalog with model ID, label, quality, size, filename, URL, and SHA-256 metadata kept server-side.
+- On-demand selected-model download with SHA-256 verification and atomic finalization.
+- Manual bounded redirect traversal. Every hop requires HTTPS and an exact allowlisted asset-delivery host; redirects to unlisted hosts fail before their response body is read.
 - On-demand pinned BtbN FFmpeg download, verification, safe extraction, and native conversion.
 - `whisper-rs` native segments with native timestamps.
 - Vulkan-first model initialization with CPU fallback.
@@ -138,28 +158,28 @@ The website remains a normal Vite Pages deployment. Its package does not gain a 
 
 Keep `local-helper` as the user-facing mode label only if copy reflects the companion accurately; otherwise rename it to **Desktop Companion** in both English and Vietnamese copy.
 
-The client changes from multipart `submitJob(file, language, model)` to JSON `pickAndSubmit(language, model)`. The existing SSE parser, result mapping, transcript storage, exports, queue rendering, and cache synchronization are reused. Browser-selected queue entries are retained for browser modes; companion mode starts from its own native picker instead.
+The client uses typed v2 operations: `selectFiles()`, `deleteSelection(id)`, and `startSelection(id, language, modelId)`. It never creates browser `File` objects for native selections and never forwards media or paths. The existing SSE parser, result mapping, transcript storage, exports, queue rendering, and cache synchronization are reused. Browser-selected queue entries are retained for browser modes; companion entries retain opaque selection metadata until explicit start.
 
-The website detects the companion with `/api/v1/health`, then pairs and checks capabilities as it does today. If unavailable, show an installation/start message and leave browser transcription selectable.
+Companion model choices come only from `/api/v1/capabilities`. The UI shows native size/quality and keeps the ephemeral selected model ID out of IndexedDB settings. Browser ONNX model IDs are not sent to the Companion.
 
 ## Errors and Logging
 
-The companion emits structured terminal/file logs for startup, API status, picker opened/cancelled, job lifecycle, download state, FFmpeg failures, native model backend selection, and sanitized errors. HTTP request logging must redact `Authorization` and must not log request bodies or file paths.
+The companion emits structured terminal/file logs for startup, API status, picker opened/cancelled, selection lifecycle, job lifecycle, download state, FFmpeg failures, native model backend selection, and sanitized errors. HTTP request logging must redact `Authorization` and must not log request bodies or file paths.
 
-User-facing errors remain localized EN/VI. A cancelled picker is not an error toast. A helper download/transcription failure appears through the existing terminal job error path and SSE status.
+User-facing errors remain localized EN/VI. A cancelled picker is not an error toast. A helper download/transcription failure appears through the existing terminal job error path and SSE status. Expired, deleted, or already-consumed selection IDs return an error and do not start a job.
 
 ## Validation
 
-1. Unit-test the path-backed job request: valid language/model schedules a job; picker cancellation creates no job; no request type accepts a client-supplied path.
-2. Run the existing helper module tests, frontend local-helper tests, typecheck, lint, unit tests, build, and E2E suite.
+1. Unit-test the v2 selection lifecycle: valid single/multi-select metadata, picker cancellation, 30-minute expiry, deletion, single-use start, unknown model rejection, and absence of client-supplied path/asset fields.
+2. Run the helper module tests, frontend local-helper tests, typecheck, lint, unit tests, build, and E2E suite.
 3. Build the companion with Vulkan using the Windows short target path and run it from a clean `%LOCALAPPDATA%` test root.
-4. Manually verify pairing, tray startup, native picker cancellation, MKV selection, FFmpeg/model first download, Vietnamese transcription, native timestamp SRT/VTT export, SSE progress, cancellation, cache clear, browser fallback, and uninstall.
+4. Manually verify pairing, tray startup, native picker cancellation, single and multi-file append, reorder/remove, MKV selection, FFmpeg/model first download, Vietnamese transcription, native timestamp SRT/VTT export, SSE progress, cancellation, cache clear, browser fallback, and uninstall.
 5. Verify a localhost page with an unlisted Origin cannot pair, invoke picker, read progress, cancel, or clear cache.
 
 ## Non-Goals
 
 - No Tauri replacement for the hosted web product.
-- No uploaded-media fallback in companion mode.
+- No uploaded-media fallback in Companion mode.
 - No arbitrary path, URL, drag-drop path, or shell-command API.
 - No remote browser webview shell.
 - No macOS/Linux package in this slice.

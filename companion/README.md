@@ -33,17 +33,13 @@ The packaged Windows installer is produced under `companion/src-tauri/target/rel
 
 ## Launch
 
-Debug executable with the validated short target path:
-
-```powershell
-& "F:\w-tauri\debug\whisdom-companion.exe"
-```
-
-From the repository root without `CARGO_TARGET_DIR`, launch:
+Launch the executable produced by the build (for example, from the repository root):
 
 ```powershell
 .\companion\src-tauri\target\debug\whisdom-companion.exe
 ```
+
+If `CARGO_TARGET_DIR` is set, use the corresponding executable under that target directory. An executable or installer was not manually verified in this session.
 
 The release executable is the same path under `release` after a non-debug build.
 
@@ -72,23 +68,31 @@ Runtime data:
   auth\
 ```
 
-## Web flow
+## Protocol v2 and web flow
 
 1. Start the Companion; its tray icon reports that it is running.
-2. Select **Desktop Companion** in Whisdom.
-3. Press Start. The Companion opens the native Windows media picker.
-4. Pick a file. The Companion transcribes its local path and streams progress through SSE.
-5. Whisdom receives only the opaque job ID, selected basename, transcript text, and native timestamped segments.
+2. Select **Desktop Companion** in Whisdom and connect it.
+3. Choose files opens the native Windows picker. Single selection and native Ctrl/Shift multi-select are supported. Repeated Choose files actions append rows to the browser queue; they do not replace existing rows.
+4. The browser queue supports remove and move up/move down ordering. Removal calls the Companion before removing the row. Selection, removal, and reorder controls are frozen while a job is active.
+5. Starting a row sends only its opaque selection ID, language, and catalog model ID. The Companion reads the native path locally and streams progress through SSE.
+6. Whisdom receives only opaque job/selection IDs, sanitized filename metadata, transcript text, and native timestamped segments.
 
-The web request is:
+Protocol v2 endpoints:
 
 ```text
-POST /api/v1/pick-and-transcribe
-GET  /api/v1/progress/{job_id}
-POST /api/v1/cancel/{job_id}
+POST   /api/v1/select-files
+DELETE /api/v1/selections/{id}
+POST   /api/v1/transcribe-selection
+GET    /api/v1/capabilities
+GET    /api/v1/progress/{job_id}
+POST   /api/v1/cancel/{job_id}
 ```
 
-Picker cancellation returns `204 No Content`, creates no job, and is not an error.
+`select-files` returns display metadata only: opaque `id`, sanitized `filename`, `size_bytes`, and optional `extension`. Selection entries live in Companion memory for 30 minutes, are single-use when started, and can be deleted before starting. Canceling the native picker returns `204 No Content`, creates no queue row, and is not an error.
+
+Capabilities expose the Companion's native GGML model catalog, including model ID, label, quality, size, and installed state. The browser can request only a catalog model ID; model URLs, filenames, and checksums are not caller-controlled. Missing models download on demand from pinned HTTPS assets. Every redirect hop is host-allowlisted and HTTPS-validated, the response is size-limited, SHA-256-verified, and atomically finalized before use. Redirects or checksums that fail verification abort the download.
+
+Paths and source media never leave the Companion process. The browser sends no filesystem path, URL, multipart media, or media bytes.
 
 ## Tray and startup
 
@@ -118,4 +122,4 @@ Logs may contain sanitized route, job, phase, basename, download, and backend ev
 
 ## Licensing
 
-Release packages must include notices for `whisper.cpp`/`whisper-rs`, the pinned BtbN GPL FFmpeg asset, and Rust dependencies according to their licenses. Pinned URLs and checksums live in `server/src/helper/config.rs`.
+Release packages must include notices for `whisper.cpp`/`whisper-rs`, the pinned BtbN GPL FFmpeg asset, and Rust dependencies according to their licenses. Pinned URLs and checksums live in `server/src/helper/models.rs`.

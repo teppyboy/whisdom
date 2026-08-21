@@ -5,7 +5,7 @@ use axum::extract::{DefaultBodyLimit, Json, Multipart, Path, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use futures::Stream;
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
@@ -13,15 +13,15 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use super::cache::CacheStatus;
-use super::logging::sanitize_filename;
+use super::models::{default_native_model, find_native_model, native_models};
 use super::protocol::{
-    CapabilitiesResponse, HealthResponse, HelperError, PairResponse, PickAndTranscribeRequest,
-    PickAndTranscribeResponse, PROTOCOL_VERSION,
+    CapabilitiesResponse, HealthResponse, HelperError, NativeModelResponse,
+    NativeSelectionResponse, PairResponse, SelectFilesResponse, StartSelectionRequest,
+    StartSelectionResponse, PROTOCOL_VERSION,
 };
 use super::runtime;
 use super::state::HelperState;
 
-const MODEL_ID: &str = "ggml-large-v3-turbo-q5_0";
 const FFMPEG_DIR: &str = "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1";
 
 pub fn router(state: Arc<HelperState>) -> Router {
@@ -47,7 +47,9 @@ pub fn router(state: Arc<HelperState>) -> Router {
             "/api/v1/transcribe",
             post(transcribe).layer(DefaultBodyLimit::max(multipart_limit)),
         )
-        .route("/api/v1/pick-and-transcribe", post(pick_and_transcribe))
+        .route("/api/v1/select-files", post(select_files))
+        .route("/api/v1/selections/{id}", delete(delete_selection))
+        .route("/api/v1/transcribe-selection", post(transcribe_selection))
         .route("/api/v1/progress/{id}", get(progress))
         .route("/api/v1/cancel/{id}", post(cancel))
         .route("/v1/health", get(health))
@@ -59,7 +61,9 @@ pub fn router(state: Arc<HelperState>) -> Router {
             "/v1/transcribe",
             post(transcribe).layer(DefaultBodyLimit::max(multipart_limit)),
         )
-        .route("/v1/pick-and-transcribe", post(pick_and_transcribe))
+        .route("/v1/select-files", post(select_files))
+        .route("/v1/selections/{id}", delete(delete_selection))
+        .route("/v1/transcribe-selection", post(transcribe_selection))
         .route("/v1/progress/{id}", get(progress))
         .route("/v1/cancel/{id}", post(cancel))
         .layer(TraceLayer::new_for_http())
@@ -75,7 +79,7 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed))
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::DELETE, Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([
             header::ACCEPT,
             header::AUTHORIZATION,
@@ -117,8 +121,12 @@ async fn capabilities(
         } else {
             "cpu"
         },
-        model_id: MODEL_ID.into(),
-        model_ready: state.config.model_path().exists(),
+        model_id: default_native_model().id.into(),
+        model_ready: state
+            .config
+            .models_dir()
+            .join(default_native_model().filename)
+            .exists(),
         ffmpeg_ready: state
             .config
             .tools_dir()
@@ -126,6 +134,16 @@ async fn capabilities(
             .join("ffmpeg.exe")
             .exists(),
         native_picker: state.native_file_picker.is_some(),
+        models: native_models()
+            .iter()
+            .map(|model| NativeModelResponse {
+                id: model.id.into(),
+                label: model.label.into(),
+                quality: model.quality.into(),
+                size_bytes: model.size_bytes,
+                installed: state.config.models_dir().join(model.filename).is_file(),
+            })
+            .collect(),
     }))
 }
 
@@ -145,37 +163,80 @@ async fn cache_clear(
     Ok(axum::Json(state.cache.clear(&state.model).await?))
 }
 
-async fn pick_and_transcribe(
+async fn select_files(
     State(state): State<Arc<HelperState>>,
     headers: HeaderMap,
-    Json(request): Json<PickAndTranscribeRequest>,
 ) -> Result<axum::response::Response, HelperError> {
     state.auth.authorize(&headers).await?;
-    validate_model(request.model.as_deref())?;
     let picker = state
         .native_file_picker
         .clone()
         .ok_or(HelperError::NotFound)?;
     tracing::info!("native file picker opened");
-    let Some(path) = picker().await? else {
+    let paths = picker().await?;
+    if paths.is_empty() {
         tracing::info!("native file picker cancelled");
         return Ok(StatusCode::NO_CONTENT.into_response());
-    };
-    let filename = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map(sanitize_filename)
-        .ok_or_else(|| HelperError::BadRequest("selected media has no valid filename".into()))?;
-    tracing::info!(filename = %filename, "native file selected");
+    }
+
+    let mut selections = Vec::with_capacity(paths.len());
+    for path in paths {
+        match state.selections.insert(path).await {
+            Ok(selection) => selections.push(selection),
+            Err(error) => {
+                for selection in selections {
+                    let _ = state.selections.delete(&selection.id).await;
+                }
+                return Err(error);
+            }
+        }
+    }
+    tracing::info!(count = selections.len(), "native files selected");
+    Ok(axum::Json(SelectFilesResponse {
+        selections: selections
+            .into_iter()
+            .map(|selection| NativeSelectionResponse {
+                id: selection.id,
+                filename: selection.filename,
+                size_bytes: selection.size_bytes,
+                extension: selection.extension,
+            })
+            .collect(),
+    })
+    .into_response())
+}
+
+async fn delete_selection(
+    State(state): State<Arc<HelperState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, HelperError> {
+    state.auth.authorize(&headers).await?;
+    state.selections.delete(&id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn transcribe_selection(
+    State(state): State<Arc<HelperState>>,
+    headers: HeaderMap,
+    request: Result<Json<StartSelectionRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<axum::Json<StartSelectionResponse>, HelperError> {
+    state.auth.authorize(&headers).await?;
+    let request = request
+        .map_err(|_| HelperError::BadRequest("invalid selection request".into()))?
+        .0;
+    let model = find_native_model(&request.model)
+        .ok_or_else(|| HelperError::BadRequest("unsupported helper model".into()))?;
+    let selection = state.selections.take(&request.selection_id).await?;
     let job_id = runtime::start_path_job(
         state,
-        path,
-        filename.clone(),
+        selection.path(),
+        selection.filename,
         request.language.filter(|value| !value.is_empty()),
+        model,
     )
     .await?;
-    Ok(axum::Json(PickAndTranscribeResponse { job_id, filename }).into_response())
+    Ok(axum::Json(StartSelectionResponse { job_id }))
 }
 
 async fn read_limited_field(
@@ -198,11 +259,11 @@ async fn read_limited_field(
     Ok(bytes)
 }
 
-fn validate_model(model: Option<&str>) -> Result<(), HelperError> {
-    if model.is_some_and(|value| !value.is_empty() && value != MODEL_ID) {
-        return Err(HelperError::BadRequest("unsupported helper model".into()));
-    }
-    Ok(())
+fn resolve_model(model: Option<&str>) -> Result<&'static super::models::NativeModel, HelperError> {
+    let id = model
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default_native_model().id);
+    find_native_model(id).ok_or_else(|| HelperError::BadRequest("unsupported helper model".into()))
 }
 
 async fn transcribe(
@@ -246,7 +307,7 @@ async fn transcribe(
     }
     let (filename, bytes) =
         audio.ok_or_else(|| HelperError::BadRequest("audio field required".into()))?;
-    validate_model(model.as_deref())?;
+    let model = resolve_model(model.as_deref())?;
     if bytes.len() > state.config.max_upload_bytes {
         return Err(HelperError::BadRequest(
             "uploaded media exceeds the helper limit".into(),
@@ -274,6 +335,7 @@ async fn transcribe(
         filename,
         language.filter(|value| !value.is_empty()),
         work_dir,
+        model,
     )
     .await?;
     Ok(axum::Json(serde_json::json!({ "job_id": job_id })))
@@ -324,12 +386,171 @@ async fn cancel(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use tower::ServiceExt;
+
     use super::*;
+    use crate::helper::auth::HelperAuth;
+    use crate::helper::cache::HelperCache;
+    use crate::helper::config::HelperConfig;
+    use crate::helper::selection::SelectionStore;
+    use crate::helper::state::{HelperQueue, NativeFilePicker};
+    use crate::helper::transcribe::SharedModel;
 
     #[test]
-    fn validates_only_the_fixed_model() {
-        assert!(validate_model(Some(MODEL_ID)).is_ok());
-        assert!(validate_model(Some("other")).is_err());
-        assert!(validate_model(None).is_ok());
+    fn legacy_upload_defaults_to_turbo_and_rejects_unknown_models() {
+        assert_eq!(
+            resolve_model(None).expect("default model").id,
+            default_native_model().id
+        );
+        assert!(resolve_model(Some("other")).is_err());
+    }
+
+    async fn paired_router(path: PathBuf) -> (Router, String) {
+        let directory = tempfile::tempdir().expect("temporary companion root");
+        let root = directory.keep();
+        let config = HelperConfig {
+            port: 8788,
+            allowed_origins: vec!["https://whisdom.app".into()],
+            root,
+            ffmpeg_url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/x/file.zip".into(),
+            ffmpeg_sha256: "a".repeat(64),
+            ffmpeg_exe_sha256: "b".repeat(64),
+            max_download_bytes: 1024,
+            max_upload_bytes: 1024,
+        };
+        config.create_dirs().await.expect("cache directories");
+        let picker: NativeFilePicker = Arc::new(move || {
+            let path = path.clone();
+            Box::pin(async move { Ok(vec![path]) })
+        });
+        let auth = HelperAuth::load(&config).await.expect("auth");
+        let state = Arc::new(HelperState {
+            cache: HelperCache::new(config.clone()),
+            config,
+            auth,
+            queue: HelperQueue::default(),
+            model: SharedModel::default(),
+            selections: SelectionStore::default(),
+            native_file_picker: Some(picker),
+        });
+        let app = router(state);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/pair")
+                    .header("origin", "https://whisdom.app")
+                    .body(Body::empty())
+                    .expect("pair request"),
+            )
+            .await
+            .expect("pair response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("pair body");
+        let token = serde_json::from_slice::<serde_json::Value>(&body).expect("pair JSON")["token"]
+            .as_str()
+            .expect("pair token")
+            .to_owned();
+        (app, token)
+    }
+
+    fn request(method: &str, uri: &str, token: &str, body: Body) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("origin", "https://whisdom.app")
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(body)
+            .expect("request")
+    }
+
+    #[tokio::test]
+    async fn selection_api_returns_display_metadata_and_rejects_path_start_payloads() {
+        let media = tempfile::NamedTempFile::with_suffix(".mkv").expect("test media");
+        std::fs::write(media.path(), b"media").expect("write test media");
+        let (app, token) = paired_router(media.path().to_owned()).await;
+
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/select-files",
+                &token,
+                Body::empty(),
+            ))
+            .await
+            .expect("select response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("select body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("select JSON");
+        let selection_id = value["selections"][0]["id"]
+            .as_str()
+            .expect("opaque ID")
+            .to_owned();
+        assert!(value["selections"][0].get("path").is_none());
+        assert!(value["selections"][0]["filename"].is_string());
+
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/transcribe-selection",
+                &token,
+                Body::from(format!(
+                    r#"{{"selection_id":"{selection_id}","model":"ggml-tiny-q5_1","path":"C:\\\\secret.wav"}}"#
+                )),
+            ))
+            .await
+            .expect("malformed start response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = app
+            .oneshot(request(
+                "DELETE",
+                &format!("/api/v1/selections/{selection_id}"),
+                &token,
+                Body::empty(),
+            ))
+            .await
+            .expect("delete response");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn capabilities_expose_catalog_metadata_without_paths() {
+        let media = tempfile::NamedTempFile::new().expect("test media");
+        let (app, token) = paired_router(media.path().to_owned()).await;
+        let response = app
+            .oneshot(request(
+                "GET",
+                "/api/v1/capabilities",
+                &token,
+                Body::empty(),
+            ))
+            .await
+            .expect("capability response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("capability body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("capability JSON");
+        assert_eq!(
+            value["models"].as_array().expect("models").len(),
+            native_models().len()
+        );
+        assert!(value["models"]
+            .as_array()
+            .expect("models")
+            .iter()
+            .all(|model| model.get("path").is_none()));
     }
 }

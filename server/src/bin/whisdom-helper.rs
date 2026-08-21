@@ -4,6 +4,7 @@ use helper::auth::HelperAuth;
 use helper::cache::HelperCache;
 use helper::config::HelperConfig;
 use helper::logging::HelperLogGuard;
+use helper::selection::SelectionStore;
 use helper::state::{HelperQueue, HelperState};
 use helper::transcribe::SharedModel;
 use whisdom_server::helper;
@@ -20,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cache,
         queue: HelperQueue::default(),
         model: SharedModel::default(),
+        selections: SelectionStore::default(),
         native_file_picker: None,
     });
 

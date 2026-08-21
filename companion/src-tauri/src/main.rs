@@ -13,6 +13,7 @@ use whisdom_server::helper::auth::HelperAuth;
 use whisdom_server::helper::cache::HelperCache;
 use whisdom_server::helper::config::HelperConfig;
 use whisdom_server::helper::logging::{self, HelperLogGuard};
+use whisdom_server::helper::selection::SelectionStore;
 use whisdom_server::helper::state::{HelperQueue, HelperState, NativeFilePicker};
 use whisdom_server::helper::transcribe::SharedModel;
 
@@ -87,7 +88,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let native_file_picker: NativeFilePicker = Arc::new(move || {
         let app_handle = picker_handle.clone();
         Box::pin(async move {
-            let (sender, receiver) = oneshot::channel::<Option<PathBuf>>();
+            let (sender, receiver) = oneshot::channel::<Vec<PathBuf>>();
             app_handle
                 .dialog()
                 .file()
@@ -97,12 +98,16 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
                         "mp3", "m4a", "wav", "flac", "ogg", "mp4", "mkv", "mov", "webm",
                     ],
                 )
-                .pick_file(move |picked| {
-                    let path = match picked {
-                        Some(FilePath::Path(path)) => Some(path),
-                        _ => None,
-                    };
-                    let _ = sender.send(path);
+                .pick_files(move |picked| {
+                    let paths = picked
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|entry| match entry {
+                            FilePath::Path(path) => Some(path),
+                            _ => None,
+                        })
+                        .collect();
+                    let _ = sender.send(paths);
                 });
             receiver.await.map_err(|_| {
                 helper::protocol::HelperError::BadRequest(
@@ -141,6 +146,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
             cache,
             queue: HelperQueue::default(),
             model: SharedModel::default(),
+            selections: SelectionStore::default(),
             native_file_picker: Some(native_file_picker),
         });
         let log_guard: HelperLogGuard = match logging::init(&state.config) {
