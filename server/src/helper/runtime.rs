@@ -136,13 +136,14 @@ pub async fn run_transcription(
         Some("loading native Whisper model".into()),
     )
     .await;
-    let model = load_model(&state.cache, &state.model, model_spec).await?;
-    if is_cancelled(&cancel_rx) {
-        return Err(cancelled_error());
-    }
     let ffmpeg = super::ffmpeg::ensure_ffmpeg(&state.cache).await?;
     let chunks_dir = work_dir.join("chunks");
     let chunk_seconds = 20 * 60;
+    tracing::info!(
+        job_id = %id,
+        chunk_seconds,
+        "splitting media into native WAV chunks"
+    );
     let chunks = super::ffmpeg::split_to_wav_chunks(
         &ffmpeg,
         input,
@@ -151,6 +152,15 @@ pub async fn run_transcription(
         cancel_rx.clone(),
     )
     .await?;
+    tracing::info!(job_id = %id, chunk_count = chunks.len(), "native WAV chunks ready");
+    if is_cancelled(&cancel_rx) {
+        return Err(cancelled_error());
+    }
+    tracing::info!(job_id = %id, "loading native Whisper model after media split");
+    let model = load_model(&state.cache, &state.model, model_spec).await?;
+    if is_cancelled(&cancel_rx) {
+        return Err(cancelled_error());
+    }
     let mut segments = Vec::new();
     for (index, chunk) in chunks.iter().enumerate() {
         if is_cancelled(&cancel_rx) {
