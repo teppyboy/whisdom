@@ -148,6 +148,7 @@ pub fn validate_asset_url(value: &str) -> Result<(), HelperError> {
                 | "cdn-lfs.hf.co"
                 | "cas-bridge.xethub.hf.co"
                 | "transfer.xethub.hf.co"
+                | "us.aws.cdn.hf.co"
                 | "github.com"
                 | "objects.githubusercontent.com"
                 | "release-assets.githubusercontent.com"
@@ -201,6 +202,7 @@ mod tests {
             "cdn-lfs.hf.co",
             "cas-bridge.xethub.hf.co",
             "transfer.xethub.hf.co",
+            "us.aws.cdn.hf.co",
             "github.com",
             "objects.githubusercontent.com",
             "release-assets.githubusercontent.com",
