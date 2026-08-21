@@ -64,11 +64,24 @@ async fn load_model_with_backend(
         if prefer_vulkan {
             let mut gpu_params = WhisperContextParameters::default();
             gpu_params.use_gpu(true);
-            if let Ok(context) = WhisperContext::new_with_params(&path, gpu_params) {
-                tracing::info!("Whisper Vulkan backend selected");
-                return Ok((Arc::new(context), ModelBackend::Vulkan));
+            match WhisperContext::new_with_params(&path, gpu_params) {
+                Ok(context) => {
+                    tracing::info!("Whisper Vulkan backend selected");
+                    return Ok((Arc::new(context), ModelBackend::Vulkan));
+                }
+                Err(error) => {
+                    return Err(HelperError::BadRequest(format!(
+                        "Whisper Vulkan model load failed: {error}"
+                    )));
+                }
             }
-            tracing::warn!("Whisper Vulkan backend unavailable; falling back to CPU");
+        }
+
+        #[cfg(feature = "vulkan")]
+        if prefer_vulkan {
+            return Err(HelperError::BadRequest(
+                "Whisper Vulkan backend is unavailable; CPU fallback is disabled".into(),
+            ));
         }
 
         let mut cpu_params = WhisperContextParameters::default();
@@ -102,6 +115,7 @@ async fn load_model_with_backend(
     Ok(loaded)
 }
 
+#[allow(dead_code)]
 pub(crate) fn is_vulkan_backend(backend: ModelBackend) -> bool {
     #[cfg(feature = "vulkan")]
     {
