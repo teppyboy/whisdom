@@ -156,67 +156,27 @@ pub async fn run_transcription(
     if is_cancelled(&cancel_rx) {
         return Err(cancelled_error());
     }
-    tracing::info!(job_id = %id, "loading native Whisper model after media split");
-    let model = load_model(&state.cache, &state.model, model_spec).await?;
-    if is_cancelled(&cancel_rx) {
-        return Err(cancelled_error());
-    }
     let mut segments = Vec::new();
     for (index, chunk) in chunks.iter().enumerate() {
         if is_cancelled(&cancel_rx) {
             return Err(cancelled_error());
         }
         let offset_seconds = index as f32 * chunk_seconds as f32;
-        let chunk_segments = match transcribe_chunk(
+        tracing::info!(job_id = %id, chunk = index, "loading Vulkan Whisper model for chunk");
+        let model = load_model(&state.cache, &state.model, model_spec).await?;
+        let chunk_segments = transcribe_chunk_adaptive(
+            state,
+            &ffmpeg,
             chunk,
-            model.clone(),
+            &chunks_dir.join(format!("retry-{index:05}")),
+            chunk_seconds,
+            model,
             language.clone(),
+            model_spec,
             cancel_rx.clone(),
             &guard,
         )
-        .await
-        {
-            Ok(segments) => segments,
-            Err(error) if is_retryable_transcription_error(&error) => {
-                let retry_seconds = 10 * 60;
-                let retry_dir = chunks_dir.join(format!("retry-{index:05}"));
-                tracing::warn!(
-                    job_id = %id,
-                    chunk = index,
-                    "Vulkan chunk failed; splitting into 10-minute chunks"
-                );
-                let retry_chunks = super::ffmpeg::split_to_wav_chunks(
-                    &ffmpeg,
-                    chunk,
-                    &retry_dir,
-                    retry_seconds,
-                    cancel_rx.clone(),
-                )
-                .await?;
-                let mut retry_segments = Vec::new();
-                for (retry_index, retry_chunk) in retry_chunks.iter().enumerate() {
-                    if is_cancelled(&cancel_rx) {
-                        return Err(cancelled_error());
-                    }
-                    let retry_offset = retry_index as f32 * retry_seconds as f32;
-                    let smaller = transcribe_chunk(
-                        retry_chunk,
-                        model.clone(),
-                        language.clone(),
-                        cancel_rx.clone(),
-                        &guard,
-                    )
-                    .await?;
-                    retry_segments.extend(smaller.into_iter().map(|mut segment| {
-                        segment.start += retry_offset;
-                        segment.end += retry_offset;
-                        segment
-                    }));
-                }
-                retry_segments
-            }
-            Err(error) => return Err(error),
-        };
+        .await?;
         segments.extend(chunk_segments.into_iter().map(|mut segment| {
             segment.start += offset_seconds;
             segment.end += offset_seconds;
@@ -256,6 +216,66 @@ pub async fn run_transcription(
     }
     state.queue.publish(id).await;
     Ok(())
+}
+
+async fn transcribe_chunk_adaptive(
+    state: &Arc<HelperState>,
+    ffmpeg: &Path,
+    chunk: &Path,
+    retry_dir: &Path,
+    current_seconds: u64,
+    model: Arc<super::transcribe::LoadedModel>,
+    language: Option<String>,
+    model_spec: &'static NativeModel,
+    cancel_rx: watch::Receiver<bool>,
+    guard: &JobGuard,
+) -> Result<Vec<super::protocol::TranscriptSegment>, HelperError> {
+    match transcribe_chunk(chunk, model, language.clone(), cancel_rx.clone(), guard).await {
+        Ok(segments) => Ok(segments),
+        Err(error) if is_retryable_transcription_error(&error) && current_seconds > 5 * 60 => {
+            let next_seconds = current_seconds / 2;
+            tracing::warn!(
+                chunk_seconds = current_seconds,
+                retry_seconds = next_seconds,
+                "Vulkan chunk failed; splitting into smaller chunks"
+            );
+            {
+                let mut loaded = state.model.write().await;
+                *loaded = None;
+            }
+            let retry_chunks = super::ffmpeg::split_to_wav_chunks(
+                ffmpeg,
+                chunk,
+                retry_dir,
+                next_seconds,
+                cancel_rx.clone(),
+            )
+            .await?;
+            let mut segments = Vec::new();
+            for (index, retry_chunk) in retry_chunks.iter().enumerate() {
+                if is_cancelled(&cancel_rx) {
+                    return Err(cancelled_error());
+                }
+                let retry_model = load_model(&state.cache, &state.model, model_spec).await?;
+                let mut retry_segments = transcribe_chunk(
+                    retry_chunk,
+                    retry_model,
+                    language.clone(),
+                    cancel_rx.clone(),
+                    guard,
+                )
+                .await?;
+                let offset = index as f32 * next_seconds as f32;
+                for segment in &mut retry_segments {
+                    segment.start += offset;
+                    segment.end += offset;
+                }
+                segments.extend(retry_segments);
+            }
+            Ok(segments)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn transcribe_chunk(
