@@ -35,6 +35,7 @@ pub async fn load_model(
     load_model_with_backend(cache, model, model_spec, true).await
 }
 
+#[allow(dead_code)]
 pub async fn load_cpu_model(
     cache: &HelperCache,
     model: &SharedModel,
