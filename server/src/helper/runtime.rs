@@ -197,8 +197,8 @@ pub async fn run_transcription(
                 )
                 .await;
             }
-            Err(error) if is_retryable_transcription_error(&error) && current_seconds > 60 => {
-                let next_seconds = (current_seconds / 2).max(60);
+            Err(error) if is_retryable_transcription_error(&error) && current_seconds > 30 => {
+                let next_seconds = (current_seconds / 2).max(30);
                 retry_id += 1;
                 let retry_dir = chunks_dir.join(format!("retry-{retry_id:05}"));
                 tracing::warn!(

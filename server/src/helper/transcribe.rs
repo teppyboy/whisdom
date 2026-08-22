@@ -214,7 +214,7 @@ fn transcribe_chunk(
     params
         .set_n_threads(std::thread::available_parallelism().map_or(4, |value| value.get()) as i32);
     params.set_translate(false);
-    params.set_no_context(false);
+    params.set_no_context(true);
     params.set_single_segment(false);
     params.set_print_special(false);
     params.set_print_progress(false);
