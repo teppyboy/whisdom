@@ -214,13 +214,14 @@ fn transcribe_chunk(
     params
         .set_n_threads(std::thread::available_parallelism().map_or(4, |value| value.get()) as i32);
     params.set_translate(false);
-    params.set_no_context(true);
+    params.set_no_context(false);
     params.set_single_segment(false);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_token_timestamps(true);
+    params.set_temperature_inc(0.2);
     let callback_cancel = Arc::clone(&cancel);
     params.set_abort_callback_safe(move || callback_cancel.load(Ordering::Acquire));
     if let Some(language) = language.filter(|value| *value != "auto") {
