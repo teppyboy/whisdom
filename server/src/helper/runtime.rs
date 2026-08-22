@@ -157,12 +157,35 @@ pub async fn run_transcription(
     if is_cancelled(&cancel_rx) {
         return Err(cancelled_error());
     }
-    let mut pending = chunks
-        .into_iter()
-        .enumerate()
-        .map(|(index, chunk)| (chunk, index as f32 * chunk_seconds as f32, chunk_seconds))
-        .collect::<VecDeque<_>>();
+    let inference_seconds = 30;
+    let inference_dir = chunks_dir.join("inference");
+    let mut pending = VecDeque::new();
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        let outer_dir = inference_dir.join(format!("outer-{index:05}"));
+        let outer_chunks = super::ffmpeg::split_to_wav_chunks(
+            &ffmpeg,
+            &chunk,
+            &outer_dir,
+            inference_seconds,
+            cancel_rx.clone(),
+        )
+        .await?;
+        let outer_offset = index as f32 * chunk_seconds as f32;
+        for (inner_index, inner_chunk) in outer_chunks.into_iter().enumerate() {
+            pending.push_back((
+                inner_chunk,
+                outer_offset + inner_index as f32 * inference_seconds as f32,
+                inference_seconds,
+            ));
+        }
+    }
     let initial_chunk_count = pending.len();
+    tracing::info!(
+        job_id = %id,
+        chunk_seconds = inference_seconds,
+        chunk_count = initial_chunk_count,
+        "native inference chunks ready"
+    );
     let mut completed_chunks = 0usize;
     let mut retry_id = 0usize;
     let mut segments = Vec::new();
@@ -189,16 +212,20 @@ pub async fn run_transcription(
                     job,
                     id,
                     "transcribing",
-                    Some(10.0 + 85.0 * completed_chunks as f32 / initial_chunk_count as f32),
+                    Some(
+                        10.0 + 85.0 * completed_chunks as f32
+                            / (completed_chunks + pending.len()).max(1) as f32,
+                    ),
                     Some(format!(
                         "transcribed chunk {} of {}",
-                        completed_chunks, initial_chunk_count
+                        completed_chunks,
+                        (completed_chunks + pending.len()).max(initial_chunk_count)
                     )),
                 )
                 .await;
             }
-            Err(error) if is_retryable_transcription_error(&error) && current_seconds > 30 => {
-                let next_seconds = (current_seconds / 2).max(30);
+            Err(error) if is_retryable_transcription_error(&error) && current_seconds > 5 => {
+                let next_seconds = (current_seconds / 2).max(5);
                 retry_id += 1;
                 let retry_dir = chunks_dir.join(format!("retry-{retry_id:05}"));
                 tracing::warn!(
