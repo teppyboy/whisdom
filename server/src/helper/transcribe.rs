@@ -214,7 +214,7 @@ fn transcribe_chunk(
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(4);
     params.set_translate(false);
-    params.set_no_context(false);
+    params.set_no_context(true);
     params.set_single_segment(false);
     params.set_print_special(false);
     params.set_print_progress(false);
