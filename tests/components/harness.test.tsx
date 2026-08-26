@@ -11,6 +11,8 @@ import { localHelperClient } from "../../src/features/local-helper/client"
 import { normalizeHelperProgress } from "../../src/features/local-helper/progress"
 import { saveSettings } from "../../src/features/storage/indexed-db"
 
+const health = { available: true, protocol_version: 1, busy: false }
+
 const capabilities = {
   available: true,
   engine: "whisper.cpp",
@@ -69,8 +71,38 @@ describe("component harness", () => {
     expect(indexedDB).toBeDefined()
   })
 
+  it("shows Desktop Companion availability on the main page", async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
+    vi.spyOn(localHelperClient, "discover").mockResolvedValue(health)
+    vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
+
+    renderCompanion()
+
+    expect(
+      await screen.findByText("Desktop Companion available")
+    ).toBeVisible()
+  })
+
+  it("links to Releases when Desktop Companion is unavailable", async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
+    vi.spyOn(localHelperClient, "discover").mockResolvedValue(null)
+    vi.spyOn(localHelperClient, "connect").mockRejectedValue(
+      new Error("Whisdom helper is not running.")
+    )
+
+    renderCompanion()
+
+    expect(
+      await screen.findByText("Desktop Companion not found")
+    ).toBeVisible()
+    expect(
+      screen.getByRole("link", { name: "Download Desktop Companion" })
+    ).toHaveAttribute("href", "https://github.com/teppyboy/whisdom/releases")
+  })
+
   it("renders the native picker labels instead of browser drop copy", async () => {
     await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
+    vi.spyOn(localHelperClient, "discover").mockResolvedValue(health)
     vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
     vi.spyOn(localHelperClient, "selectFiles").mockResolvedValue([])
     const user = userEvent.setup()
