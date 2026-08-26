@@ -14,7 +14,14 @@ pub async fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<bo
     tokio::task::spawn_blocking(move || {
         let mut file = std::fs::File::open(path)?;
         let mut digest = Sha256::new();
-        std::io::copy(&mut file, &mut digest)?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = std::io::Read::read(&mut file, &mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            digest.update(&buffer[..read]);
+        }
         Ok::<bool, std::io::Error>(hex::encode(digest.finalize()) == expected)
     })
     .await
@@ -329,6 +336,25 @@ mod tests {
             matches!(too_many, Err(HelperError::BadRequest(message)) if message == "download redirected too many times")
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn verifies_a_file_hash_in_bounded_reads() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let path = root.path().join("asset.bin");
+        let content = vec![42_u8; 128 * 1024 + 1];
+        tokio::fs::write(&path, &content)
+            .await
+            .expect("write asset");
+
+        assert!(
+            verify_file_sha256(&path, &hex::encode(Sha256::digest(&content)))
+                .await
+                .expect("verify matching checksum")
+        );
+        assert!(!verify_file_sha256(&path, &"0".repeat(64))
+            .await
+            .expect("verify mismatched checksum"));
     }
 
     #[test]

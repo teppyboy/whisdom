@@ -9,6 +9,6 @@
     "build:debug": "tauri build --debug"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.0"
+    "@tauri-apps/cli": "^2.11.4"
   }
 }
