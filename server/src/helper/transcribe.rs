@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -28,6 +29,11 @@ pub struct LoadedModel {
 pub type SharedModel = Arc<RwLock<Option<Arc<LoadedModel>>>>;
 
 const SAMPLE_RATE: usize = 16_000;
+
+unsafe extern "C" fn abort_when_cancelled(user_data: *mut c_void) -> bool {
+    // SAFETY: `transcribe_chunk` supplies a live `Arc<AtomicBool>` for its synchronous call.
+    unsafe { (&*user_data.cast::<AtomicBool>()).load(Ordering::Acquire) }
+}
 #[cfg(feature = "vulkan")]
 static VULKAN_WORKAROUNDS: Once = Once::new();
 
@@ -234,8 +240,12 @@ fn transcribe_chunk(
     params.set_print_timestamps(false);
     params.set_token_timestamps(true);
     params.set_temperature_inc(0.2);
-    let callback_cancel = Arc::clone(&cancel);
-    params.set_abort_callback_safe(move || callback_cancel.load(Ordering::Acquire));
+    // SAFETY: `cancel` remains alive until `state.full` returns, so the callback's userdata
+    // remains valid for the entire native inference call.
+    unsafe {
+        params.set_abort_callback(Some(abort_when_cancelled));
+        params.set_abort_callback_user_data(Arc::as_ptr(&cancel).cast_mut().cast());
+    }
     if let Some(language) = language.filter(|value| *value != "auto") {
         params.set_language(Some(language));
     }
@@ -278,6 +288,17 @@ fn transcribe_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abort_callback_tracks_the_cancellation_flag() {
+        let cancel = AtomicBool::new(false);
+        let user_data = std::ptr::from_ref(&cancel).cast_mut().cast();
+        // SAFETY: `user_data` points to the live `cancel` above for both calls.
+        assert!(!unsafe { abort_when_cancelled(user_data) });
+        cancel.store(true, Ordering::Release);
+        // SAFETY: `user_data` still points to the live `cancel` above.
+        assert!(unsafe { abort_when_cancelled(user_data) });
+    }
 
     #[test]
     fn pre_cancelled_inference_marks_atomic_flag_without_model_loading() {
