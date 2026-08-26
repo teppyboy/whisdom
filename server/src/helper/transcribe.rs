@@ -65,7 +65,6 @@ async fn load_model_with_backend(
         if prefer_vulkan {
             let mut gpu_params = WhisperContextParameters::default();
             gpu_params.use_gpu(true);
-            gpu_params.gpu_device(1);
             match WhisperContext::new_with_params(&path, gpu_params) {
                 Ok(context) => {
                     tracing::info!("Whisper Vulkan backend selected");
@@ -212,8 +211,7 @@ fn transcribe_chunk(
         HelperError::BadRequest(format!("Whisper state creation failed: {error}"))
     })?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params
-        .set_n_threads(std::thread::available_parallelism().map_or(4, |value| value.get()) as i32);
+    params.set_n_threads(4);
     params.set_translate(false);
     params.set_no_context(true);
     params.set_single_segment(false);
