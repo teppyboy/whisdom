@@ -54,6 +54,7 @@ src/wasm/.omo/
 /audio-processor/target/
 
 # Local agent/tool state
+/.worktrees/
 /.omo/
 /.pi/
 /.serena/
