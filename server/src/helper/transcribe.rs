@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "vulkan")]
+use std::sync::Once;
 
 use hound::WavReader;
 use tokio::sync::{watch, RwLock};
@@ -26,6 +28,16 @@ pub struct LoadedModel {
 pub type SharedModel = Arc<RwLock<Option<Arc<LoadedModel>>>>;
 
 const SAMPLE_RATE: usize = 16_000;
+#[cfg(feature = "vulkan")]
+static VULKAN_WORKAROUNDS: Once = Once::new();
+
+#[cfg(feature = "vulkan")]
+fn configure_vulkan_workarounds() {
+    VULKAN_WORKAROUNDS.call_once(|| {
+        std::env::set_var("GGML_VK_DISABLE_MMVQ", "1");
+        tracing::info!("disabling Vulkan MMVQ for encoder compatibility");
+    });
+}
 
 pub async fn load_model(
     cache: &HelperCache,
@@ -63,6 +75,7 @@ async fn load_model_with_backend(
     let context = tokio::task::spawn_blocking(move || {
         #[cfg(feature = "vulkan")]
         if prefer_vulkan {
+            configure_vulkan_workarounds();
             let mut gpu_params = WhisperContextParameters::default();
             gpu_params.use_gpu(true);
             match WhisperContext::new_with_params(&path, gpu_params) {
