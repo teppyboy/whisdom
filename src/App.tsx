@@ -117,7 +117,10 @@ import {
 import { transcribeChunkWithServer } from "@/features/server-transcription/client"
 import { localHelperClient } from "@/features/local-helper/client"
 import { normalizeHelperProgress } from "@/features/local-helper/progress"
-import type { HelperCapabilities } from "@/features/local-helper/types"
+import type {
+  HelperCapabilities,
+  HelperHealth,
+} from "@/features/local-helper/types"
 import { ServerTranscriptionApi } from "@/features/server-transcription/api"
 import type {
   ServerCapabilities,
@@ -164,8 +167,10 @@ const MODES: Array<{ value: ProcessingMode; label: string; detail: string }> = [
 ]
 
 const EXPORTS: ExportFormat[] = ["txt", "json", "srt", "vtt"]
+const COMPANION_RELEASES_URL = "https://github.com/teppyboy/whisdom/releases"
 
 type View = "home" | "settings"
+type CompanionHealthState = HelperHealth | "checking" | null
 type ProgressLogEntry = {
   id: string
   phase: JobState
@@ -259,6 +264,13 @@ const COPY = {
     serverModeDesc:
       "Server-side transcription via whisper.cpp. Sign in required.",
     companionTitle: "Desktop Companion",
+    companionChecking: "Checking Desktop Companion…",
+    companionAvailable: "Desktop Companion available",
+    companionBusy: "Desktop Companion is busy",
+    companionUnavailable: "Desktop Companion not found",
+    companionUnavailableDescription:
+      "Start the Windows app, or download it from the latest release.",
+    downloadCompanion: "Download Desktop Companion",
     companionDescription:
       "Choose one or more media files in the Windows dialog. Files stay on this device until you start transcription.",
     companionPreflight:
@@ -313,7 +325,7 @@ const COPY = {
     englishOnlySidebar:
       "Current model is English-only. Switch to a multilingual Whisper model.",
     processing: "Processing",
-    processingDescription: "Where transcription runs and how media is chunked.",
+    processingDescription: "Advanced local chunk settings.",
     mode: "Mode",
     chunkSeconds: "Chunk seconds",
     chunkSecondsDescription: "Audio length per transcription chunk.",
@@ -466,6 +478,13 @@ const COPY = {
     serverUrl: "Nhập URL video/âm thanh",
     serverModeDesc: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
     companionTitle: "Desktop Companion",
+    companionChecking: "Đang kiểm tra Desktop Companion…",
+    companionAvailable: "Desktop Companion đã sẵn sàng",
+    companionBusy: "Desktop Companion đang bận",
+    companionUnavailable: "Không tìm thấy Desktop Companion",
+    companionUnavailableDescription:
+      "Hãy mở ứng dụng Windows hoặc tải từ bản phát hành mới nhất.",
+    downloadCompanion: "Tải Desktop Companion",
     companionDescription:
       "Chọn một hoặc nhiều tệp media trong hộp thoại Windows. Tệp vẫn ở trên thiết bị này cho đến khi bắt đầu chép lời.",
     companionPreflight:
@@ -520,7 +539,7 @@ const COPY = {
     englishOnlySidebar:
       "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn một mô hình Whisper đa ngôn ngữ.",
     processing: "Xử lý",
-    processingDescription: "Chọn nơi xử lý và cách chia tệp thành đoạn.",
+    processingDescription: "Thiết lập nâng cao cho đoạn xử lý cục bộ.",
     mode: "Chế độ",
     chunkSeconds: "Thời lượng mỗi đoạn",
     chunkSecondsDescription: "Độ dài mỗi đoạn âm thanh khi xử lý.",
@@ -764,6 +783,8 @@ export function App() {
   const [queue, setQueue] = React.useState<QueuedFile[]>([])
   const [helperCapabilities, setHelperCapabilities] =
     React.useState<HelperCapabilities | null>(null)
+  const [companionHealth, setCompanionHealth] =
+    React.useState<CompanionHealthState>("checking")
   const [companionModelId, setCompanionModelId] = React.useState("")
   const [selectedQueueId, setSelectedQueueId] = React.useState<string | null>(
     null
@@ -933,6 +954,16 @@ export function App() {
   }, [activeServerCapabilities])
 
   React.useEffect(() => {
+    let cancelled = false
+    void localHelperClient.discover().then((health) => {
+      if (!cancelled) setCompanionHealth(health)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [settings.mode])
+
+  React.useEffect(() => {
     if (settings.mode !== "local-helper") return
     let cancelled = false
     void localHelperClient
@@ -940,6 +971,11 @@ export function App() {
       .then((capabilities) => {
         if (cancelled) return
         setHelperCapabilities(capabilities)
+        setCompanionHealth((current) =>
+          current === "checking"
+            ? { available: true, protocol_version: 1, busy: false }
+            : current
+        )
         setCompanionModelId((current) =>
           capabilities.models.some((model) => model.id === current)
             ? current
@@ -2185,6 +2221,8 @@ export function App() {
                 updateSetting={updateSetting}
                 serverCapabilities={activeServerCapabilities}
                 helperCapabilities={helperCapabilities}
+                companionHealth={companionHealth}
+                storageActionsDisabled={isBusy(jobState)}
                 companionModelId={companionModelId}
                 onCompanionModelChange={setCompanionModelId}
               />
@@ -2394,6 +2432,8 @@ function MainControls({
   updateSetting,
   serverCapabilities,
   helperCapabilities,
+  companionHealth,
+  storageActionsDisabled,
   companionModelId,
   onCompanionModelChange,
 }: {
@@ -2407,6 +2447,8 @@ function MainControls({
   ) => void
   serverCapabilities: ServerCapabilitiesState
   helperCapabilities: HelperCapabilities | null
+  companionHealth: CompanionHealthState
+  storageActionsDisabled: boolean
   companionModelId: string
   onCompanionModelChange: (id: string) => void
 }) {
@@ -2428,6 +2470,70 @@ function MainControls({
         <CardDescription>{copy.quickSetupDescription}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-2 md:col-span-2">
+          <Label>{copy.mode}</Label>
+          <Select
+            value={settings.mode}
+            disabled={storageActionsDisabled}
+            onValueChange={(value) =>
+              updateSetting("mode", value as ProcessingMode)
+            }
+          >
+            <SelectTrigger aria-label={copy.mode} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {MODES.filter(
+                (item) =>
+                  item.value !== "server" || Boolean(import.meta.env.VITE_SERVER_URL)
+              ).map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {copy.modeLabels[item.value]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {copy.modeDetails[settings.mode]}
+          </p>
+          {settings.mode === "local-helper" ? (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+              <Badge
+                variant={
+                  companionHealth && companionHealth !== "checking"
+                    ? companionHealth.busy
+                      ? "secondary"
+                      : "default"
+                    : "outline"
+                }
+              >
+                {companionHealth === "checking"
+                  ? copy.companionChecking
+                  : companionHealth?.busy
+                    ? copy.companionBusy
+                    : companionHealth
+                      ? copy.companionAvailable
+                      : copy.companionUnavailable}
+              </Badge>
+              {companionHealth === null ? (
+                <>
+                  <span className="text-muted-foreground">
+                    {copy.companionUnavailableDescription}
+                  </span>
+                  <a
+                    href={COMPANION_RELEASES_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium underline underline-offset-4"
+                  >
+                    {copy.downloadCompanion}
+                  </a>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
         <div className="grid gap-2">
           <Label>{copy.model}</Label>
           {settings.mode === "local-helper" ? (
@@ -2745,34 +2851,6 @@ function SettingsPage({
           <CardDescription>{copy.processingDescription}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-5">
-          <SettingRow
-            label={copy.mode}
-            description={copy.modeDetails[settings.mode]}
-          >
-            <Select
-              value={settings.mode}
-              disabled={storageActionsDisabled}
-              onValueChange={(value) =>
-                updateSetting("mode", value as ProcessingMode)
-              }
-            >
-              <SelectTrigger aria-label={copy.mode} className="w-full sm:w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="end">
-                {MODES.filter(
-                  (item) =>
-                    item.value !== "server" ||
-                    Boolean(import.meta.env.VITE_SERVER_URL)
-                ).map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {copy.modeLabels[item.value]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingRow>
-          <Separator />
           {settings.mode !== "server" ? (
             <>
               <SettingRow
