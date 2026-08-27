@@ -12,8 +12,17 @@
       "csp": "default-src 'self';"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU5RDBGMEY3QjM0NjE1QjMKUldTekZVYXo5L0RRNmRtQ2xZWE1UUmloSkZtbjBvTlord3hTTStPRS9uZ0hiRk1ZYlJKd3RYbHkK",
+      "endpoints": [
+        "https://github.com/teppyboy/whisdom/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
