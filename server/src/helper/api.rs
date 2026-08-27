@@ -79,6 +79,7 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed))
+        .allow_private_network(true)
         .allow_methods([Method::DELETE, Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([
             header::ACCEPT,
@@ -414,7 +415,10 @@ mod tests {
         let root = directory.keep();
         let config = HelperConfig {
             port: 8788,
-            allowed_origins: vec!["https://whisdom.app".into()],
+            allowed_origins: vec![
+                "https://whisdom.tretrauit.me".into(),
+                "https://whisdom.app".into(),
+            ],
             root,
             ffmpeg_url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/x/file.zip".into(),
             ffmpeg_sha256: "a".repeat(64),
@@ -523,6 +527,34 @@ mod tests {
             .await
             .expect("delete response");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn private_network_preflight_is_allowed_for_paired_origins() {
+        let media = tempfile::NamedTempFile::new().expect("test media");
+        let (app, _token) = paired_router(media.path().to_owned()).await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/v1/health")
+                    .header("origin", "https://whisdom.tretrauit.me")
+                    .header("access-control-request-method", "GET")
+                    .header("access-control-request-private-network", "true")
+                    .body(Body::empty())
+                    .expect("preflight request"),
+            )
+            .await
+            .expect("preflight response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-private-network")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
     }
 
     #[tokio::test]

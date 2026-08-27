@@ -54,7 +54,7 @@ GET http://127.0.0.1:8788/api/v1/health
 Configure allowed browser origins before launch when needed:
 
 ```powershell
-$env:WHISDOM_HELPER_ORIGINS = "https://whisdom.app,http://localhost:5173"
+$env:WHISDOM_HELPER_ORIGINS = "https://whisdom.tretrauit.me,https://whisdom.app,http://localhost:5173"
 ```
 
 Runtime data:

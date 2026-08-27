@@ -63,7 +63,7 @@ The helper attempts Vulkan first when compiled with the feature, then falls back
 ## Run
 
 ```powershell
-$env:WHISDOM_HELPER_ORIGINS = "https://whisdom.app,http://localhost:5173"
+$env:WHISDOM_HELPER_ORIGINS = "https://whisdom.tretrauit.me,https://whisdom.app,http://localhost:5173"
 .\target\release\whisdom-helper.exe
 ```
 

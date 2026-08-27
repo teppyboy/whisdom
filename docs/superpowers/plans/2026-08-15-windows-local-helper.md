@@ -57,7 +57,7 @@ Add `sha2`, `hex`, `zip`, and `url` dependencies. Keep the existing server binar
 
 ```text
 WHISDOM_HELPER_PORT       default 8788
-WHISDOM_HELPER_ORIGINS    default https://whisdom.app,http://localhost:5173
+WHISDOM_HELPER_ORIGINS    default https://whisdom.tretrauit.me,https://whisdom.app,http://localhost:5173
 WHISDOM_HELPER_ROOT       default %LOCALAPPDATA%/Whisdom/Helper
 WHISDOM_HELPER_MODEL_URL  pinned Hugging Face resolve URL
 WHISDOM_HELPER_MODEL_SHA256 required compile-time/config value

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use super::protocol::HelperError;
 
 const DEFAULT_PORT: u16 = 8788;
-const DEFAULT_ORIGINS: &str = "https://whisdom.app,http://localhost:5173";
+const DEFAULT_ORIGINS: &str =
+    "https://whisdom.tretrauit.me,https://whisdom.app,http://localhost:5173";
 const DEFAULT_FFMPEG_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-15-13-02/ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip";
 const DEFAULT_FFMPEG_SHA256: &str =
     "0e7829b6e1ba867e37bbad17153de258bd3bffaa3b745626a6424df0ea113970";
@@ -184,9 +185,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_origins_include_the_deployed_site() {
+        assert!(DEFAULT_ORIGINS
+            .split(',')
+            .any(|origin| origin == "https://whisdom.tretrauit.me"));
+    }
+
+    #[test]
     fn default_paths_are_under_local_app_data_or_temp() {
-        let config = HelperConfig::from_env().unwrap();
-        assert!(config.root.is_absolute());
+        assert!(HelperConfig::from_env().is_ok_and(|config| config.root.is_absolute()));
     }
 
     #[test]
