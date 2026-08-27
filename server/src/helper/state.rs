@@ -4,24 +4,12 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use tokio::sync::{broadcast, Mutex};
 
-use super::protocol::HelperError;
-
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct HelperUpdateInfo {
-    pub version: String,
-    pub body: Option<String>,
-}
-
-pub type UpdateCheck = Arc<
-    dyn Fn() -> BoxFuture<'static, Result<Option<HelperUpdateInfo>, HelperError>> + Send + Sync,
->;
-pub type UpdateInstall = Arc<dyn Fn() -> BoxFuture<'static, Result<(), HelperError>> + Send + Sync>;
 use super::auth::HelperAuth;
 use super::cache::HelperCache;
 use super::config::HelperConfig;
-use super::protocol::JobStatus;
+use super::engine::SharedRuntime;
+use super::protocol::{HelperError, JobStatus};
 use super::selection::SelectionStore;
-use super::transcribe::SharedModel;
 
 pub type NativeFilePicker =
     Arc<dyn Fn() -> BoxFuture<'static, Result<Vec<std::path::PathBuf>, HelperError>> + Send + Sync>;
@@ -32,11 +20,9 @@ pub struct HelperState {
     pub auth: HelperAuth,
     pub cache: HelperCache,
     pub queue: HelperQueue,
-    pub model: SharedModel,
+    pub runtime: SharedRuntime,
     pub selections: SelectionStore,
     pub native_file_picker: Option<NativeFilePicker>,
-    pub update_check: Option<UpdateCheck>,
-    pub update_install: Option<UpdateInstall>,
 }
 
 #[derive(Clone)]

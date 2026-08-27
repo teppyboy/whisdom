@@ -1,6 +1,6 @@
 # Whisdom Windows Local Helper and Companion
 
-`Whisdom Companion` is the recommended Windows integration. It runs as an optional Tauri tray app, opens the native Windows media picker, and transcribes the selected path locally with native `whisper.cpp`.
+`Whisdom Companion` is the recommended Windows integration. It runs as an optional Tauri tray app, opens the native Windows media picker, and transcribes the selected path locally with native Whisper or Parakeet through sherpa-onnx.
 
 `whisdom-helper.exe` remains a legacy standalone compatibility binary. Its multipart loopback API still accepts browser-uploaded media, but new web flows should use the Companion picker API instead. Companion mode sends no media upload and no filesystem path from the browser.
 
@@ -31,7 +31,7 @@ Each selection is represented by an opaque in-memory ID. Entries expire after 30
 }
 ```
 
-Capabilities return the native GGML model catalog and installed state. The catalog is pinned in the helper; callers cannot provide model URLs, filenames, checksums, or paths. A selected model downloads on demand from its pinned HTTPS asset. Redirects are traversed manually with per-hop host allowlisting, HTTPS checks, bounded size, SHA-256 verification, and atomic cache finalization.
+Capabilities return the native model catalog and installed state. Parakeet uses sherpa-onnx 1.13.6. Ordinary builds use its CPU runtime. A Windows build with the `directml` feature attempts DirectML first, but only when `SHERPA_ONNX_LIB_DIR` points to a separately built sherpa-onnx library compiled with `SHERPA_ONNX_ENABLE_DIRECTML`; the standard crates.io prebuilt archive is not DirectML-capable. If DirectML recognizer creation fails, Parakeet falls back to CPU. Because sherpa-onnx 1.13.6 can silently fall back to CPU when its DirectML provider is unavailable, capabilities report `cpu` for Parakeet until a runtime provider query can prove DirectML. The existing `vulkan` feature applies to Whisper only; no Parakeet Vulkan runtime is currently linked. The catalog is pinned in the helper; callers cannot provide model URLs, filenames, checksums, or paths. A selected model downloads on demand from its pinned HTTPS asset. Redirects are traversed manually with per-hop host allowlisting, HTTPS checks, bounded size, SHA-256 verification, and atomic cache finalization.
 
 Paths and source media never leave the Companion process. The browser sends no filesystem path, URL, multipart media, or media bytes.
 
@@ -58,7 +58,7 @@ cd server
 cargo build --release --bin whisdom-helper --features vulkan
 ```
 
-The helper attempts Vulkan first when compiled with the feature, then falls back to native CPU if model initialization fails.
+A Vulkan-enabled helper attempts Whisper Vulkan model initialization. If it fails, the job errors; it does not silently fall back to CPU. CPU behavior requires a CPU-built helper.
 
 ## Run
 
@@ -123,4 +123,4 @@ The release must ship license/source notices for:
 - BtbN FFmpeg `win64-gpl` asset and the applicable GPL license/source offer.
 - Rust dependencies as required by their licenses.
 
-Pinned assets are defined in `server/src/helper/models.rs`. Do not replace them with floating `latest` URLs without updating the checksum and release documentation.
+Pinned assets are defined in `server/src/helper/models.rs`. Do not replace them with floating `latest` URLs without updating the checksum and release documentation. DirectML builds must document the exact custom sherpa-onnx commit, library directory, DirectML/ONNX Runtime package, and Windows driver test matrix.

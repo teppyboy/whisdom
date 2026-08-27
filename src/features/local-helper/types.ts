@@ -6,10 +6,8 @@ export type HelperHealth = {
   busy: boolean
 }
 
-export type HelperUpdate = {
-  version: string
-  body: string | null
-}
+export type HelperEngine = "whisper.cpp" | "sherpa-onnx" | "nemo-speech.cpp"
+export type HelperBackend = "cpu" | "directml" | "vulkan" | "unavailable"
 
 export type HelperModel = {
   id: string
@@ -17,6 +15,10 @@ export type HelperModel = {
   quality: string
   size_bytes: number
   installed: boolean
+  engine: HelperEngine
+  supported_languages: string[]
+  supports_auto_language: boolean
+  active_backend: HelperBackend
 }
 
 export type HelperCapabilities = {

@@ -18,6 +18,10 @@ const capabilities = {
       quality: "high",
       size_bytes: 574041195,
       installed: true,
+      engine: "whisper.cpp",
+      supported_languages: ["*"],
+      supports_auto_language: true,
+      active_backend: "cpu",
     },
   ],
 }
@@ -68,48 +72,99 @@ describe("LocalHelperClient", () => {
     await client.discover()
 
     await expect(client.pair()).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "ggml-large-v3-turbo-q5_0" })],
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: "ggml-large-v3-turbo-q5_0" }),
+      ]),
     })
     expect(localStorage.getItem("whisdom.local-helper.token.v1")).toBe(
       "local-token"
     )
   })
 
-  it("checks for and installs a Companion update", async () => {
-    localStorage.setItem("whisdom.local-helper.token.v1", "local-token")
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
+  it("preserves legacy Whisper-only capability records", async () => {
+    vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(mockHealth())
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            update: { version: "0.0.2", body: "Bug fixes" },
-          })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            update: { version: "0.0.2", body: "Bug fixes" },
+            ...capabilities,
+            models: capabilities.models.map((model) => ({
+              id: model.id,
+              label: model.label,
+              quality: model.quality,
+              size_bytes: model.size_bytes,
+              installed: model.installed,
+            })),
           })
         )
       )
     const client = new LocalHelperClient()
     await client.discover()
-    await expect(client.checkForUpdate()).resolves.toEqual({
-      version: "0.0.2",
-      body: "Bug fixes",
+    await expect(client.getCapabilities()).resolves.toMatchObject({
+      models: [
+        expect.objectContaining({
+          engine: "whisper.cpp",
+          supported_languages: ["*"],
+          supports_auto_language: true,
+          active_backend: "cpu",
+        }),
+      ],
     })
-    await expect(client.installUpdate()).resolves.toEqual({
-      version: "0.0.2",
-      body: "Bug fixes",
+  })
+
+  it("parses a mixed companion catalog and rejects malformed capability metadata", async () => {
+    const parakeet = {
+      id: "sherpa-parakeet-tdt-v3-int8",
+      label: "Parakeet TDT v3",
+      quality: "high",
+      size_bytes: 487170055,
+      installed: false,
+      engine: "sherpa-onnx",
+      supported_languages: ["en", "de", "fr", "es"],
+      supports_auto_language: false,
+      active_backend: "cpu",
+    }
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...capabilities,
+            models: [...capabilities.models, parakeet],
+          })
+        )
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+    await expect(client.getCapabilities()).resolves.toMatchObject({
+      models: expect.arrayContaining([
+        expect.objectContaining({
+          id: parakeet.id,
+          active_backend: "cpu",
+        }),
+      ]),
     })
-    expect(fetchMock.mock.calls[1]?.[0]).toBe(
-      "http://127.0.0.1:8788/api/v1/update"
-    )
-    expect(fetchMock.mock.calls[2]?.[0]).toBe(
-      "http://127.0.0.1:8788/api/v1/update/install"
-    )
+
+    for (const model of [
+      { ...parakeet, engine: "python" },
+      { ...parakeet, supported_languages: ["C:\\\\secret"] },
+      { ...parakeet, supported_languages: ["en", "en"] },
+      { ...parakeet, supported_languages: [] },
+      { ...parakeet, supports_auto_language: "yes" },
+      { ...parakeet, active_backend: "claimed-gpu" },
+    ]) {
+      vi.restoreAllMocks()
+      vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(mockHealth())
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ...capabilities, models: [model] }))
+        )
+      const invalidClient = new LocalHelperClient()
+      await invalidClient.discover()
+      await expect(invalidClient.getCapabilities()).rejects.toThrow(
+        "invalid capabilities"
+      )
+    }
   })
 
   it("rejects malformed native model capabilities", async () => {

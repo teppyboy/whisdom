@@ -10,7 +10,7 @@ use tokio::sync::{watch, RwLock};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use super::cache::{HelperCache, JobGuard};
-use super::models::NativeModel;
+use super::models::{AsrEngine, NativeModel};
 use super::protocol::{HelperError, TranscriptSegment};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +76,11 @@ async fn load_model_with_backend(
         }
     }
 
+    if model_spec.engine != AsrEngine::WhisperCpp {
+        return Err(HelperError::BadRequest(
+            "selected model requires the Parakeet runtime".into(),
+        ));
+    }
     tracing::info!("loading Whisper model");
     let path = cache.ensure_model(model_spec).await?;
     let context = tokio::task::spawn_blocking(move || {

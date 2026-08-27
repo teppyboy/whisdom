@@ -7,7 +7,6 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::{DialogExt, FilePath};
-use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::oneshot;
 use whisdom_server::helper;
 use whisdom_server::helper::auth::HelperAuth;
@@ -15,51 +14,8 @@ use whisdom_server::helper::cache::HelperCache;
 use whisdom_server::helper::config::HelperConfig;
 use whisdom_server::helper::logging::{self, HelperLogGuard};
 use whisdom_server::helper::selection::SelectionStore;
-use whisdom_server::helper::state::{
-    HelperQueue, HelperState, HelperUpdateInfo, NativeFilePicker, UpdateCheck, UpdateInstall,
-};
-use whisdom_server::helper::transcribe::SharedModel;
-
-fn update_check(handle: &tauri::AppHandle<Wry>) -> UpdateCheck {
-    let handle = handle.clone();
-    Arc::new(move || {
-        let handle = handle.clone();
-        Box::pin(async move {
-            let update = handle
-                .updater()
-                .map_err(|error| helper::protocol::HelperError::Update(error.to_string()))?
-                .check()
-                .await
-                .map_err(|error| helper::protocol::HelperError::Update(error.to_string()))?;
-            Ok(update.map(|update| HelperUpdateInfo {
-                version: update.version,
-                body: update.body,
-            }))
-        })
-    })
-}
-
-fn update_install(handle: &tauri::AppHandle<Wry>) -> UpdateInstall {
-    let handle = handle.clone();
-    Arc::new(move || {
-        let handle = handle.clone();
-        Box::pin(async move {
-            let update = handle
-                .updater()
-                .map_err(|error| helper::protocol::HelperError::Update(error.to_string()))?
-                .check()
-                .await
-                .map_err(|error| helper::protocol::HelperError::Update(error.to_string()))?;
-            if let Some(update) = update {
-                update
-                    .download_and_install(|_, _| {}, || {})
-                    .await
-                    .map_err(|error| helper::protocol::HelperError::Update(error.to_string()))?;
-            }
-            Ok(())
-        })
-    })
-}
+use whisdom_server::helper::state::{HelperQueue, HelperState, NativeFilePicker};
+use whisdom_server::helper::engine::SharedRuntime;
 
 fn ensure_companion_root() {
     if std::env::var_os("WHISDOM_HELPER_ROOT").is_some() {
@@ -75,7 +31,6 @@ fn ensure_companion_root() {
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -199,11 +154,9 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
             auth,
             cache,
             queue: HelperQueue::default(),
-            model: SharedModel::default(),
+            runtime: SharedRuntime::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(native_file_picker),
-            update_check: Some(update_check(&handle)),
-            update_install: Some(update_install(&handle)),
         });
         let log_guard: HelperLogGuard = match logging::init(&state.config) {
             Ok(guard) => guard,

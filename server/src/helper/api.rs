@@ -13,11 +13,12 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use super::cache::CacheStatus;
-use super::models::{default_native_model, find_native_model, native_models};
+use super::engine;
+use super::models::{default_native_model, find_native_model, native_models, supports_language};
 use super::protocol::{
     CapabilitiesResponse, HealthResponse, HelperError, NativeModelResponse,
     NativeSelectionResponse, PairResponse, SelectFilesResponse, StartSelectionRequest,
-    StartSelectionResponse, UpdateResponse, PROTOCOL_VERSION,
+    StartSelectionResponse, PROTOCOL_VERSION,
 };
 use super::runtime;
 use super::state::HelperState;
@@ -32,8 +33,6 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/api/capabilities", get(capabilities))
         .route("/api/cache/status", get(cache_status))
         .route("/api/cache/clear", post(cache_clear))
-        .route("/api/update", get(update_check))
-        .route("/api/update/install", post(update_install))
         .route(
             "/api/transcribe",
             post(transcribe).layer(DefaultBodyLimit::max(multipart_limit)),
@@ -45,8 +44,6 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/cache/status", get(cache_status))
         .route("/api/v1/cache/clear", post(cache_clear))
-        .route("/api/v1/update", get(update_check))
-        .route("/api/v1/update/install", post(update_install))
         .route(
             "/api/v1/transcribe",
             post(transcribe).layer(DefaultBodyLimit::max(multipart_limit)),
@@ -61,8 +58,6 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/cache/status", get(cache_status))
         .route("/v1/cache/clear", post(cache_clear))
-        .route("/v1/update", get(update_check))
-        .route("/v1/update/install", post(update_install))
         .route(
             "/v1/transcribe",
             post(transcribe).layer(DefaultBodyLimit::max(multipart_limit)),
@@ -85,7 +80,6 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed))
-        .allow_private_network(true)
         .allow_methods([Method::DELETE, Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([
             header::ACCEPT,
@@ -120,20 +114,33 @@ async fn capabilities(
     headers: HeaderMap,
 ) -> Result<axum::Json<CapabilitiesResponse>, HelperError> {
     state.auth.authorize(&headers).await?;
+    let mut models = Vec::with_capacity(native_models().len());
+    for model in native_models() {
+        models.push(NativeModelResponse {
+            id: model.id.into(),
+            label: model.label.into(),
+            quality: model.quality.into(),
+            size_bytes: model.size_bytes,
+            installed: state.cache.model_is_installed(model).await.unwrap_or(false),
+            engine: model.engine.id(),
+            supported_languages: model
+                .supported_languages
+                .iter()
+                .map(|language| (*language).into())
+                .collect(),
+            supports_auto_language: model.supports_auto_language,
+            active_backend: engine::configured_backend(model),
+        });
+    }
     Ok(axum::Json(CapabilitiesResponse {
         available: true,
-        engine: "whisper.cpp",
-        accelerator: if cfg!(feature = "vulkan") {
-            "vulkan-or-cpu"
-        } else {
-            "cpu"
-        },
+        engine: "catalog",
+        accelerator: "per-model",
         model_id: default_native_model().id.into(),
         model_ready: state
-            .config
-            .models_dir()
-            .join(default_native_model().filename)
-            .exists(),
+            .cache
+            .model_is_installed(default_native_model())
+            .await?,
         ffmpeg_ready: state
             .config
             .tools_dir()
@@ -141,16 +148,7 @@ async fn capabilities(
             .join("ffmpeg.exe")
             .exists(),
         native_picker: state.native_file_picker.is_some(),
-        models: native_models()
-            .iter()
-            .map(|model| NativeModelResponse {
-                id: model.id.into(),
-                label: model.label.into(),
-                quality: model.quality.into(),
-                size_bytes: model.size_bytes,
-                installed: state.config.models_dir().join(model.filename).is_file(),
-            })
-            .collect(),
+        models,
     }))
 }
 
@@ -167,52 +165,8 @@ async fn cache_clear(
     headers: HeaderMap,
 ) -> Result<axum::Json<super::cache::CacheClearResult>, HelperError> {
     state.auth.authorize(&headers).await?;
-    Ok(axum::Json(state.cache.clear(&state.model).await?))
-}
-
-async fn update_check(
-    State(state): State<Arc<HelperState>>,
-    headers: HeaderMap,
-) -> Result<axum::Json<UpdateResponse>, HelperError> {
-    state.auth.authorize(&headers).await?;
-    let check = state
-        .update_check
-        .as_ref()
-        .ok_or(HelperError::NotFound)?
-        .clone();
-    Ok(axum::Json(UpdateResponse {
-        update: check().await?,
-    }))
-}
-
-async fn update_install(
-    State(state): State<Arc<HelperState>>,
-    headers: HeaderMap,
-) -> Result<axum::Json<UpdateResponse>, HelperError> {
-    state.auth.authorize(&headers).await?;
-    if state.cache.is_busy() {
-        return Err(HelperError::Busy);
-    }
-    let check = state
-        .update_check
-        .as_ref()
-        .ok_or(HelperError::NotFound)?
-        .clone();
-    let update = check().await?;
-    if update.is_some() {
-        let install = state
-            .update_install
-            .as_ref()
-            .ok_or(HelperError::NotFound)?
-            .clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            if let Err(error) = install().await {
-                tracing::error!(error = %error, "companion update installation failed");
-            }
-        });
-    }
-    Ok(axum::Json(UpdateResponse { update }))
+    // Cache clearing drops the tagged runtime before deleting managed assets.
+    Ok(axum::Json(state.cache.clear(&state.runtime).await?))
 }
 
 async fn select_files(
@@ -279,6 +233,11 @@ async fn transcribe_selection(
         .0;
     let model = find_native_model(&request.model)
         .ok_or_else(|| HelperError::BadRequest("unsupported helper model".into()))?;
+    if !supports_language(model, request.language.as_deref()) {
+        return Err(HelperError::BadRequest(
+            "selected Companion model does not support this language".into(),
+        ));
+    }
     let selection = state.selections.take(&request.selection_id).await?;
     let job_id = runtime::start_path_job(
         state,
@@ -333,6 +292,9 @@ async fn transcribe(
         .map_err(|error| HelperError::BadRequest(error.to_string()))?
     {
         match field.name().unwrap_or("") {
+            // Buffer media only after the model/language preflight. Multipart
+            // ordering is not trustworthy, so reject as soon as those fields
+            // appear and repeat the check before staging below.
             "audio" => {
                 let filename = field.file_name().unwrap_or("upload.bin").to_owned();
                 let bytes = read_limited_field(&mut field, state.config.max_upload_bytes).await?;
@@ -357,9 +319,19 @@ async fn transcribe(
             _ => {}
         }
     }
+    let model = resolve_model(model.as_deref())?;
+    if model.engine != super::models::AsrEngine::WhisperCpp {
+        return Err(HelperError::BadRequest(
+            "selected model is unavailable for legacy uploads".into(),
+        ));
+    }
+    if !supports_language(model, language.as_deref()) {
+        return Err(HelperError::BadRequest(
+            "selected Companion model does not support this language".into(),
+        ));
+    }
     let (filename, bytes) =
         audio.ok_or_else(|| HelperError::BadRequest("audio field required".into()))?;
-    let model = resolve_model(model.as_deref())?;
     if bytes.len() > state.config.max_upload_bytes {
         return Err(HelperError::BadRequest(
             "uploaded media exceeds the helper limit".into(),
@@ -448,9 +420,9 @@ mod tests {
     use crate::helper::auth::HelperAuth;
     use crate::helper::cache::HelperCache;
     use crate::helper::config::HelperConfig;
+    use crate::helper::engine::SharedRuntime;
     use crate::helper::selection::SelectionStore;
     use crate::helper::state::{HelperQueue, NativeFilePicker};
-    use crate::helper::transcribe::SharedModel;
 
     #[test]
     fn legacy_upload_defaults_to_turbo_and_rejects_unknown_models() {
@@ -461,15 +433,19 @@ mod tests {
         assert!(resolve_model(Some("other")).is_err());
     }
 
+    #[test]
+    fn legacy_upload_rejects_unavailable_parakeet_before_staging() {
+        let model = resolve_model(Some("sherpa-parakeet-tdt-v3-int8")).expect("catalog model");
+        assert_ne!(model.engine, super::super::models::AsrEngine::WhisperCpp);
+        assert!(!supports_language(model, Some("vi")));
+    }
+
     async fn paired_router(path: PathBuf) -> (Router, String) {
         let directory = tempfile::tempdir().expect("temporary companion root");
         let root = directory.keep();
         let config = HelperConfig {
             port: 8788,
-            allowed_origins: vec![
-                "https://whisdom.tretrauit.me".into(),
-                "https://whisdom.app".into(),
-            ],
+            allowed_origins: vec!["https://whisdom.app".into()],
             root,
             ffmpeg_url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/x/file.zip".into(),
             ffmpeg_sha256: "a".repeat(64),
@@ -488,11 +464,9 @@ mod tests {
             config,
             auth,
             queue: HelperQueue::default(),
-            model: SharedModel::default(),
+            runtime: SharedRuntime::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(picker),
-            update_check: None,
-            update_install: None,
         });
         let app = router(state);
         let response = app
@@ -526,87 +500,6 @@ mod tests {
             .header("content-type", "application/json")
             .body(body)
             .expect("request")
-    }
-
-    #[tokio::test]
-    async fn update_endpoints_require_update_hooks() {
-        let media = tempfile::NamedTempFile::new().expect("test media");
-        let (app, token) = paired_router(media.path().to_owned()).await;
-        let response = app
-            .oneshot(request("GET", "/api/v1/update", &token, Body::empty()))
-            .await
-            .expect("update response");
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn update_endpoint_returns_hook_result() {
-        let media = tempfile::NamedTempFile::new().expect("test media");
-        let directory = tempfile::tempdir().expect("temporary companion root");
-        let config = HelperConfig {
-            port: 8788,
-            allowed_origins: vec!["https://whisdom.app".into()],
-            root: directory.keep(),
-            ffmpeg_url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/x/file.zip".into(),
-            ffmpeg_sha256: "a".repeat(64),
-            ffmpeg_exe_sha256: "b".repeat(64),
-            max_download_bytes: 1024,
-            max_upload_bytes: 1024,
-        };
-        config.create_dirs().await.expect("cache directories");
-        let auth = HelperAuth::load(&config).await.expect("auth");
-        let update_check: crate::helper::state::UpdateCheck = Arc::new(|| {
-            Box::pin(async {
-                Ok(Some(crate::helper::state::HelperUpdateInfo {
-                    version: "0.0.2".into(),
-                    body: Some("Bug fixes".into()),
-                }))
-            })
-        });
-        let state = Arc::new(HelperState {
-            cache: HelperCache::new(config.clone()),
-            config,
-            auth,
-            queue: HelperQueue::default(),
-            model: SharedModel::default(),
-            selections: SelectionStore::default(),
-            native_file_picker: None,
-            update_check: Some(update_check),
-            update_install: None,
-        });
-        let app = router(state);
-        let pair = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/pair")
-                    .header("origin", "https://whisdom.app")
-                    .body(Body::empty())
-                    .expect("pair request"),
-            )
-            .await
-            .expect("pair response");
-        let body = to_bytes(pair.into_body(), usize::MAX)
-            .await
-            .expect("pair body");
-        let token = serde_json::from_slice::<serde_json::Value>(&body).expect("pair JSON")["token"]
-            .as_str()
-            .expect("pair token")
-            .to_owned();
-        let response = app
-            .oneshot(request("GET", "/api/v1/update", &token, Body::empty()))
-            .await
-            .expect("update response");
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("update body");
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&body).expect("update JSON"),
-            serde_json::json!({"update": {"version": "0.0.2", "body": "Bug fixes"}})
-        );
-        let _ = media;
     }
 
     #[tokio::test]
@@ -664,31 +557,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_network_preflight_is_allowed_for_paired_origins() {
-        let media = tempfile::NamedTempFile::new().expect("test media");
-        let (app, _token) = paired_router(media.path().to_owned()).await;
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::OPTIONS)
-                    .uri("/api/v1/health")
-                    .header("origin", "https://whisdom.tretrauit.me")
-                    .header("access-control-request-method", "GET")
-                    .header("access-control-request-private-network", "true")
-                    .body(Body::empty())
-                    .expect("preflight request"),
-            )
+    async fn parakeet_rejects_vietnamese_without_consuming_selection() {
+        let media = tempfile::NamedTempFile::with_suffix(".mkv").expect("test media");
+        std::fs::write(media.path(), b"media").expect("write media");
+        let (app, token) = paired_router(media.path().to_owned()).await;
+        let selection = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/select-files",
+                &token,
+                Body::empty(),
+            ))
             .await
-            .expect("preflight response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get("access-control-allow-private-network")
-                .and_then(|value| value.to_str().ok()),
-            Some("true")
-        );
+            .expect("selection response");
+        let body = to_bytes(selection.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let id = serde_json::from_slice::<serde_json::Value>(&body).expect("json")["selections"][0]
+            ["id"]
+            .as_str()
+            .expect("id")
+            .to_owned();
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/transcribe-selection",
+                &token,
+                Body::from(format!(r#"{{"selection_id":"{id}","model":"sherpa-parakeet-tdt-v3-int8","language":"vi"}}"#)),
+            ))
+            .await
+            .expect("rejection response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = app
+            .oneshot(request(
+                "DELETE",
+                &format!("/api/v1/selections/{id}"),
+                &token,
+                Body::empty(),
+            ))
+            .await
+            .expect("selection remains available");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
@@ -717,6 +628,19 @@ mod tests {
             .as_array()
             .expect("models")
             .iter()
-            .all(|model| model.get("path").is_none()));
+            .all(|model| model.get("path").is_none() && model.get("url").is_none()));
+        let parakeet = value["models"]
+            .as_array()
+            .expect("models")
+            .iter()
+            .find(|model| model["id"] == "sherpa-parakeet-tdt-v3-int8")
+            .expect("Parakeet model");
+        assert_eq!(parakeet["engine"], "sherpa-onnx");
+        assert_eq!(parakeet["active_backend"], "cpu");
+        assert!(parakeet["supported_languages"]
+            .as_array()
+            .expect("languages")
+            .iter()
+            .all(|language| language != "vi"));
     }
 }

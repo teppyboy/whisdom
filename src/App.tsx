@@ -301,6 +301,8 @@ const COPY = {
         "High accuracy with faster processing than full Large v3.",
       "ggml-large-v3-q5_0":
         "Best accuracy. Largest download and slowest processing.",
+      "sherpa-parakeet-tdt-v3-int8":
+        "Parakeet supports 25 European languages. It does not support Vietnamese.",
     } satisfies Record<string, string>,
     serverUnavailable: "Server is unavailable",
     serverModelsUnavailable:
@@ -535,6 +537,8 @@ const COPY = {
         "Độ chính xác cao, xử lý nhanh hơn Large v3 đầy đủ.",
       "ggml-large-v3-q5_0":
         "Độ chính xác cao nhất. Cần tải nhiều nhất và xử lý chậm nhất.",
+      "sherpa-parakeet-tdt-v3-int8":
+        "Parakeet hỗ trợ 25 ngôn ngữ châu Âu. Mô hình không hỗ trợ tiếng Việt.",
     } satisfies Record<string, string>,
     serverUnavailable: "Máy chủ hiện không khả dụng",
     serverModelsUnavailable:
@@ -711,14 +715,41 @@ const COPY = {
 
 type Copy = (typeof COPY)[UiLanguage]
 
+function companionModelSupportsLanguage(
+  model: HelperModel,
+  language: LanguageCode
+) {
+  return language === "auto"
+    ? model.supports_auto_language
+    : model.supported_languages.includes("*") ||
+        model.supported_languages.includes(language)
+}
+
 function companionModelDetails(model: HelperModel, copy: Copy) {
   const description =
     (copy.companionModelDescriptions as Record<string, string>)[model.id] ??
     model.label
-  return copy.downloadDescription(
-    description,
-    Math.ceil(model.size_bytes / (1024 * 1024))
-  )
+  // Older Whisper-only Companions do not report a loaded backend. Their
+  // catalog remains usable; the Companion reports the actual backend in job logs.
+  if (model.active_backend === "unavailable" && model.engine === "whisper.cpp")
+    return copy.downloadDescription(
+      description,
+      Math.ceil(model.size_bytes / (1024 * 1024))
+    )
+  const backend =
+    model.active_backend === "directml"
+      ? "DirectML"
+      : model.active_backend === "vulkan"
+        ? "Vulkan"
+        : model.active_backend === "cpu"
+          ? "CPU"
+          : "Unavailable"
+  return model.active_backend === "unavailable"
+    ? `${description} ${backend}.`
+    : `${copy.downloadDescription(
+        description,
+        Math.ceil(model.size_bytes / (1024 * 1024))
+      )} ${backend}.`
 }
 
 function getDriveStatusText(status: DriveStatus, copy: Copy) {
@@ -1074,9 +1105,19 @@ export function App() {
     (item) => item.id === companionModelId
   )
   const selectedQueueItem = queue.find((item) => item.id === selectedQueueId)
+  const companionBackendReady = Boolean(
+    selectedCompanionModel &&
+      (selectedCompanionModel.engine === "whisper.cpp" ||
+        selectedCompanionModel.active_backend !== "unavailable")
+  )
+  const companionLanguageReady = Boolean(
+    selectedCompanionModel &&
+    companionModelSupportsLanguage(selectedCompanionModel, settings.language)
+  )
   const companionSelectionReady =
     selectedQueueItem?.source.kind === "companion" &&
-    Boolean(selectedCompanionModel)
+    companionLanguageReady &&
+    companionBackendReady
   const canStart =
     !isBusy(jobState) &&
     (settings.mode === "local-helper"
@@ -1088,7 +1129,8 @@ export function App() {
     queue.length > 1 &&
     !isBusy(jobState) &&
     (settings.mode === "local-helper"
-      ? Boolean(selectedCompanionModel) &&
+      ? companionLanguageReady &&
+        companionBackendReady &&
         queue.every((item) => item.source.kind === "companion")
       : settings.mode !== "server" || serverSelectionReady)
   const isEnglishOnlyMismatch =
@@ -1418,6 +1460,7 @@ export function App() {
         progress: 0.4,
       })
       const wavBytes = new Uint8Array(await audioBlob.arrayBuffer())
+      // SAFETY: generated wasm bindings expose the documented initialization and chunk APIs.
       const { default: initAP, split_wav_chunks } =
         (await import("./wasm/audio-processor/audio_processor.js")) as unknown as {
           default: () => Promise<void>
@@ -2571,6 +2614,9 @@ function MainControls({
     copy.modelDescriptions[model.id as keyof typeof copy.modelDescriptions] ??
     model.notes
   const usesQuantizedWeights = getLocalModelDtype(model) === "q4"
+  const selectedCompanionModel = helperCapabilities?.models.find(
+    (item) => item.id === companionModelId
+  )
   const selectedServerModel =
     typeof serverCapabilities === "object" && serverCapabilities?.models
       ? serverCapabilities.models.find(
@@ -2692,21 +2738,22 @@ function MainControls({
                 <SelectContent align="start">
                   {helperCapabilities?.models.map((item) => (
                     <SelectItem key={item.id} value={item.id}>
-                      {item.label}
+                      {item.label} (
+                      {item.active_backend === "directml"
+                        ? "DirectML"
+                        : item.active_backend === "vulkan"
+                          ? "Vulkan"
+                          : item.active_backend === "cpu"
+                            ? "CPU"
+                            : "Unavailable"}
+                      )
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {helperCapabilities?.models.find(
-                (item) => item.id === companionModelId
-              ) ? (
+              {selectedCompanionModel ? (
                 <p className="text-xs leading-5 text-muted-foreground">
-                  {companionModelDetails(
-                    helperCapabilities.models.find(
-                      (item) => item.id === companionModelId
-                    )!,
-                    copy
-                  )}
+                  {companionModelDetails(selectedCompanionModel, copy)}
                 </p>
               ) : (
                 <p className="text-xs leading-5 text-muted-foreground">
@@ -2781,7 +2828,16 @@ function MainControls({
             onValueChange={(value) => updateSetting("language", value)}
           />
           <p className="text-xs leading-5 text-muted-foreground">
-            {copy.spokenLanguage}
+            {settings.mode === "local-helper" &&
+            selectedCompanionModel &&
+            !companionModelSupportsLanguage(
+              selectedCompanionModel,
+              settings.language
+            )
+              ? settings.uiLanguage === "vi"
+                ? `${selectedCompanionModel.label} không hỗ trợ ngôn ngữ này.`
+                : `${selectedCompanionModel.label} does not support this language.`
+              : copy.spokenLanguage}
           </p>
         </div>
 

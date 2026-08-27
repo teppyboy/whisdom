@@ -1,16 +1,15 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use tokio::sync::watch;
 
 use super::cache::JobGuard;
+use super::engine;
 use super::logging::sanitize_filename;
 use super::models::NativeModel;
 use super::protocol::HelperError;
 use super::state::{HelperJob, HelperState};
-use super::transcribe::{load_model, transcribe_wav};
 
 pub async fn start_path_job(
     state: Arc<HelperState>,
@@ -134,7 +133,7 @@ pub async fn run_transcription(
         id,
         "transcribing",
         Some(10.0),
-        Some("loading native Whisper model".into()),
+        Some("loading native transcription model".into()),
     )
     .await;
     let ffmpeg = super::ffmpeg::ensure_ffmpeg(&state.cache).await?;
@@ -196,10 +195,20 @@ pub async fn run_transcription(
         tracing::info!(
             job_id = %id,
             chunk_seconds = current_seconds,
-            "loading Vulkan Whisper model for chunk"
+            engine = model_spec.engine.id(),
+            "loading native model for chunk"
         );
-        let model = load_model(&state.cache, &state.model, model_spec).await?;
-        match transcribe_chunk(&chunk, model, language.clone(), cancel_rx.clone(), &guard).await {
+        let runtime = engine::load_runtime(&state.cache, &state.runtime, model_spec).await?;
+        match engine::transcribe_wav(
+            &chunk,
+            runtime,
+            model_spec,
+            language.clone(),
+            cancel_rx.clone(),
+            &guard,
+        )
+        .await
+        {
             Ok(chunk_segments) => {
                 segments.extend(chunk_segments.into_iter().map(|mut segment| {
                     segment.start += offset_seconds;
@@ -224,7 +233,10 @@ pub async fn run_transcription(
                 )
                 .await;
             }
-            Err(error) if is_retryable_transcription_error(&error) && current_seconds > 5 => {
+            Err(error)
+                if engine::is_retryable_inference_error(model_spec.engine, &error)
+                    && current_seconds > 5 =>
+            {
                 let next_seconds = (current_seconds / 2).max(5);
                 retry_id += 1;
                 let retry_dir = chunks_dir.join(format!("retry-{retry_id:05}"));
@@ -232,10 +244,10 @@ pub async fn run_transcription(
                     job_id = %id,
                     failed_chunk_seconds = current_seconds,
                     retry_chunk_seconds = next_seconds,
-                    "Vulkan chunk failed; splitting into smaller physical chunks"
+                    "native inference chunk failed; splitting into smaller physical chunks"
                 );
                 {
-                    let mut loaded = state.model.write().await;
+                    let mut loaded = state.runtime.write().await;
                     *loaded = None;
                 }
                 let retry_chunks = super::ffmpeg::split_to_wav_chunks(
@@ -277,28 +289,6 @@ pub async fn run_transcription(
     }
     state.queue.publish(id).await;
     Ok(())
-}
-
-async fn transcribe_chunk(
-    chunk: &Path,
-    model: Arc<super::transcribe::LoadedModel>,
-    language: Option<String>,
-    cancel_rx: watch::Receiver<bool>,
-    guard: &JobGuard,
-) -> Result<Vec<super::protocol::TranscriptSegment>, HelperError> {
-    transcribe_wav(
-        chunk,
-        model,
-        language,
-        Arc::new(AtomicBool::new(false)),
-        cancel_rx,
-        guard,
-    )
-    .await
-}
-
-fn is_retryable_transcription_error(error: &HelperError) -> bool {
-    error.to_string().contains("Whisper transcription failed")
 }
 
 fn is_cancelled(cancel_rx: &watch::Receiver<bool>) -> bool {

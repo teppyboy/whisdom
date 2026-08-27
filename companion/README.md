@@ -8,7 +8,8 @@ Optional Windows tray companion for the hosted Whisdom web app. The web app rema
 - WebView2 runtime.
 - Rust with the MSVC toolchain.
 - CMake and a working Visual C++ build environment for `whisper-rs`.
-- Vulkan SDK and a Vulkan-capable driver for the Vulkan build. CPU fallback remains available.
+- Optional Vulkan SDK and a Vulkan-capable driver for the Whisper Vulkan build.
+- Optional custom sherpa-onnx DirectML build for Parakeet acceleration. The standard sherpa-onnx crates.io package is CPU-only; DirectML builds require `SHERPA_ONNX_LIB_DIR`.
 - Node.js and pnpm from the repository requirements.
 
 ## Build
@@ -20,13 +21,20 @@ pnpm install --frozen-lockfile
 pnpm --filter whisdom-companion exec tauri build --debug
 ```
 
-Vulkan build. A short target path avoids Windows CMake path-length failures:
+Vulkan build for Whisper. A short target path avoids Windows CMake path-length failures:
 
 ```powershell
 $env:VULKAN_SDK = "E:\VulkanSDK\1.4.357.0"
 $env:CARGO_TARGET_DIR = "F:\w-tauri"
 
 pnpm --filter whisdom-companion exec tauri build --features vulkan
+```
+
+DirectML Parakeet build. Build sherpa-onnx for Windows x64 with `SHERPA_ONNX_ENABLE_DIRECTML=ON`, then point `SHERPA_ONNX_LIB_DIR` at the directory containing that custom build's libraries before compiling:
+
+```powershell
+$env:SHERPA_ONNX_LIB_DIR = "C:\path\to\sherpa-onnx\lib"
+pnpm --filter whisdom-companion exec tauri build --features directml
 ```
 
 The packaged Windows installer is produced under `companion/src-tauri/target/release/bundle/` unless `CARGO_TARGET_DIR` is set.
@@ -94,7 +102,7 @@ POST   /api/v1/cancel/{job_id}
 
 `select-files` returns display metadata only: opaque `id`, sanitized `filename`, `size_bytes`, and optional `extension`. Selection entries live in Companion memory for 30 minutes, are single-use when started, and can be deleted before starting. Canceling the native picker returns `204 No Content`, creates no queue row, and is not an error.
 
-Capabilities expose the Companion's native GGML model catalog, including model ID, label, quality, size, and installed state. The browser can request only a catalog model ID; model URLs, filenames, and checksums are not caller-controlled. Missing models download on demand from pinned HTTPS assets. Every redirect hop is host-allowlisted and HTTPS-validated, the response is size-limited, SHA-256-verified, and atomically finalized before use. Redirects or checksums that fail verification abort the download.
+Capabilities expose the Companion's native model catalog, including model ID, label, quality, size, engine, supported languages, active backend, and installed state. Parakeet attempts DirectML when the Companion was built with `directml`; if DirectML recognizer creation fails, it falls back to CPU. sherpa-onnx 1.13.6 can silently fall back to CPU when DirectML is unavailable, so capabilities intentionally report `cpu` unless a future runtime exposes a verified provider query. The existing `vulkan` feature applies to Whisper only and does not make Parakeet Vulkan-capable. The browser can request only a catalog model ID; model URLs, filenames, and checksums are not caller-controlled. Missing models download on demand from pinned HTTPS assets. Every redirect hop is host-allowlisted and HTTPS-validated, the response is size-limited, SHA-256-verified, and atomically finalized before use. Redirects or checksums that fail verification abort the download.
 
 Paths and source media never leave the Companion process. The browser sends no filesystem path, URL, multipart media, or media bytes.
 
@@ -126,4 +134,4 @@ Logs may contain sanitized route, job, phase, basename, download, and backend ev
 
 ## Licensing
 
-Release packages must include notices for `whisper.cpp`/`whisper-rs`, the pinned BtbN GPL FFmpeg asset, and Rust dependencies according to their licenses. Pinned URLs and checksums live in `server/src/helper/models.rs`.
+Release packages must include notices for `whisper.cpp`/`whisper-rs`, sherpa-onnx/ONNX Runtime, the pinned Parakeet model (CC-BY-4.0), the pinned BtbN GPL FFmpeg asset, and Rust dependencies according to their licenses. Pinned URLs and checksums live in `server/src/helper/models.rs`. DirectML builds require a separately reviewed custom sherpa-onnx artifact; do not claim DirectML support for ordinary CPU packages.
