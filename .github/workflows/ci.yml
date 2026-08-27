@@ -96,6 +96,48 @@ jobs:
         working-directory: server
         run: cargo build --release
 
+  release-companion:
+    name: Release Desktop Companion
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [test, server]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Companion
+        working-directory: companion/src-tauri
+        run: cargo build --release
+
+      - name: Verify Companion executable
+        shell: pwsh
+        run: Get-Item companion/src-tauri/target/release/whisdom-companion.exe
+
+      - name: Move latest release tag
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f companion-latest "${{ github.sha }}"
+          git push --force origin refs/tags/companion-latest
+
+      - name: Publish Companion executable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: companion-latest
+          name: Whisdom Companion (latest)
+          body: Built from ${{ github.sha }}.
+          files: companion/src-tauri/target/release/whisdom-companion.exe
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          make_latest: true
+
   deploy:
     name: Deploy GitHub Pages
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
