@@ -9,6 +9,11 @@ export type HelperHealth = {
 export type HelperEngine = "whisper.cpp" | "sherpa-onnx" | "nemo-speech.cpp"
 export type HelperBackend = "cpu" | "directml" | "vulkan" | "unavailable"
 
+export type HelperUpdate = {
+  version: string
+  body: string | null
+}
+
 export type HelperModel = {
   id: string
   label: string
