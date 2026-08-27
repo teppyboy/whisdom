@@ -467,6 +467,8 @@ mod tests {
             runtime: SharedRuntime::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(picker),
+            update_check: None,
+            update_install: None,
         });
         let app = router(state);
         let response = app
