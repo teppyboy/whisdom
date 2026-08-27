@@ -34,7 +34,9 @@ async function getFixture(args: {
   const response = await fetch(args.url)
 
   if (!response.ok) {
-    throw new Error(`Failed to download ${args.url}: ${response.status} ${response.statusText}`)
+    throw new Error(
+      `Failed to download ${args.url}: ${response.status} ${response.statusText}`
+    )
   }
 
   return {
@@ -57,19 +59,29 @@ async function openSettings(page: Page) {
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible()
 }
 
-async function selectOption(page: Page, label: string | RegExp, option: string | RegExp) {
+async function selectOption(
+  page: Page,
+  label: string | RegExp,
+  option: string | RegExp
+) {
   await page.getByLabel(label, { exact: typeof label === "string" }).click()
-  await page.getByRole("option", { name: option, exact: typeof option === "string" }).click()
+  await page
+    .getByRole("option", { name: option, exact: typeof option === "string" })
+    .click()
 }
 
-async function selectLanguage(page: Page, query: string, option: string | RegExp) {
+async function selectLanguage(
+  page: Page,
+  query: string,
+  option: string | RegExp
+) {
   await page.getByLabel("Language", { exact: true }).click()
   await page.getByRole("searchbox", { name: "Search language" }).fill(query)
   await page.getByRole("option", { name: option }).click()
 }
 
 async function transcribeFixture(page: Page, fixture: Fixture) {
-  const backButton = page.getByRole("button", { name: "Back to home" })
+  const backButton = page.getByRole("button", { name: "Back" })
 
   if (await backButton.isVisible().catch(() => false)) {
     await backButton.click()
@@ -80,14 +92,19 @@ async function transcribeFixture(page: Page, fixture: Fixture) {
     mimeType: fixture.mimeType,
     buffer: fixture.buffer,
   })
-  await page.getByRole("button", { name: /Confirm downloads and transcribe/i }).click()
-  await expect(page.getByText("Transcript ready")).toBeVisible({ timeout: 300_000 })
-  await expect(page.getByText("Text with timestamps")).toBeVisible()
+  await page.getByRole("button", { name: /Start transcription/i }).click()
+  await expect(page.getByText("Transcription ready")).toBeVisible({
+    timeout: 300_000,
+  })
+  await expect(page.getByText("Text with timecodes")).toBeVisible()
   await expect(page.getByText(/0:00 -/).first()).toBeVisible()
   return page.locator("textarea").inputValue({ timeout: 10_000 })
 }
 
-async function transcribeVietnameseFixture(page: Page, mode: "Local WASM" | "Local WebGPU") {
+async function transcribeVietnameseFixture(
+  page: Page,
+  mode: "Local WASM" | "Local WebGPU"
+) {
   const fixture = await getFixture({
     envPath: process.env.WHISDOM_VI_AUDIO,
     name: "vi-VN-HoaiMyNeural.mp3",
@@ -98,7 +115,7 @@ async function transcribeVietnameseFixture(page: Page, mode: "Local WASM" | "Loc
   await page.goto("/")
   await openSettings(page)
   await selectOption(page, "Mode", mode)
-  await page.getByRole("button", { name: "Back to home" }).click()
+  await page.getByRole("button", { name: "Back" }).click()
   await selectOption(page, "Model", "Whisper Tiny")
   await selectLanguage(page, "vietnamese", /Vietnamese/)
 
@@ -106,9 +123,14 @@ async function transcribeVietnameseFixture(page: Page, mode: "Local WASM" | "Loc
 }
 
 test.describe("real local transcription", () => {
-  test.skip(!realAsrEnabled, "Set WHISDOM_REAL_ASR=1 to run real browser Whisper tests.")
+  test.skip(
+    !realAsrEnabled,
+    "Set WHISDOM_REAL_ASR=1 to run real browser Whisper tests."
+  )
 
-  test("transcribes English sample speech with Whisper Tiny English", async ({ page }) => {
+  test("transcribes English sample speech with Whisper Tiny English", async ({
+    page,
+  }) => {
     test.setTimeout(360_000)
     const fixture = await getFixture({
       envPath: process.env.WHISDOM_EN_AUDIO,
@@ -120,15 +142,19 @@ test.describe("real local transcription", () => {
     await page.goto("/")
     await openSettings(page)
     await selectOption(page, "Mode", "Local WASM")
-    await page.getByRole("button", { name: "Back to home" }).click()
+    await page.getByRole("button", { name: "Back" }).click()
     await selectOption(page, "Model", /Tiny English/i)
 
-    const transcript = normalizeTranscript(await transcribeFixture(page, fixture))
+    const transcript = normalizeTranscript(
+      await transcribeFixture(page, fixture)
+    )
     expect(transcript).toContain("sun")
     expect(transcript).toMatch(/setting|shadows|field/)
   })
 
-  test("transcribes Vietnamese sample speech with multilingual Whisper Tiny", async ({ page }) => {
+  test("transcribes Vietnamese sample speech with multilingual Whisper Tiny", async ({
+    page,
+  }) => {
     test.setTimeout(420_000)
     const transcript = await transcribeVietnameseFixture(page, "Local WASM")
     const expectedPattern = process.env.WHISDOM_VI_EXPECTED
@@ -139,8 +165,13 @@ test.describe("real local transcription", () => {
     expect(transcript.trim()).not.toHaveLength(1)
   })
 
-  test("transcribes Vietnamese sample speech with WebGPU when enabled", async ({ page }) => {
-    test.skip(!realWebGpuEnabled, "Set WHISDOM_REAL_WEBGPU=1 to run real browser WebGPU ASR.")
+  test("transcribes Vietnamese sample speech with WebGPU when enabled", async ({
+    page,
+  }) => {
+    test.skip(
+      !realWebGpuEnabled,
+      "Set WHISDOM_REAL_WEBGPU=1 to run real browser WebGPU ASR."
+    )
     test.setTimeout(420_000)
     const transcript = await transcribeVietnameseFixture(page, "Local WebGPU")
 

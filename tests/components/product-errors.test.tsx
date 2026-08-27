@@ -23,10 +23,16 @@ describe("ProductErrorPanel", () => {
   it("renders one localized scoped occurrence and invokes recovery", async () => {
     const recover = vi.fn()
     render(
-      <ProductErrorPanel language="vi" error={error} onPrimaryAction={recover} />,
+      <ProductErrorPanel
+        language="vi"
+        error={error}
+        onPrimaryAction={recover}
+      />
     )
     expect(screen.getAllByRole("alert")).toHaveLength(1)
-    expect(screen.getByText("Phiên bản dữ liệu không được hỗ trợ")).toBeVisible()
+    expect(
+      screen.getByText("Phiên bản dữ liệu này không được hỗ trợ")
+    ).toBeVisible()
     await userEvent.click(screen.getByRole("button", { name: "Xem chi tiết" }))
     expect(recover).toHaveBeenCalledOnce()
   })

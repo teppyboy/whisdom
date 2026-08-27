@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { analyzeMediaFile, bytesToMb, formatDuration, readMediaDuration } from "@/features/media/preflight"
+import {
+  analyzeMediaFile,
+  bytesToMb,
+  formatDuration,
+  readMediaDuration,
+} from "@/features/media/preflight"
 import { DEFAULT_SETTINGS } from "@/features/transcription/models"
 
 afterEach(() => {
@@ -40,8 +45,12 @@ describe("preflight helpers", () => {
       setTimeout: globalThis.setTimeout,
     })
 
-    await expect(readMediaDuration(new File(["data"], "stuck.mp4", { type: "video/mp4" }), 1))
-      .resolves.toBeNull()
+    await expect(
+      readMediaDuration(
+        new File(["data"], "stuck.mp4", { type: "video/mp4" }),
+        1
+      )
+    ).resolves.toBeNull()
     expect(element.removeAttribute).toHaveBeenCalledWith("src")
     expect(element.load).toHaveBeenCalled()
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test")
@@ -82,12 +91,16 @@ describe("analyzeMediaFile warnings in server mode", () => {
       mode: "server" as const,
       modelId: "onnx-community/whisper-large-v3-turbo",
     }
-    const file = new File([new Uint8Array(10)], "test.mp3", { type: "audio/mpeg" })
+    const file = new File([new Uint8Array(10)], "test.mp3", {
+      type: "audio/mpeg",
+    })
     const result = await analyzeMediaFile(file, settings)
     const warningTexts = result.warnings.map((w) => w.toLowerCase())
     expect(warningTexts.some((w) => w.includes("q4 onnx weights"))).toBe(false)
     expect(warningTexts.some((w) => w.includes("webgpu"))).toBe(false)
-    expect(result.requiredAssets.some((asset) => asset.id === settings.modelId)).toBe(false)
+    expect(
+      result.requiredAssets.some((asset) => asset.id === settings.modelId)
+    ).toBe(false)
     expect(result.recommendedMode).toBe("server")
   })
 
@@ -121,10 +134,12 @@ describe("analyzeMediaFile warnings in server mode", () => {
         mode: "server",
         language: "vi",
         modelId: "onnx-community/whisper-tiny.en",
-      },
+      }
     )
 
-    expect(result.warnings.some((warning) => warning.includes("English-only"))).toBe(false)
+    expect(
+      result.warnings.some((warning) => warning.includes("English-only"))
+    ).toBe(false)
   })
 
   it("still includes quantized/webgpu warnings for local-webgpu mode", async () => {
@@ -160,10 +175,14 @@ describe("analyzeMediaFile warnings in server mode", () => {
       mode: "local-webgpu" as const,
       modelId: "onnx-community/whisper-large-v3-turbo",
     }
-    const file = new File([new Uint8Array(10)], "test.mp3", { type: "audio/mpeg" })
+    const file = new File([new Uint8Array(10)], "test.mp3", {
+      type: "audio/mpeg",
+    })
     const result = await analyzeMediaFile(file, settings)
     const warningTexts = result.warnings.map((w) => w.toLowerCase())
-    expect(warningTexts.some((w) => w.includes("q4 onnx weights"))).toBe(true)
+    expect(warningTexts.some((w) => w.includes("q4 browser weights"))).toBe(
+      true
+    )
     expect(warningTexts.some((w) => w.includes("webgpu"))).toBe(true)
   })
 })

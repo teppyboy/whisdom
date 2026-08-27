@@ -211,8 +211,9 @@ function resolveTranscriptModelLabel(
     return resolveServerModelLabel(transcript.modelId, serverCapabilities)
   if (transcript.mode === "local-helper")
     return (
-      helperCapabilities?.models.find((model) => model.id === transcript.modelId)
-        ?.label ?? transcript.modelId
+      helperCapabilities?.models.find(
+        (model) => model.id === transcript.modelId
+      )?.label ?? transcript.modelId
     )
   return findModel(transcript.modelId).label
 }
@@ -239,191 +240,193 @@ const UI_LANGUAGES: Array<{ value: UiLanguage; label: string }> = [
 const COPY = {
   en: {
     homeAria: "Go to home",
-    tagline: "Private transcription workbench",
+    tagline: "Private transcription, on your terms",
     accountMenu: "Account menu",
-    guest: "Guest",
+    guest: "Not signed in",
     signInGoogle: "Sign in with Google",
     settings: "Settings",
     theme: "Theme",
     toggleTheme: "Dark mode",
-    openingGoogle: "Opening Google",
-    uploadingMetadata: "Uploading metadata",
-    driveSyncFailed: "Drive sync failed",
-    googleConnected: "Google connected",
+    openingGoogle: "Connecting to Google",
+    uploadingMetadata: "Saving transcript metadata",
+    driveSyncFailed: "Could not sync with Google Drive",
+    googleConnected: "Google Drive connected",
     synced: (id: string) => `Synced ${id}`,
-    notConnected: "Not connected",
-    waiting: "Waiting for audio or video",
-    readingMetadata: "Reading media metadata",
-    reviewPlan: "Review downloads and processing plan",
-    couldNotAnalyze: "Could not analyze media",
+    notConnected: "Google Drive not connected",
+    waiting: "Choose a file to begin",
+    readingMetadata: "Checking file details",
+    reviewPlan: "Review the transcription plan",
+    couldNotAnalyze: "Could not read this file",
     serverGuardrail:
-      "Server mode is manual opt-in but chunk upload is not enabled yet. Use local mode for now.",
+      "Chunk uploads are not available in this server mode. Choose a local mode instead.",
     serverRequiresAuth:
-      "Server transcription requires Google sign-in. Please connect your account to continue.",
-    serverUrl: "Enter video/audio URL",
+      "Sign in with Google before starting server transcription.",
+    serverUrl: "Enter an audio or video URL",
     serverModeDesc:
-      "Server-side transcription via whisper.cpp. Sign in required.",
+      "Transcribe through the server with whisper.cpp. Google sign-in required.",
     companionTitle: "Desktop Companion",
     companionChecking: "Checking Desktop Companion…",
-    companionAvailable: "Desktop Companion available",
-    companionBusy: "Desktop Companion is busy",
-    companionUnavailable: "Desktop Companion not found",
+    companionAvailable: "Desktop Companion is ready",
+    companionBusy: "Desktop Companion is working",
+    companionUnavailable: "Desktop Companion is not running",
     companionUnavailableDescription:
-      "Start the Windows app, or download it from the latest release.",
-    downloadCompanion: "Download Desktop Companion",
-    companionDescription:
-      "Choose one or more media files in the Windows dialog. Files stay on this device until you start transcription.",
+      "Open the Windows app, or get it from the latest release.",
+    downloadCompanion: "Get Desktop Companion",
     companionPreflight:
-      "Native files show filename and size. Duration and chunk estimates are unavailable until transcription.",
+      "Windows files show their name and size. Duration and chunk estimates appear after transcription starts.",
     companionPickerTitle: "Choose files in Windows",
     companionPickerDescription:
-      "Open the Windows file picker to add one or more files. Drag and drop is unavailable in Desktop Companion mode.",
+      "Use the Windows file picker to add one or more files. Drag and drop is not available in Desktop Companion mode.",
     companionChooseFiles: "Choose files in Windows",
-    moveFileUp: "Move file up",
-    moveFileDown: "Move file down",
+    moveFileUp: "Move up",
+    moveFileDown: "Move down",
     companionModelDescription:
-      "Whisper Large v3 Turbo runs in the native Windows Companion with Vulkan/CPU acceleration. ~574 MB download.",
-    serverUnavailable: "Transcription server unavailable",
+      "Whisper Large v3 Turbo runs in Desktop Companion with Vulkan or CPU acceleration. Download: about 574 MB.",
+    serverUnavailable: "Server is unavailable",
     serverModelsUnavailable:
-      "Could not load available models from the server. Check server status and try again.",
+      "Available server models could not be loaded. Check the server, then try again.",
     quantizedLargeModel: (label: string) =>
-      `${label} will run with q4 browser weights to avoid multi-gigabyte buffer allocation.`,
+      `${label} uses q4 browser weights to keep memory use within browser limits.`,
     largeModelNeedsWebGpu: (label: string) =>
-      `${label} requires WebGPU in the browser. Use HTTPS/localhost with a supported GPU, or choose Whisper Small.`,
-    untitledTranscript: "Untitled transcript",
-    transcriptReady: "Transcript ready",
-    transcriptionFailed: "Transcription failed",
-    decodedAudio: "Decoded audio for Whisper",
-    loadingWhisper: "Loading Whisper model",
-    reusingWhisper: "Using loaded Whisper model",
-    usingSavedModelAssets: "Using saved model assets",
-    usingSavedModelAsset: (file: string) => `Using saved ${file}`,
+      `${label} needs WebGPU in this browser. Use HTTPS or localhost on a supported GPU, or choose Whisper Small.`,
+    untitledTranscript: "Untitled transcription",
+    transcriptReady: "Transcription ready",
+    transcriptionFailed: "Transcription could not be completed",
+    decodedAudio: "Audio is ready",
+    loadingWhisper: "Loading transcription model",
+    reusingWhisper: "Using loaded model",
+    usingSavedModelAssets: "Using downloaded model files",
+    usingSavedModelAsset: (file: string) => `Using ${file}`,
     preparingModel: "Preparing model",
-    downloadingModelAssets: "Downloading model assets",
+    downloadingModelAssets: "Downloading model files",
     downloading: (file: string) => `Downloading ${file}`,
-    transcribingAudio: "Transcribing audio",
-    loadingFfmpeg: "Loading ffmpeg.wasm",
-    reusingFfmpeg: "Using loaded ffmpeg.wasm",
-    convertingMedia: "Converting media",
-    backHome: "Back to home",
-    quickSetup: "Transcription setup",
+    transcribingAudio: "Transcribing",
+    loadingFfmpeg: "Loading media converter",
+    reusingFfmpeg: "Using loaded media converter",
+    convertingMedia: "Preparing media",
+    backHome: "Back",
+    quickSetup: "Set up transcription",
     quickSetupDescription:
-      "Choose the model and spoken language before uploading or transcribing.",
-    settingsDescription: "Processing mode, storage, and advanced options.",
-    interfaceLanguage: "Interface language",
-    interfaceLanguageDescription: "Language used by the website UI.",
+      "Choose where transcription runs, then select a model and language.",
+    settingsDescription:
+      "Manage local storage and advanced processing options.",
+    interfaceLanguage: "App language",
+    interfaceLanguageDescription: "Used for menus, labels, and messages.",
     transcription: "Transcription",
-    transcriptionDescription:
-      "Model and language used for local transcription.",
+    transcriptionDescription: "Choose the model and spoken language.",
     model: "Model",
     language: "Language",
-    spokenLanguage: "Spoken language of the media.",
-    searchLanguage: "Search language",
-    noLanguages: "No languages found.",
+    spokenLanguage: "Choose Auto if you are unsure.",
+    searchLanguage: "Find a language",
+    noLanguages: "No matching languages.",
     englishOnlyWarning:
-      "Current model is English-only. Pick a multilingual model for this language.",
+      "This model only transcribes English. Choose a multilingual model for this language.",
     englishOnlySidebar:
-      "Current model is English-only. Switch to a multilingual Whisper model.",
-    processing: "Processing",
-    processingDescription: "Advanced local chunk settings.",
+      "This model only transcribes English. Choose a multilingual Whisper model.",
+    processing: "Advanced processing",
+    processingDescription: "Adjust local audio chunking.",
     mode: "Mode",
-    chunkSeconds: "Chunk seconds",
-    chunkSecondsDescription: "Audio length per transcription chunk.",
-    overlapSeconds: "Overlap seconds",
-    overlapSecondsDescription: "Overlap between chunks to avoid cut words.",
-    storage: "Storage",
-    storageDescription: "Local persistence options.",
-    persistMediaBlobs: "Persist media blobs",
+    chunkSeconds: "Chunk length",
+    chunkSecondsDescription: "Length of each local audio chunk.",
+    overlapSeconds: "Chunk overlap",
+    overlapSecondsDescription:
+      "Repeated audio at each boundary to avoid clipped words.",
+    storage: "Local data",
+    storageDescription: "Manage data stored in this browser.",
+    persistMediaBlobs: "Keep media after refresh",
     persistMediaBlobsDescription:
-      "Keep original media in this browser for quicker resume.",
-    storageCleanup: "Storage cleanup",
-    storageCleanupDescription:
-      "Remove local browser data when you need disk space or a clean state.",
-    clearDownloadedModels: "Clear downloaded models",
+      "This preference is saved. Original media is not currently restored after reload.",
+    storageCleanup: "Clear local data",
+    storageCleanupDescription: "Remove saved browser data when you need space.",
+    clearDownloadedModels: "Remove downloaded models",
     clearDownloadedModelsDescription:
-      "Deletes cached Whisper model files and resets loaded local workers.",
-    clearSavedTranscripts: "Clear saved transcripts",
+      "Deletes cached model files and resets idle local workers.",
+    clearSavedTranscripts: "Delete saved transcriptions",
     clearSavedTranscriptsDescription:
-      "Deletes transcript records stored in this browser. Export anything important first.",
-    storageCleaned: "Storage cleaned",
+      "Permanently deletes transcriptions saved in this browser. Export anything you need first.",
+    storageCleaned: "Local data cleared",
     modelCachesCleared: (count: number) =>
-      count > 0 ? `${count} model cache cleared.` : "No model cache was found.",
-    savedTranscriptsCleared: "Saved transcripts were deleted.",
-    dropTitle: "Drop audio or video",
+      count > 0
+        ? `${count} model cache cleared.`
+        : "No downloaded model files were found.",
+    savedTranscriptsCleared: "Saved transcriptions were deleted.",
+    dropTitle: "Add audio or video",
     dropDescription:
-      "Preflight checks the file before any model or ffmpeg download. Video is converted locally, then transcribed in chunks.",
-    chooseFile: "Choose file",
+      "Files are checked before processing starts. Video is converted locally, then transcribed in chunks.",
+    chooseFile: "Choose files",
     filesSelected: (count: number) => `${count} files selected`,
     selectedFile: (name: string) => `Selected: ${name}`,
-    fileQueue: "File queue",
-    selectFile: "Select file",
-    removeFile: "Remove file",
+    fileQueue: "Files",
+    selectFile: "Open file",
+    removeFile: "Remove",
     transcribeSelected: "Transcribe selected file",
     transcribeAll: (count: number) => `Transcribe all ${count} files`,
     queueStatusLabels: {
-      pending: "Pending",
+      pending: "Waiting",
       active: "Processing",
       complete: "Complete",
-      error: "Error",
+      error: "Needs attention",
     } satisfies Record<QueuedFileStatus, string>,
-    preflight: "Preflight",
-    processingPlan: "Processing plan",
+    preflight: "File check",
+    processingPlan: "Transcription plan",
     duration: "Duration",
     size: "Size",
     chunks: "Chunks",
     emptyPreflight:
-      "Select a file to calculate duration, chunks, downloads, and mode.",
-    downloads: "Downloads",
-    detailedLog: "Detailed log",
-    showDetailedLog: "Show detailed log",
-    hideDetailedLog: "Hide detailed log",
-    unknownDuration: "Unknown",
-    confirmTranscribe: "Confirm downloads and transcribe",
-    transcript: "Transcript",
-    timestamps: "Timestamps",
-    transcriptDetails: "Model and processing details",
-    rawText: "Raw text",
-    textWithTimestamps: "Text with timestamps",
-    downloadFiles: "Download files",
-    closeResults: "Close results",
-    renameTranscript: "Rename transcript",
-    saveName: "Save name",
-    batchComplete: (count: number) => `${count} transcripts saved to Recent.`,
+      "Choose a file to see its duration, chunk plan, and required downloads.",
+    downloads: "Required downloads",
+    detailedLog: "Progress details",
+    showDetailedLog: "Show progress details",
+    hideDetailedLog: "Hide progress details",
+    unknownDuration: "Not available",
+    confirmTranscribe: "Start transcription",
+    transcript: "Transcription",
+    timestamps: "Timecodes",
+    transcriptDetails: "Model and processing",
+    rawText: "Text",
+    textWithTimestamps: "Text with timecodes",
+    downloadFiles: "Export files",
+    closeResults: "Close",
+    renameTranscript: "Rename transcription",
+    saveName: "Save",
+    batchComplete: (count: number) =>
+      `${count} transcriptions saved to Recent.`,
     batchCompleteWithFailures: (completed: number, failed: number) =>
-      `${completed} transcripts saved. ${failed} files need attention.`,
-    dismissNotification: "Dismiss notification",
-    readyForOutput: "Ready for output",
+      `${completed} transcriptions saved. ${failed} files need attention.`,
+    dismissNotification: "Dismiss",
+    readyForOutput: "Ready to export",
     emptyTranscript:
-      "Your transcript appears here after local transcription. Export names include source, language, date, and time.",
-    recent: "Recent",
-    emptyHistory: "No transcripts saved yet.",
-    openTranscript: "Open transcript",
-    removeTranscript: "Remove transcript",
+      "Your transcription appears here when processing finishes. Exported filenames include the source, language, date, and time.",
+    recent: "Recent transcriptions",
+    emptyHistory: "No saved transcriptions yet.",
+    openTranscript: "Open transcription",
+    removeTranscript: "Delete transcription",
     downloadDescription: (notes: string, sizeMb: number) =>
-      `${notes} ~${sizeMb} MB download.`,
+      `${notes} Download: about ${sizeMb} MB.`,
     modelDescriptions: {
       "onnx-community/whisper-base":
-        "Default. Good English/Vietnamese balance for local browsers.",
+        "The default local model for English and Vietnamese.",
       "onnx-community/whisper-tiny":
-        "Fastest multilingual local option. Lower accuracy.",
+        "The fastest multilingual option. Accuracy is lower.",
       "onnx-community/whisper-small":
-        "Better accuracy, heavier download and memory use.",
+        "Improves accuracy, with a larger download and more memory use.",
       "onnx-community/whisper-medium_timestamped":
-        "High-accuracy multilingual model with timestamp-focused weights for high-end devices.",
+        "High-accuracy multilingual model with detailed timecodes. Best on powerful devices.",
       "onnx-community/whisper-large-v3-turbo":
-        "Best high-end default: much higher accuracy than Small while staying faster than full Large v3.",
+        "High accuracy on powerful devices, without the full Large v3 startup cost.",
       "onnx-community/whisper-large-v3-ONNX":
-        "Maximum accuracy option. Very large download and long initialization; intended for high-end devices.",
+        "Highest accuracy. Requires a very large download and a powerful device.",
       "onnx-community/whisper-tiny.en":
-        "English-only. Not suitable for Vietnamese.",
+        "English only. Do not use for Vietnamese.",
     } satisfies Record<string, string>,
     modeDetails: {
-      "local-webgpu": "Default, fastest private path",
-      "cloudflare-ai": "Authorized users, free quota only",
-      "local-wasm": "Fallback for unsupported browsers",
+      "local-webgpu": "Private browser processing with WebGPU.",
+      "cloudflare-ai":
+        "For authorized accounts using the available free quota.",
+      "local-wasm": "Private browser fallback when WebGPU is unavailable.",
       "local-helper":
-        "Optional native Vulkan/CPU companion on this Windows device.",
-      server: "Server-side transcription via whisper.cpp. Sign in required.",
+        "Use the optional Windows Companion for Vulkan or CPU processing.",
+      server: "Server processing with whisper.cpp. Google sign-in required.",
     } satisfies Record<ProcessingMode, string>,
     modeLabels: {
       "local-webgpu": "Local WebGPU",
@@ -454,193 +457,191 @@ const COPY = {
   },
   vi: {
     homeAria: "Về trang chính",
-    tagline: "Chép lời riêng tư trên thiết bị",
+    tagline: "Chuyển ngữ riêng tư trên thiết bị",
     accountMenu: "Menu tài khoản",
-    guest: "Tài khoản khách",
+    guest: "Chưa đăng nhập",
     signInGoogle: "Đăng nhập bằng Google",
     settings: "Cài đặt",
     theme: "Giao diện",
     toggleTheme: "Chế độ tối",
-    openingGoogle: "Đang mở Google",
-    uploadingMetadata: "Đang đồng bộ dữ liệu",
-    driveSyncFailed: "Không thể đồng bộ Drive",
-    googleConnected: "Đã kết nối Google",
+    openingGoogle: "Đang kết nối Google",
+    uploadingMetadata: "Đang lưu dữ liệu bản chép",
+    driveSyncFailed: "Không thể đồng bộ với Google Drive",
+    googleConnected: "Đã kết nối Google Drive",
     synced: (id: string) => `Đã đồng bộ ${id}`,
-    notConnected: "Chưa kết nối",
-    waiting: "Chọn tệp âm thanh hoặc video",
-    readingMetadata: "Đang đọc thông tin tệp",
-    reviewPlan: "Kiểm tra kế hoạch xử lý",
-    couldNotAnalyze: "Không thể phân tích tệp",
+    notConnected: "Chưa kết nối Google Drive",
+    waiting: "Chọn tệp để bắt đầu",
+    readingMetadata: "Đang kiểm tra thông tin tệp",
+    reviewPlan: "Xem kế hoạch chuyển ngữ",
+    couldNotAnalyze: "Không thể đọc tệp này",
     serverGuardrail:
-      "Chế độ máy chủ chưa được bật. Vui lòng dùng xử lý cục bộ.",
+      "Chưa thể tải từng đoạn lên máy chủ ở chế độ này. Hãy chọn một chế độ cục bộ.",
     serverRequiresAuth:
-      "Cần đăng nhập Google để dùng máy chủ. Vui lòng kết nối tài khoản để tiếp tục.",
-    serverUrl: "Nhập URL video/âm thanh",
-    serverModeDesc: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
+      "Hãy đăng nhập Google trước khi bắt đầu chuyển ngữ trên máy chủ.",
+    serverUrl: "Nhập URL âm thanh hoặc video",
+    serverModeDesc:
+      "Chuyển ngữ qua máy chủ bằng whisper.cpp. Cần đăng nhập Google.",
     companionTitle: "Desktop Companion",
     companionChecking: "Đang kiểm tra Desktop Companion…",
     companionAvailable: "Desktop Companion đã sẵn sàng",
-    companionBusy: "Desktop Companion đang bận",
-    companionUnavailable: "Không tìm thấy Desktop Companion",
+    companionBusy: "Desktop Companion đang xử lý",
+    companionUnavailable: "Desktop Companion chưa chạy",
     companionUnavailableDescription:
-      "Hãy mở ứng dụng Windows hoặc tải từ bản phát hành mới nhất.",
+      "Mở ứng dụng Windows hoặc tải từ bản phát hành mới nhất.",
     downloadCompanion: "Tải Desktop Companion",
-    companionDescription:
-      "Chọn một hoặc nhiều tệp media trong hộp thoại Windows. Tệp vẫn ở trên thiết bị này cho đến khi bắt đầu chép lời.",
     companionPreflight:
-      "Tệp gốc chỉ hiển thị tên và dung lượng. Không có ước tính thời lượng hoặc số đoạn trước khi chép lời.",
+      "Tệp từ Windows hiển thị tên và dung lượng. Thời lượng và số đoạn sẽ có khi bắt đầu chuyển ngữ.",
     companionPickerTitle: "Chọn tệp trong Windows",
     companionPickerDescription:
-      "Mở hộp chọn tệp Windows để thêm một hoặc nhiều tệp. Không hỗ trợ kéo thả trong chế độ Desktop Companion.",
+      "Dùng hộp chọn tệp Windows để thêm một hoặc nhiều tệp. Không hỗ trợ kéo thả trong chế độ Desktop Companion.",
     companionChooseFiles: "Chọn tệp trong Windows",
-    moveFileUp: "Di chuyển tệp lên",
-    moveFileDown: "Di chuyển tệp xuống",
+    moveFileUp: "Di chuyển lên",
+    moveFileDown: "Di chuyển xuống",
     companionModelDescription:
-      "Whisper Large v3 Turbo chạy trong Desktop Companion trên Windows với tăng tốc Vulkan/CPU. Tải xuống khoảng 574 MB.",
-    serverUnavailable: "Máy chủ chuyển ngữ không khả dụng",
+      "Whisper Large v3 Turbo chạy trong Desktop Companion bằng Vulkan hoặc CPU. Cần tải khoảng 574 MB.",
+    serverUnavailable: "Máy chủ hiện không khả dụng",
     serverModelsUnavailable:
-      "Không thể tải danh sách mô hình từ máy chủ. Kiểm tra trạng thái máy chủ và thử lại.",
+      "Không tải được các mô hình trên máy chủ. Kiểm tra máy chủ rồi thử lại.",
     quantizedLargeModel: (label: string) =>
-      `${label} sẽ dùng trọng số q4 trong trình duyệt để tránh cấp phát bộ nhớ nhiều GB.`,
+      `${label} dùng trọng số q4 để giữ mức dùng bộ nhớ trong giới hạn của trình duyệt.`,
     largeModelNeedsWebGpu: (label: string) =>
-      `${label} cần WebGPU trong trình duyệt. Hãy dùng HTTPS/localhost với GPU được hỗ trợ, hoặc chọn Whisper Small.`,
-    untitledTranscript: "Bản chép chưa đặt tên",
-    transcriptReady: "Bản chép đã sẵn sàng",
-    transcriptionFailed: "Không thể tạo bản chép",
-    decodedAudio: "Đã giải mã audio cho Whisper",
-    loadingWhisper: "Đang tải mô hình Whisper",
-    reusingWhisper: "Đang dùng mô hình Whisper đã tải",
-    usingSavedModelAssets: "Đang dùng tài nguyên mô hình đã lưu",
-    usingSavedModelAsset: (file: string) => `Đang dùng ${file} đã lưu`,
+      `${label} cần WebGPU trong trình duyệt này. Hãy dùng HTTPS hoặc localhost với GPU được hỗ trợ, hoặc chọn Whisper Small.`,
+    untitledTranscript: "Bản chuyển ngữ chưa đặt tên",
+    transcriptReady: "Bản chuyển ngữ đã sẵn sàng",
+    transcriptionFailed: "Không thể hoàn tất chuyển ngữ",
+    decodedAudio: "Âm thanh đã sẵn sàng",
+    loadingWhisper: "Đang tải mô hình chuyển ngữ",
+    reusingWhisper: "Đang dùng mô hình đã tải",
+    usingSavedModelAssets: "Đang dùng tệp mô hình đã tải",
+    usingSavedModelAsset: (file: string) => `Đang dùng ${file}`,
     preparingModel: "Đang chuẩn bị mô hình",
-    downloadingModelAssets: "Đang tải tài nguyên mô hình",
+    downloadingModelAssets: "Đang tải tệp mô hình",
     downloading: (file: string) => `Đang tải ${file}`,
-    transcribingAudio: "Đang tạo bản chép",
-    loadingFfmpeg: "Đang tải ffmpeg.wasm",
-    reusingFfmpeg: "Đang dùng ffmpeg.wasm đã tải",
-    convertingMedia: "Đang chuyển đổi tệp",
-    backHome: "Quay lại trang chính",
-    quickSetup: "Thiết lập chép lời",
-    quickSetupDescription:
-      "Chọn mô hình và ngôn ngữ nói trước khi tải tệp hoặc bắt đầu xử lý.",
-    settingsDescription: "Chế độ xử lý, lưu trữ và tùy chọn nâng cao.",
-    interfaceLanguage: "Ngôn ngữ giao diện",
-    interfaceLanguageDescription: "Ngôn ngữ dùng cho website.",
-    transcription: "Chép lời",
-    transcriptionDescription:
-      "Chọn mô hình và ngôn ngữ cho quá trình xử lý trên thiết bị.",
+    transcribingAudio: "Đang chuyển ngữ",
+    loadingFfmpeg: "Đang tải công cụ xử lý tệp",
+    reusingFfmpeg: "Đang dùng công cụ xử lý tệp đã tải",
+    convertingMedia: "Đang chuẩn bị tệp",
+    backHome: "Quay lại",
+    quickSetup: "Thiết lập chuyển ngữ",
+    quickSetupDescription: "Chọn nơi xử lý, sau đó chọn mô hình và ngôn ngữ.",
+    settingsDescription: "Quản lý dữ liệu cục bộ và tùy chọn xử lý nâng cao.",
+    interfaceLanguage: "Ngôn ngữ ứng dụng",
+    interfaceLanguageDescription: "Dùng cho menu, nhãn và thông báo.",
+    transcription: "Chuyển ngữ",
+    transcriptionDescription: "Chọn mô hình và ngôn ngữ trong tệp.",
     model: "Mô hình",
     language: "Ngôn ngữ",
-    spokenLanguage: "Ngôn ngữ trong tệp âm thanh hoặc video.",
+    spokenLanguage: "Chọn Tự động nếu bạn không chắc.",
     searchLanguage: "Tìm ngôn ngữ",
-    noLanguages: "Không tìm thấy ngôn ngữ phù hợp.",
+    noLanguages: "Không có ngôn ngữ phù hợp.",
     englishOnlyWarning:
-      "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
+      "Mô hình này chỉ chuyển ngữ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
     englishOnlySidebar:
-      "Mô hình hiện tại chỉ hỗ trợ tiếng Anh. Hãy chọn một mô hình Whisper đa ngôn ngữ.",
-    processing: "Xử lý",
-    processingDescription: "Thiết lập nâng cao cho đoạn xử lý cục bộ.",
+      "Mô hình này chỉ chuyển ngữ tiếng Anh. Hãy chọn một mô hình Whisper đa ngôn ngữ.",
+    processing: "Xử lý nâng cao",
+    processingDescription: "Điều chỉnh cách chia âm thanh khi xử lý cục bộ.",
     mode: "Chế độ",
-    chunkSeconds: "Thời lượng mỗi đoạn",
-    chunkSecondsDescription: "Độ dài mỗi đoạn âm thanh khi xử lý.",
-    overlapSeconds: "Thời gian chồng lấn",
-    overlapSecondsDescription: "Phần lặp giữa các đoạn để tránh cắt mất từ.",
-    storage: "Dữ liệu cục bộ",
-    storageDescription: "Tùy chọn lưu dữ liệu trên thiết bị.",
-    persistMediaBlobs: "Lưu tệp media",
+    chunkSeconds: "Độ dài đoạn",
+    chunkSecondsDescription: "Độ dài của từng đoạn âm thanh cục bộ.",
+    overlapSeconds: "Phần âm thanh lặp",
+    overlapSecondsDescription: "Phần âm thanh lặp ở ranh giới để tránh mất từ.",
+    storage: "Dữ liệu trên thiết bị",
+    storageDescription: "Quản lý dữ liệu đã lưu trong trình duyệt này.",
+    persistMediaBlobs: "Giữ tệp sau khi tải lại",
     persistMediaBlobsDescription:
-      "Giữ tệp gốc trên thiết bị này để tiếp tục nhanh hơn.",
-    storageCleanup: "Dọn dẹp dữ liệu",
+      "Tùy chọn này được lưu. Tệp gốc hiện chưa được khôi phục sau khi tải lại.",
+    storageCleanup: "Xóa dữ liệu cục bộ",
     storageCleanupDescription:
-      "Xóa dữ liệu cục bộ khi cần thêm dung lượng hoặc muốn bắt đầu lại.",
-    clearDownloadedModels: "Xóa mô hình đã tải",
+      "Xóa dữ liệu đã lưu trong trình duyệt khi cần thêm dung lượng.",
+    clearDownloadedModels: "Xóa mô hình đã tải xuống",
     clearDownloadedModelsDescription:
-      "Xóa các tệp mô hình Whisper đã lưu và đặt lại worker cục bộ.",
-    clearSavedTranscripts: "Xóa bản chép đã lưu",
+      "Xóa tệp mô hình đã lưu và đặt lại worker cục bộ đang rảnh.",
+    clearSavedTranscripts: "Xóa bản chuyển ngữ đã lưu",
     clearSavedTranscriptsDescription:
-      "Xóa các bản chép lưu trong trình duyệt này. Hãy xuất tệp quan trọng trước.",
-    storageCleaned: "Đã dọn dẹp dữ liệu",
+      "Xóa vĩnh viễn các bản chuyển ngữ trong trình duyệt này. Hãy xuất tệp cần giữ trước.",
+    storageCleaned: "Đã xóa dữ liệu cục bộ",
     modelCachesCleared: (count: number) =>
       count > 0
         ? `Đã xóa ${count} bộ nhớ đệm mô hình.`
-        : "Không tìm thấy bộ nhớ đệm mô hình.",
-    savedTranscriptsCleared: "Đã xóa các bản chép đã lưu.",
-    dropTitle: "Thả âm thanh hoặc video",
+        : "Không có tệp mô hình đã tải xuống.",
+    savedTranscriptsCleared: "Đã xóa các bản chuyển ngữ đã lưu.",
+    dropTitle: "Thêm âm thanh hoặc video",
     dropDescription:
-      "Tệp được kiểm tra trước khi tải mô hình hoặc ffmpeg. Video sẽ được chuyển thành âm thanh trên thiết bị rồi xử lý theo đoạn.",
+      "Tệp sẽ được kiểm tra trước khi bắt đầu xử lý. Video được chuyển đổi trên thiết bị rồi chuyển ngữ theo đoạn.",
     chooseFile: "Chọn tệp",
     filesSelected: (count: number) => `Đã chọn ${count} tệp`,
     selectedFile: (name: string) => `Đang chọn: ${name}`,
-    fileQueue: "Hàng đợi tệp",
-    selectFile: "Chọn tệp",
-    removeFile: "Xóa tệp",
-    transcribeSelected: "Chép tệp đang chọn",
-    transcribeAll: (count: number) => `Chép tất cả ${count} tệp`,
+    fileQueue: "Tệp đã chọn",
+    selectFile: "Mở tệp",
+    removeFile: "Xóa",
+    transcribeSelected: "Chuyển ngữ tệp đang chọn",
+    transcribeAll: (count: number) => `Chuyển ngữ tất cả ${count} tệp`,
     queueStatusLabels: {
-      pending: "Chờ xử lý",
+      pending: "Đang chờ",
       active: "Đang xử lý",
       complete: "Hoàn tất",
-      error: "Lỗi",
+      error: "Cần kiểm tra",
     } satisfies Record<QueuedFileStatus, string>,
     preflight: "Kiểm tra tệp",
-    processingPlan: "Kế hoạch xử lý",
+    processingPlan: "Kế hoạch chuyển ngữ",
     duration: "Thời lượng",
     size: "Dung lượng",
     chunks: "Đoạn",
     emptyPreflight:
-      "Chọn tệp để xem thời lượng, số đoạn, tài nguyên cần tải và chế độ xử lý.",
-    downloads: "Cần tải",
-    detailedLog: "Nhật ký chi tiết",
-    showDetailedLog: "Hiện nhật ký chi tiết",
-    hideDetailedLog: "Ẩn nhật ký chi tiết",
-    unknownDuration: "Không rõ",
-    confirmTranscribe: "Tải và tạo bản chép",
-    transcript: "Bản chép",
+      "Chọn tệp để xem thời lượng, kế hoạch chia đoạn và các tệp cần tải.",
+    downloads: "Tệp cần tải",
+    detailedLog: "Chi tiết tiến trình",
+    showDetailedLog: "Hiện chi tiết tiến trình",
+    hideDetailedLog: "Ẩn chi tiết tiến trình",
+    unknownDuration: "Chưa có dữ liệu",
+    confirmTranscribe: "Bắt đầu chuyển ngữ",
+    transcript: "Bản chuyển ngữ",
     timestamps: "Mốc thời gian",
-    transcriptDetails: "Thông tin mô hình và xử lý",
-    rawText: "Văn bản thuần",
-    textWithTimestamps: "Văn bản kèm mốc thời gian",
-    downloadFiles: "Tải tệp xuống",
-    closeResults: "Đóng kết quả",
-    renameTranscript: "Đổi tên bản chép",
-    saveName: "Lưu tên",
-    batchComplete: (count: number) => `Đã lưu ${count} bản chép vào Gần đây.`,
+    transcriptDetails: "Mô hình và cách xử lý",
+    rawText: "Văn bản",
+    textWithTimestamps: "Văn bản có mốc thời gian",
+    downloadFiles: "Xuất tệp",
+    closeResults: "Đóng",
+    renameTranscript: "Đổi tên bản chuyển ngữ",
+    saveName: "Lưu",
+    batchComplete: (count: number) =>
+      `Đã lưu ${count} bản chuyển ngữ vào mục Gần đây.`,
     batchCompleteWithFailures: (completed: number, failed: number) =>
-      `Đã lưu ${completed} bản chép. ${failed} tệp cần kiểm tra lại.`,
-    dismissNotification: "Đóng thông báo",
-    readyForOutput: "Sẵn sàng xuất",
+      `Đã lưu ${completed} bản chuyển ngữ. ${failed} tệp cần kiểm tra.`,
+    dismissNotification: "Đóng",
+    readyForOutput: "Sẵn sàng để xuất",
     emptyTranscript:
-      "Bản chép sẽ xuất hiện ở đây sau khi xử lý. Tên tệp xuất gồm nguồn, ngôn ngữ, ngày và giờ.",
-    recent: "Gần đây",
-    emptyHistory: "Chưa có bản chép nào.",
-    openTranscript: "Mở bản chép",
-    removeTranscript: "Xóa bản chép",
+      "Bản chuyển ngữ sẽ xuất hiện ở đây khi xử lý xong. Tên tệp xuất có nguồn, ngôn ngữ, ngày và giờ.",
+    recent: "Bản chuyển ngữ gần đây",
+    emptyHistory: "Chưa có bản chuyển ngữ nào được lưu.",
+    openTranscript: "Mở bản chuyển ngữ",
+    removeTranscript: "Xóa bản chuyển ngữ",
     downloadDescription: (notes: string, sizeMb: number) =>
-      `${notes} Khoảng ${sizeMb} MB.`,
+      `${notes} Cần tải khoảng ${sizeMb} MB.`,
     modelDescriptions: {
       "onnx-community/whisper-base":
-        "Mặc định. Cân bằng tốt giữa tốc độ và độ chính xác cho tiếng Anh/tiếng Việt.",
+        "Mô hình cục bộ mặc định cho tiếng Anh và tiếng Việt.",
       "onnx-community/whisper-tiny":
-        "Nhanh nhất trong các mô hình đa ngôn ngữ. Độ chính xác thấp hơn.",
+        "Lựa chọn đa ngôn ngữ nhanh nhất, nhưng độ chính xác thấp hơn.",
       "onnx-community/whisper-small":
-        "Độ chính xác cao hơn, cần tải xuống và bộ nhớ nhiều hơn.",
+        "Chính xác hơn, nhưng cần tải xuống và dùng nhiều bộ nhớ hơn.",
       "onnx-community/whisper-medium_timestamped":
-        "Mô hình đa ngôn ngữ có độ chính xác cao, tối ưu cho mốc thời gian và thiết bị mạnh.",
+        "Mô hình đa ngôn ngữ chính xác cao, có mốc thời gian chi tiết. Phù hợp với thiết bị mạnh.",
       "onnx-community/whisper-large-v3-turbo":
-        "Lựa chọn tốt cho thiết bị mạnh: chính xác hơn Small đáng kể nhưng nhanh hơn Large v3 đầy đủ.",
+        "Độ chính xác cao trên thiết bị mạnh, với thời gian khởi tạo thấp hơn Large v3 đầy đủ.",
       "onnx-community/whisper-large-v3-ONNX":
-        "Tùy chọn chính xác tối đa. Tệp tải xuống rất lớn và khởi tạo lâu; dành cho thiết bị cao cấp.",
+        "Độ chính xác cao nhất. Cần tải xuống rất lớn và thiết bị mạnh.",
       "onnx-community/whisper-tiny.en":
-        "Chỉ hỗ trợ tiếng Anh, không phù hợp cho tiếng Việt.",
+        "Chỉ dùng cho tiếng Anh. Không dùng cho tiếng Việt.",
     } satisfies Record<string, string>,
     modeDetails: {
-      "local-webgpu": "Xử lý cục bộ nhanh nhất khi trình duyệt hỗ trợ.",
+      "local-webgpu": "Xử lý riêng tư trong trình duyệt bằng WebGPU.",
       "cloudflare-ai":
-        "Dành cho tài khoản được cấp quyền, chỉ dùng hạn mức miễn phí.",
-      "local-wasm": "Dự phòng khi WebGPU không khả dụng.",
+        "Dành cho tài khoản được cấp quyền trong hạn mức hiện có.",
+      "local-wasm": "Xử lý riêng tư trong trình duyệt khi không có WebGPU.",
       "local-helper":
-        "Companion Vulkan/CPU tùy chọn trên thiết bị Windows này.",
-      server: "Chuyển ngữ trên máy chủ qua whisper.cpp. Cần đăng nhập.",
+        "Dùng Companion Windows tùy chọn để xử lý bằng Vulkan hoặc CPU.",
+      server: "Xử lý trên máy chủ bằng whisper.cpp. Cần đăng nhập Google.",
     } satisfies Record<ProcessingMode, string>,
     modeLabels: {
       "local-webgpu": "Local WebGPU",
@@ -657,15 +658,15 @@ const COPY = {
     jobStateLabels: {
       idle: "Sẵn sàng",
       queued: "Đã xếp hàng",
-      analyzing: "Đang phân tích",
+      analyzing: "Đang kiểm tra",
       "awaiting-confirmation": "Chờ xác nhận",
       "downloading-assets": "Đang tải tài nguyên",
-      "preparing-media": "Đang chuẩn bị media",
-      chunking: "Đang chia chunk",
-      transcribing: "Đang chép lời",
+      "preparing-media": "Đang chuẩn bị tệp",
+      chunking: "Đang chia đoạn",
+      transcribing: "Đang chuyển ngữ",
       saving: "Đang lưu",
       complete: "Hoàn tất",
-      error: "Lỗi",
+      error: "Cần kiểm tra",
       cancelled: "Đã hủy",
     } satisfies Record<JobState, string>,
   },
@@ -1172,7 +1173,9 @@ export function App() {
       ) {
         await Promise.all(
           selections.map((selection) =>
-            localHelperClient.deleteSelection(selection.id).catch(() => undefined)
+            localHelperClient
+              .deleteSelection(selection.id)
+              .catch(() => undefined)
           )
         )
         return
@@ -1792,7 +1795,10 @@ export function App() {
       } catch (caught) {
         const message =
           caught instanceof Error ? caught.message : t.transcriptionFailed
-        updateQueueItem(selectedQueueItem.id, { status: "error", error: message })
+        updateQueueItem(selectedQueueItem.id, {
+          status: "error",
+          error: message,
+        })
         setJobState("error")
         setError(message)
       }
@@ -1974,7 +1980,9 @@ export function App() {
     companionPickerGeneration.current += 1
     const companionSelections = queue
       .filter(
-        (item): item is QueuedFile & {
+        (
+          item
+        ): item is QueuedFile & {
           source: Extract<QueueSource, { kind: "companion" }>
         } => item.source.kind === "companion"
       )
@@ -2264,16 +2272,6 @@ export function App() {
 
               {settings.mode === "local-helper" ? (
                 <>
-                  <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
-                    <CardContent className="py-8 text-center">
-                      <CardTitle className="text-base">
-                        {t.companionTitle}
-                      </CardTitle>
-                      <CardDescription className="mx-auto mt-2 max-w-md">
-                        {t.companionDescription}
-                      </CardDescription>
-                    </CardContent>
-                  </Card>
                   <DropZone
                     file={null}
                     fileCount={queue.length}
@@ -2485,7 +2483,8 @@ function MainControls({
             <SelectContent align="start">
               {MODES.filter(
                 (item) =>
-                  item.value !== "server" || Boolean(import.meta.env.VITE_SERVER_URL)
+                  item.value !== "server" ||
+                  Boolean(import.meta.env.VITE_SERVER_URL)
               ).map((item) => (
                 <SelectItem key={item.value} value={item.value}>
                   {copy.modeLabels[item.value]}
@@ -3032,7 +3031,8 @@ function DropZone({
           </p>
         </div>
         <Button onClick={onPick} disabled={isBusy}>
-          <UploadCloud /> {nativeOnly ? copy.companionChooseFiles : copy.chooseFile}
+          <UploadCloud />{" "}
+          {nativeOnly ? copy.companionChooseFiles : copy.chooseFile}
         </Button>
       </div>
     </div>
@@ -3309,7 +3309,7 @@ function PreflightPanel({
               type="button"
               className="animate-in cursor-pointer text-left text-sm text-destructive underline decoration-destructive/30 underline-offset-2 duration-200 fade-in slide-in-from-top-1 hover:decoration-destructive"
               onClick={() => onErrorClick()}
-              title="Click for full error details"
+              title="Open error details"
             >
               {error}
             </button>

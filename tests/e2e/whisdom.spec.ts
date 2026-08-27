@@ -125,9 +125,9 @@ test.describe("Whisdom", () => {
 
   test("renders app shell and default settings", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Whisdom" })).toBeVisible()
-    await expect(page.getByText("Transcription setup")).toBeVisible()
+    await expect(page.getByText("Set up transcription")).toBeVisible()
     await expect(
-      page.getByRole("heading", { name: "Drop audio or video" })
+      page.getByRole("heading", { name: "Add audio or video" })
     ).toBeVisible()
     await expect(page.getByLabel("Model")).toContainText("Whisper Base")
     await expect(page.getByLabel("Language", { exact: true })).toContainText(
@@ -145,22 +145,20 @@ test.describe("Whisdom", () => {
     await expect(
       page.getByRole("heading", { name: "sample.wav" })
     ).toBeVisible()
-    await expect(
-      page.getByText("Review downloads and processing plan")
-    ).toBeVisible()
+    await expect(page.getByText("Review the transcription plan")).toBeVisible()
     await expect(page.getByText("Whisper Base").nth(1)).toBeVisible()
     await expect(
       page.getByText(
         "Resume after tab close will require re-picking the original file."
       )
     ).toBeVisible()
-    await page.getByRole("button", { name: /Detailed log/ }).click()
-    await expect(page.getByText("Reading media metadata")).toBeVisible()
+    await page.getByRole("button", { name: /Progress details/ }).click()
+    await expect(page.getByText("Checking file details")).toBeVisible()
     await expect(
-      page.getByText("Review downloads and processing plan").last()
+      page.getByText("Review the transcription plan").last()
     ).toBeVisible()
     await expect(
-      page.getByRole("button", { name: /Confirm downloads and transcribe/i })
+      page.getByRole("button", { name: /Start transcription/i })
     ).toBeEnabled()
   })
 
@@ -173,23 +171,21 @@ test.describe("Whisdom", () => {
       page.getByRole("heading", { name: "2 files selected" })
     ).toBeVisible()
     await expect(page.getByText("Selected: first.wav")).toBeVisible()
-    await expect(page.getByText("File queue")).toBeVisible()
+    await expect(page.getByText("Files")).toBeVisible()
     await expect(
-      page.getByRole("button", { name: "Select file: first.wav" })
+      page.getByRole("button", { name: "Open file: first.wav" })
     ).toBeVisible()
     await expect(
-      page.getByRole("button", { name: "Select file: second.wav" })
+      page.getByRole("button", { name: "Open file: second.wav" })
     ).toBeVisible()
     await expect(
       page.getByRole("button", { name: "Transcribe all 2 files" })
     ).toBeEnabled()
 
-    await page.getByRole("button", { name: "Select file: second.wav" }).click()
+    await page.getByRole("button", { name: "Open file: second.wav" }).click()
 
     await expect(page.getByText("Selected: second.wav")).toBeVisible()
-    await expect(
-      page.getByText("Review downloads and processing plan")
-    ).toBeVisible()
+    await expect(page.getByText("Review the transcription plan")).toBeVisible()
     await expect(
       page.getByRole("button", { name: "Transcribe selected file" })
     ).toBeEnabled()
@@ -206,20 +202,20 @@ test.describe("Whisdom", () => {
     ).toBeVisible()
     await expect(page.getByText("Selected: first.wav")).toBeVisible()
     await expect(
-      page.getByRole("button", { name: "Select file: first.wav" })
+      page.getByRole("button", { name: "Open file: first.wav" })
     ).toBeVisible()
     await expect(
-      page.getByRole("button", { name: "Select file: second.wav" })
+      page.getByRole("button", { name: "Open file: second.wav" })
     ).toBeVisible()
 
-    await page.getByRole("button", { name: "Remove file: first.wav" }).click()
+    await page.getByRole("button", { name: "Remove: first.wav" }).click()
 
     await expect(
       page.getByRole("heading", { name: "second.wav" })
     ).toBeVisible()
     await expect(page.getByText("2 files selected")).toHaveCount(0)
     await expect(
-      page.getByRole("button", { name: "Select file: first.wav" })
+      page.getByRole("button", { name: "Open file: first.wav" })
     ).toHaveCount(0)
   })
 
@@ -246,14 +242,10 @@ test.describe("Whisdom", () => {
     await expect(page.getByText("q4 browser weights")).toBeVisible()
 
     await chooseAudio(page)
-    await expect(
-      page.getByText("Large local models use q4 ONNX weights")
-    ).toBeVisible()
-    await page
-      .getByRole("button", { name: /Confirm downloads and transcribe/i })
-      .click()
+    await expect(page.getByText("q4 browser weights")).toBeVisible()
+    await page.getByRole("button", { name: /Start transcription/i }).click()
 
-    await expect(page.getByText("requires WebGPU in the browser")).toBeVisible()
+    await expect(page.getByText("needs WebGPU in this browser")).toBeVisible()
   })
 
   test("searches and selects many transcription languages on the main page", async ({
@@ -282,7 +274,7 @@ test.describe("Whisdom", () => {
     await expect(page.getByRole("menuitem", { name: "Cài đặt" })).toBeVisible()
     await page.keyboard.press("Escape")
     await expect(
-      page.getByRole("heading", { name: "Thả âm thanh hoặc video" })
+      page.getByRole("heading", { name: "Thêm âm thanh hoặc video" })
     ).toBeVisible()
   })
 
@@ -316,12 +308,12 @@ test.describe("Whisdom", () => {
   }) => {
     await selectMode(page, "Manual server")
     await chooseAudio(page)
-    await page
-      .getByRole("button", { name: /Confirm downloads and transcribe/i })
-      .click()
+    await page.getByRole("button", { name: /Start transcription/i }).click()
 
     await expect(
-      page.getByText(/Server transcription requires Google sign-in/i)
+      page.getByText(
+        /Sign in with Google before starting server transcription/i
+      )
     ).toBeVisible()
   })
 

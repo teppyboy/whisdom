@@ -194,35 +194,34 @@ function buildWarnings(
 const WARNING_COPY = {
   en: {
     englishOnly:
-      "Selected model is English-only. Choose a multilingual model for this language.",
+      "This model only transcribes English. Choose a multilingual model for this language.",
     quantizedLargeModel:
-      "Large local models use q4 ONNX weights in the browser to avoid multi-gigabyte buffer allocation.",
+      "Large local models use q4 browser weights to stay within browser memory limits.",
     largeModelNeedsWebGpu:
-      "This large model requires WebGPU. Choose Whisper Small or use a secure WebGPU-capable browser.",
+      "This large model needs WebGPU. Choose Whisper Small or use a secure browser with WebGPU.",
     webGpuUnavailable: (reason: string) =>
-      `WebGPU is unavailable (${reason}). Whisdom will use local WASM instead.`,
+      `WebGPU is unavailable (${reason}). Local WASM will be used instead.`,
     needsFfmpeg:
-      "Video or unsupported media needs ffmpeg.wasm before transcription.",
+      "This file needs the media converter before transcription can start.",
     serverChunksOnly:
-      "Server mode sends audio chunks only. Full media stays in the browser.",
+      "Server mode sends audio chunks only. The original file stays in the browser.",
     resumeRequiresFile:
-      "Resume after tab close will require re-picking the original file.",
+      "After closing this tab, choose the original file again to continue.",
   },
   vi: {
     englishOnly:
-      "Mô hình đã chọn chỉ hỗ trợ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
+      "Mô hình này chỉ chuyển ngữ tiếng Anh. Hãy chọn mô hình đa ngôn ngữ cho ngôn ngữ này.",
     quantizedLargeModel:
-      "Mô hình lớn sẽ dùng trọng số ONNX q4 trong trình duyệt để tránh cấp phát bộ nhớ nhiều GB.",
+      "Mô hình cục bộ lớn dùng trọng số q4 để giữ mức dùng bộ nhớ trong giới hạn của trình duyệt.",
     largeModelNeedsWebGpu:
-      "Mô hình lớn này cần WebGPU. Hãy chọn Whisper Small hoặc dùng trình duyệt hỗ trợ WebGPU qua HTTPS/localhost.",
+      "Mô hình lớn này cần WebGPU. Hãy chọn Whisper Small hoặc dùng trình duyệt có WebGPU qua HTTPS/localhost.",
     webGpuUnavailable: (reason: string) =>
-      `Không thể dùng WebGPU (${reason}). Whisdom sẽ tự chuyển sang WASM cục bộ.`,
+      `Không thể dùng WebGPU (${reason}). Hệ thống sẽ dùng WASM cục bộ.`,
     needsFfmpeg:
-      "Video hoặc định dạng chưa hỗ trợ cần ffmpeg.wasm trước khi chép lời.",
+      "Tệp này cần công cụ xử lý tệp trước khi có thể bắt đầu chuyển ngữ.",
     serverChunksOnly:
-      "Chế độ máy chủ chỉ gửi từng đoạn âm thanh. Tệp gốc vẫn ở trong trình duyệt.",
-    resumeRequiresFile:
-      "Sau khi đóng tab, bạn cần chọn lại tệp gốc để tiếp tục.",
+      "Chế độ máy chủ chỉ gửi các đoạn âm thanh. Tệp gốc vẫn ở trong trình duyệt.",
+    resumeRequiresFile: "Sau khi đóng tab, hãy chọn lại tệp gốc để tiếp tục.",
   },
 } as const
 

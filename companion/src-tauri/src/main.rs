@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::Wry;
+use tauri::{Manager, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tokio::sync::oneshot;
@@ -89,6 +89,15 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         let app_handle = picker_handle.clone();
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel::<Vec<PathBuf>>();
+            if let Some(window) = app_handle.get_webview_window("main") {
+                if let Err(error) = window
+                    .show()
+                    .and_then(|_| window.unminimize())
+                    .and_then(|_| window.set_focus())
+                {
+                    tracing::warn!(error = %error, "failed to activate Companion before opening native picker");
+                }
+            }
             app_handle
                 .dialog()
                 .file()

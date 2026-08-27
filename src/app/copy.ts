@@ -59,48 +59,63 @@ export const SHELL_COPY = defineCopy({
     skipToContent: "Skip to content",
     primaryNavigation: "Primary navigation",
     errors: {
-      unsupportedVersionTitle: "Unsupported data version",
-      unsupportedVersionMessage: ({ foundVersion, maximumVersion }: CopyParams) =>
-        `This browser contains Whisdom data version ${foundVersion}. This build supports through version ${maximumVersion}. Use a newer Whisdom build; your data was not changed.`,
-      genericTitle: "Something went wrong",
-      genericMessage: "Whisdom could not complete this action.",
+      unsupportedVersionTitle: "This data version is not supported",
+      unsupportedVersionMessage: ({
+        foundVersion,
+        maximumVersion,
+      }: CopyParams) =>
+        `This browser has Whisdom data version ${foundVersion}. This version of Whisdom supports data through version ${maximumVersion}. Open a newer version of Whisdom. Your data has not been changed.`,
+      genericTitle: "This action could not be completed",
+      genericMessage: "Try again. If the problem continues, check the details.",
     },
     actions: {
-      inspectDetails: "Inspect details",
-      backToLibrary: "Back to Library",
-      retry: "Retry",
+      inspectDetails: "View details",
+      backToLibrary: "Back to recent transcriptions",
+      retry: "Try again",
     },
   },
   vi: {
     skipToContent: "Chuyển đến nội dung",
     primaryNavigation: "Điều hướng chính",
     errors: {
-      unsupportedVersionTitle: "Phiên bản dữ liệu không được hỗ trợ",
-      unsupportedVersionMessage: ({ foundVersion, maximumVersion }: CopyParams) =>
-        `Trình duyệt này chứa dữ liệu Whisdom phiên bản ${foundVersion}. Bản dựng này hỗ trợ đến phiên bản ${maximumVersion}. Hãy dùng bản Whisdom mới hơn; dữ liệu của bạn chưa bị thay đổi.`,
-      genericTitle: "Đã xảy ra lỗi",
-      genericMessage: "Whisdom không thể hoàn tất thao tác này.",
+      unsupportedVersionTitle: "Phiên bản dữ liệu này không được hỗ trợ",
+      unsupportedVersionMessage: ({
+        foundVersion,
+        maximumVersion,
+      }: CopyParams) =>
+        `Trình duyệt này có dữ liệu Whisdom phiên bản ${foundVersion}. Phiên bản Whisdom hiện tại hỗ trợ dữ liệu đến phiên bản ${maximumVersion}. Hãy mở phiên bản Whisdom mới hơn. Dữ liệu của bạn chưa bị thay đổi.`,
+      genericTitle: "Không thể hoàn tất thao tác này",
+      genericMessage:
+        "Hãy thử lại. Nếu lỗi vẫn tiếp diễn, xem chi tiết để kiểm tra.",
     },
     actions: {
       inspectDetails: "Xem chi tiết",
-      backToLibrary: "Quay lại Thư viện",
+      backToLibrary: "Quay lại bản chuyển ngữ gần đây",
       retry: "Thử lại",
     },
   },
 })
 
-function actionLabel(language: InterfaceLanguage, code: RecoveryActionCode): string {
+function actionLabel(
+  language: InterfaceLanguage,
+  code: RecoveryActionCode
+): string {
   const copy = SHELL_COPY[language].actions
   if (code === "inspect-details") return copy.inspectDetails
   if (code === "back-to-library") return copy.backToLibrary
   return copy.retry
 }
 
-export function formatProductError(language: InterfaceLanguage, error: ProductError) {
+export function formatProductError(
+  language: InterfaceLanguage,
+  error: ProductError
+) {
   const copy = SHELL_COPY[language]
   const unsupported = error.code === "storage.unsupported-version"
   return {
-    title: unsupported ? copy.errors.unsupportedVersionTitle : copy.errors.genericTitle,
+    title: unsupported
+      ? copy.errors.unsupportedVersionTitle
+      : copy.errors.genericTitle,
     message: unsupported
       ? copy.errors.unsupportedVersionMessage(error.params)
       : copy.errors.genericMessage,
@@ -113,7 +128,7 @@ export function formatProductError(language: InterfaceLanguage, error: ProductEr
 
 export function formatProductIssue(
   language: InterfaceLanguage,
-  issue: ProductIssue,
+  issue: ProductIssue
 ): string {
   return issue.code === "storage.unsupported-version"
     ? SHELL_COPY[language].errors.unsupportedVersionMessage(issue.params)
@@ -124,13 +139,13 @@ export const SETTINGS_COPY = defineCopy({
   en: {
     page: {
       title: "Settings",
-      description: "Manage local processing and storage preferences.",
+      description: "Manage local data and advanced processing options.",
     },
   },
   vi: {
     page: {
       title: "Cài đặt",
-      description: "Quản lý tùy chọn xử lý và lưu trữ cục bộ.",
+      description: "Quản lý dữ liệu cục bộ và tùy chọn xử lý nâng cao.",
     },
   },
 })

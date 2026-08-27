@@ -78,9 +78,7 @@ describe("component harness", () => {
 
     renderCompanion()
 
-    expect(
-      await screen.findByText("Desktop Companion available")
-    ).toBeVisible()
+    expect(await screen.findByText("Desktop Companion is ready")).toBeVisible()
   })
 
   it("links to Releases when Desktop Companion is unavailable", async () => {
@@ -93,10 +91,10 @@ describe("component harness", () => {
     renderCompanion()
 
     expect(
-      await screen.findByText("Desktop Companion not found")
+      await screen.findByText("Desktop Companion is not running")
     ).toBeVisible()
     expect(
-      screen.getByRole("link", { name: "Download Desktop Companion" })
+      screen.getByRole("link", { name: "Get Desktop Companion" })
     ).toHaveAttribute("href", "https://github.com/teppyboy/whisdom/releases")
   })
 
@@ -116,9 +114,14 @@ describe("component harness", () => {
       screen.getByRole("heading", { name: "Choose files in Windows" })
     ).toBeInTheDocument()
     expect(
-      screen.getByText(/Drag and drop is unavailable in Desktop Companion mode/)
+      screen.queryByRole("heading", { name: "Desktop Companion" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /Drag and drop is not available in Desktop Companion mode/
+      )
     ).toBeInTheDocument()
-    expect(screen.queryByText("Drop audio or video")).not.toBeInTheDocument()
+    expect(screen.queryByText("Add audio or video")).not.toBeInTheDocument()
 
     await user.click(choose)
     expect(localHelperClient.selectFiles).toHaveBeenCalledTimes(1)
@@ -187,13 +190,13 @@ describe("component harness", () => {
         screen.getByRole("button", { name: "Choose files in Windows" })
       ).toBeDisabled()
       expect(
-        screen.getByRole("button", { name: "Remove file: meeting.mkv" })
+        screen.getByRole("button", { name: "Remove: meeting.mkv" })
       ).toBeDisabled()
       expect(
-        screen.getByRole("button", { name: "Move file down: meeting.mkv" })
+        screen.getByRole("button", { name: "Move down: meeting.mkv" })
       ).toBeDisabled()
       expect(
-        screen.getByRole("button", { name: "Move file up: agenda.mkv" })
+        screen.getByRole("button", { name: "Move up: agenda.mkv" })
       ).toBeDisabled()
     })
   })
@@ -226,7 +229,7 @@ describe("component harness", () => {
     )
     await screen.findByText("meeting.mkv")
     await user.click(
-      screen.getByRole("button", { name: "Confirm downloads and transcribe" })
+      screen.getByRole("button", { name: "Start transcription" })
     )
 
     expect(
@@ -236,7 +239,7 @@ describe("component harness", () => {
     ).toBeTruthy()
     const activeRow = screen.getByText("meeting.mkv").closest("div")
     expect(activeRow).not.toBeNull()
-    expect(within(activeRow!).getByText("Error")).toBeTruthy()
+    expect(within(activeRow!).getByText("Needs attention")).toBeTruthy()
   })
 
   it("normalizes native 100-point progress for the browser progress bar", () => {
