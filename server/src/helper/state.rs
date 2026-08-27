@@ -11,6 +11,17 @@ use super::engine::SharedRuntime;
 use super::protocol::{HelperError, JobStatus};
 use super::selection::SelectionStore;
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct HelperUpdateInfo {
+    pub version: String,
+    pub body: Option<String>,
+}
+
+pub type UpdateCheck = Arc<
+    dyn Fn() -> BoxFuture<'static, Result<Option<HelperUpdateInfo>, HelperError>> + Send + Sync,
+>;
+pub type UpdateInstall = Arc<dyn Fn() -> BoxFuture<'static, Result<(), HelperError>> + Send + Sync>;
+
 pub type NativeFilePicker =
     Arc<dyn Fn() -> BoxFuture<'static, Result<Vec<std::path::PathBuf>, HelperError>> + Send + Sync>;
 
@@ -23,6 +34,8 @@ pub struct HelperState {
     pub runtime: SharedRuntime,
     pub selections: SelectionStore,
     pub native_file_picker: Option<NativeFilePicker>,
+    pub update_check: Option<UpdateCheck>,
+    pub update_install: Option<UpdateInstall>,
 }
 
 #[derive(Clone)]
