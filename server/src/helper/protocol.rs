@@ -55,6 +55,10 @@ pub struct NativeModelResponse {
     pub quality: String,
     pub size_bytes: u64,
     pub installed: bool,
+    pub engine: &'static str,
+    pub supported_languages: Vec<String>,
+    pub supports_auto_language: bool,
+    pub active_backend: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,7 +99,7 @@ pub struct StartSelectionResponse {
     pub job_id: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TranscriptSegment {
     pub start: f32,
     pub end: f32,
@@ -122,13 +126,24 @@ pub struct JobStatus {
 
 pub const PROTOCOL_VERSION: u32 = 2;
 
+// `unavailable` is a truthful capability state while a catalog model's native
+// runtime has not been packaged; it is never an accelerator claim.
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn selection_start_rejects_client_paths_and_assets() {
-        for field in ["path", "file", "url", "checksum"] {
+        for field in [
+            "path",
+            "file",
+            "url",
+            "checksum",
+            "engine",
+            "asset_url",
+            "model_path",
+        ] {
             let input =
                 format!(r#"{{"selection_id":"id","model":"ggml-tiny-q5_1","{field}":"x"}}"#);
             assert!(serde_json::from_str::<StartSelectionRequest>(&input).is_err());

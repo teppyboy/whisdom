@@ -15,7 +15,7 @@ use whisdom_server::helper::config::HelperConfig;
 use whisdom_server::helper::logging::{self, HelperLogGuard};
 use whisdom_server::helper::selection::SelectionStore;
 use whisdom_server::helper::state::{HelperQueue, HelperState, NativeFilePicker};
-use whisdom_server::helper::transcribe::SharedModel;
+use whisdom_server::helper::engine::SharedRuntime;
 
 fn ensure_companion_root() {
     if std::env::var_os("WHISDOM_HELPER_ROOT").is_some() {
@@ -154,7 +154,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
             auth,
             cache,
             queue: HelperQueue::default(),
-            model: SharedModel::default(),
+            runtime: SharedRuntime::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(native_file_picker),
         });

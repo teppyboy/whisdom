@@ -25,6 +25,9 @@ dotenvy = "0.15"
 toml = "1.1"
 whisper-rs = "0.16"
 hound = "3"
+bzip2 = "0.6"
+tar = "0.4"
+sherpa-onnx = { version = "1.13.6", default-features = false, features = ["shared"] }
 
 [lib]
 name = "whisdom_server"
@@ -42,6 +45,8 @@ path = "src/bin/whisdom-helper.rs"
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 hipblas = ["whisper-rs/hipblas"]
+# Requires SHERPA_ONNX_LIB_DIR to point to a custom Windows DirectML build.
+directml = []
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

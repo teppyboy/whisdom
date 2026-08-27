@@ -13,7 +13,8 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use super::cache::CacheStatus;
-use super::models::{default_native_model, find_native_model, native_models};
+use super::engine;
+use super::models::{default_native_model, find_native_model, native_models, supports_language};
 use super::protocol::{
     CapabilitiesResponse, HealthResponse, HelperError, NativeModelResponse,
     NativeSelectionResponse, PairResponse, SelectFilesResponse, StartSelectionRequest,
@@ -113,20 +114,33 @@ async fn capabilities(
     headers: HeaderMap,
 ) -> Result<axum::Json<CapabilitiesResponse>, HelperError> {
     state.auth.authorize(&headers).await?;
+    let mut models = Vec::with_capacity(native_models().len());
+    for model in native_models() {
+        models.push(NativeModelResponse {
+            id: model.id.into(),
+            label: model.label.into(),
+            quality: model.quality.into(),
+            size_bytes: model.size_bytes,
+            installed: state.cache.model_is_installed(model).await.unwrap_or(false),
+            engine: model.engine.id(),
+            supported_languages: model
+                .supported_languages
+                .iter()
+                .map(|language| (*language).into())
+                .collect(),
+            supports_auto_language: model.supports_auto_language,
+            active_backend: engine::configured_backend(model),
+        });
+    }
     Ok(axum::Json(CapabilitiesResponse {
         available: true,
-        engine: "whisper.cpp",
-        accelerator: if cfg!(feature = "vulkan") {
-            "vulkan-or-cpu"
-        } else {
-            "cpu"
-        },
+        engine: "catalog",
+        accelerator: "per-model",
         model_id: default_native_model().id.into(),
         model_ready: state
-            .config
-            .models_dir()
-            .join(default_native_model().filename)
-            .exists(),
+            .cache
+            .model_is_installed(default_native_model())
+            .await?,
         ffmpeg_ready: state
             .config
             .tools_dir()
@@ -134,16 +148,7 @@ async fn capabilities(
             .join("ffmpeg.exe")
             .exists(),
         native_picker: state.native_file_picker.is_some(),
-        models: native_models()
-            .iter()
-            .map(|model| NativeModelResponse {
-                id: model.id.into(),
-                label: model.label.into(),
-                quality: model.quality.into(),
-                size_bytes: model.size_bytes,
-                installed: state.config.models_dir().join(model.filename).is_file(),
-            })
-            .collect(),
+        models,
     }))
 }
 
@@ -160,7 +165,8 @@ async fn cache_clear(
     headers: HeaderMap,
 ) -> Result<axum::Json<super::cache::CacheClearResult>, HelperError> {
     state.auth.authorize(&headers).await?;
-    Ok(axum::Json(state.cache.clear(&state.model).await?))
+    // Cache clearing drops the tagged runtime before deleting managed assets.
+    Ok(axum::Json(state.cache.clear(&state.runtime).await?))
 }
 
 async fn select_files(
@@ -227,6 +233,11 @@ async fn transcribe_selection(
         .0;
     let model = find_native_model(&request.model)
         .ok_or_else(|| HelperError::BadRequest("unsupported helper model".into()))?;
+    if !supports_language(model, request.language.as_deref()) {
+        return Err(HelperError::BadRequest(
+            "selected Companion model does not support this language".into(),
+        ));
+    }
     let selection = state.selections.take(&request.selection_id).await?;
     let job_id = runtime::start_path_job(
         state,
@@ -281,6 +292,9 @@ async fn transcribe(
         .map_err(|error| HelperError::BadRequest(error.to_string()))?
     {
         match field.name().unwrap_or("") {
+            // Buffer media only after the model/language preflight. Multipart
+            // ordering is not trustworthy, so reject as soon as those fields
+            // appear and repeat the check before staging below.
             "audio" => {
                 let filename = field.file_name().unwrap_or("upload.bin").to_owned();
                 let bytes = read_limited_field(&mut field, state.config.max_upload_bytes).await?;
@@ -305,9 +319,19 @@ async fn transcribe(
             _ => {}
         }
     }
+    let model = resolve_model(model.as_deref())?;
+    if model.engine != super::models::AsrEngine::WhisperCpp {
+        return Err(HelperError::BadRequest(
+            "selected model is unavailable for legacy uploads".into(),
+        ));
+    }
+    if !supports_language(model, language.as_deref()) {
+        return Err(HelperError::BadRequest(
+            "selected Companion model does not support this language".into(),
+        ));
+    }
     let (filename, bytes) =
         audio.ok_or_else(|| HelperError::BadRequest("audio field required".into()))?;
-    let model = resolve_model(model.as_deref())?;
     if bytes.len() > state.config.max_upload_bytes {
         return Err(HelperError::BadRequest(
             "uploaded media exceeds the helper limit".into(),
@@ -396,9 +420,9 @@ mod tests {
     use crate::helper::auth::HelperAuth;
     use crate::helper::cache::HelperCache;
     use crate::helper::config::HelperConfig;
+    use crate::helper::engine::SharedRuntime;
     use crate::helper::selection::SelectionStore;
     use crate::helper::state::{HelperQueue, NativeFilePicker};
-    use crate::helper::transcribe::SharedModel;
 
     #[test]
     fn legacy_upload_defaults_to_turbo_and_rejects_unknown_models() {
@@ -407,6 +431,13 @@ mod tests {
             default_native_model().id
         );
         assert!(resolve_model(Some("other")).is_err());
+    }
+
+    #[test]
+    fn legacy_upload_rejects_unavailable_parakeet_before_staging() {
+        let model = resolve_model(Some("sherpa-parakeet-tdt-v3-int8")).expect("catalog model");
+        assert_ne!(model.engine, super::super::models::AsrEngine::WhisperCpp);
+        assert!(!supports_language(model, Some("vi")));
     }
 
     async fn paired_router(path: PathBuf) -> (Router, String) {
@@ -433,7 +464,7 @@ mod tests {
             config,
             auth,
             queue: HelperQueue::default(),
-            model: SharedModel::default(),
+            runtime: SharedRuntime::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(picker),
         });
@@ -526,6 +557,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parakeet_rejects_vietnamese_without_consuming_selection() {
+        let media = tempfile::NamedTempFile::with_suffix(".mkv").expect("test media");
+        std::fs::write(media.path(), b"media").expect("write media");
+        let (app, token) = paired_router(media.path().to_owned()).await;
+        let selection = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/select-files",
+                &token,
+                Body::empty(),
+            ))
+            .await
+            .expect("selection response");
+        let body = to_bytes(selection.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let id = serde_json::from_slice::<serde_json::Value>(&body).expect("json")["selections"][0]
+            ["id"]
+            .as_str()
+            .expect("id")
+            .to_owned();
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/transcribe-selection",
+                &token,
+                Body::from(format!(r#"{{"selection_id":"{id}","model":"sherpa-parakeet-tdt-v3-int8","language":"vi"}}"#)),
+            ))
+            .await
+            .expect("rejection response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = app
+            .oneshot(request(
+                "DELETE",
+                &format!("/api/v1/selections/{id}"),
+                &token,
+                Body::empty(),
+            ))
+            .await
+            .expect("selection remains available");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
     async fn capabilities_expose_catalog_metadata_without_paths() {
         let media = tempfile::NamedTempFile::new().expect("test media");
         let (app, token) = paired_router(media.path().to_owned()).await;
@@ -551,6 +628,19 @@ mod tests {
             .as_array()
             .expect("models")
             .iter()
-            .all(|model| model.get("path").is_none()));
+            .all(|model| model.get("path").is_none() && model.get("url").is_none()));
+        let parakeet = value["models"]
+            .as_array()
+            .expect("models")
+            .iter()
+            .find(|model| model["id"] == "sherpa-parakeet-tdt-v3-int8")
+            .expect("Parakeet model");
+        assert_eq!(parakeet["engine"], "sherpa-onnx");
+        assert_eq!(parakeet["active_backend"], "cpu");
+        assert!(parakeet["supported_languages"]
+            .as_array()
+            .expect("languages")
+            .iter()
+            .all(|language| language != "vi"));
     }
 }

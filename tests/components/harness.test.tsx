@@ -28,6 +28,10 @@ const capabilities = {
       quality: "high",
       size_bytes: 574041195,
       installed: true,
+      engine: "whisper.cpp" as const,
+      supported_languages: ["*"],
+      supports_auto_language: true,
+      active_backend: "unavailable" as const,
     },
   ],
 }

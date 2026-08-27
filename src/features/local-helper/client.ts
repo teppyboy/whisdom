@@ -27,9 +27,35 @@ function validOpaqueId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && !/[\\/]/.test(value)
 }
 
-function parseModel(value: unknown): HelperModel | null {
+const HELPER_ENGINES = new Set([
+  "whisper.cpp",
+  "sherpa-onnx",
+  "nemo-speech.cpp",
+])
+const HELPER_BACKENDS = new Set(["cpu", "directml", "vulkan", "unavailable"])
+const LANGUAGE_CODE = /^[a-z]{2,3}$/
+
+type LegacyWhisperDefaults = {
+  engine: "whisper.cpp"
+  activeBackend: HelperModel["active_backend"]
+}
+
+function parseModel(
+  value: unknown,
+  legacy: LegacyWhisperDefaults | null
+): HelperModel | null {
   if (!isPlainObject(value)) return null
-  const { id, label, quality, size_bytes: sizeBytes, installed } = value
+  const {
+    id,
+    label,
+    quality,
+    size_bytes: sizeBytes,
+    installed,
+    engine = legacy?.engine,
+    supported_languages: supportedLanguages = legacy ? ["*"] : undefined,
+    supports_auto_language: supportsAutoLanguage = legacy ? true : undefined,
+    active_backend: activeBackend = legacy?.activeBackend,
+  } = value
   if (
     !validOpaqueId(id) ||
     typeof label !== "string" ||
@@ -40,17 +66,37 @@ function parseModel(value: unknown): HelperModel | null {
     typeof sizeBytes !== "number" ||
     !Number.isSafeInteger(sizeBytes) ||
     sizeBytes < 0 ||
-    typeof installed !== "boolean"
+    typeof installed !== "boolean" ||
+    typeof engine !== "string" ||
+    !HELPER_ENGINES.has(engine) ||
+    !Array.isArray(supportedLanguages) ||
+    supportedLanguages.length === 0 ||
+    supportedLanguages.length > 32 ||
+    supportedLanguages.some((language) => typeof language !== "string") ||
+    supportedLanguages.some(
+      (language) => language !== "*" && !LANGUAGE_CODE.test(language)
+    ) ||
+    new Set(supportedLanguages).size !== supportedLanguages.length ||
+    typeof supportsAutoLanguage !== "boolean" ||
+    typeof activeBackend !== "string" ||
+    !HELPER_BACKENDS.has(activeBackend)
   )
     return null
-  return { id, label, quality, size_bytes: sizeBytes, installed }
+  return {
+    id,
+    label,
+    quality,
+    size_bytes: sizeBytes,
+    installed,
+    engine: engine as HelperModel["engine"],
+    supported_languages: supportedLanguages as string[],
+    supports_auto_language: supportsAutoLanguage,
+    active_backend: activeBackend as HelperModel["active_backend"],
+  }
 }
 
 function parseCapabilities(value: unknown): HelperCapabilities {
   if (!isPlainObject(value) || !Array.isArray(value.models))
-    throw new Error("Helper returned invalid capabilities.")
-  const models = value.models.map(parseModel)
-  if (models.some((model) => model === null))
     throw new Error("Helper returned invalid capabilities.")
   const {
     available,
@@ -70,6 +116,18 @@ function parseCapabilities(value: unknown): HelperCapabilities {
     typeof ffmpegReady !== "boolean" ||
     typeof nativePicker !== "boolean"
   )
+    throw new Error("Helper returned invalid capabilities.")
+  const legacy =
+    engine === "whisper.cpp" &&
+    (accelerator === "cpu" || accelerator === "vulkan-or-cpu")
+      ? {
+          engine: "whisper.cpp" as const,
+          activeBackend:
+            accelerator === "cpu" ? ("cpu" as const) : ("unavailable" as const),
+        }
+      : null
+  const models = value.models.map((model) => parseModel(model, legacy))
+  if (models.some((model) => model === null))
     throw new Error("Helper returned invalid capabilities.")
   return {
     available,
@@ -128,6 +186,7 @@ function parseProgressStatus(value: unknown): ServerJobStatus | null {
     )
       return null
   }
+  // SAFETY: every accepted field was structurally validated above.
   return value as unknown as ServerJobStatus
 }
 

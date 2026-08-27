@@ -7,9 +7,9 @@ use tokio::sync::{broadcast, Mutex};
 use super::auth::HelperAuth;
 use super::cache::HelperCache;
 use super::config::HelperConfig;
+use super::engine::SharedRuntime;
 use super::protocol::{HelperError, JobStatus};
 use super::selection::SelectionStore;
-use super::transcribe::SharedModel;
 
 pub type NativeFilePicker =
     Arc<dyn Fn() -> BoxFuture<'static, Result<Vec<std::path::PathBuf>, HelperError>> + Send + Sync>;
@@ -20,7 +20,7 @@ pub struct HelperState {
     pub auth: HelperAuth,
     pub cache: HelperCache,
     pub queue: HelperQueue,
-    pub model: SharedModel,
+    pub runtime: SharedRuntime,
     pub selections: SelectionStore,
     pub native_file_picker: Option<NativeFilePicker>,
 }

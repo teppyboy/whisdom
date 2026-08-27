@@ -19,3 +19,5 @@ tracing = "0.1"
 [features]
 default = []
 vulkan = ["whisdom-server/vulkan"]
+# Requires SHERPA_ONNX_LIB_DIR to point to a custom Windows DirectML build.
+directml = ["whisdom-server/directml"]
