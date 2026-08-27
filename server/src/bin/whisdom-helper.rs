@@ -23,6 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model: SharedModel::default(),
         selections: SelectionStore::default(),
         native_file_picker: None,
+        update_check: None,
+        update_install: None,
     });
 
     let _log_guard: HelperLogGuard = helper::logging::init(&state.config)?;

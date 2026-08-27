@@ -110,33 +110,45 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Companion
-        working-directory: companion/src-tauri
-        run: cargo build --release
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
 
-      - name: Verify Companion executable
-        shell: pwsh
-        run: Get-Item companion/src-tauri/target/release/whisdom-companion.exe
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      - name: Move latest release tag
+      - name: Set Companion release version
         shell: pwsh
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f companion-latest "${{ github.sha }}"
-          git push --force origin refs/tags/companion-latest
+          $config = Get-Content companion/src-tauri/tauri.conf.json |
+            ConvertFrom-Json
+          $config.version = "0.0.${{ github.run_number }}"
+          $config |
+            ConvertTo-Json -Depth 20 |
+            Set-Content companion/src-tauri/tauri.conf.json
 
-      - name: Publish Companion executable
-        uses: softprops/action-gh-release@v2
+      - name: Build and publish Companion updater
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: >-
+            ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tag_name: companion-latest
-          name: Whisdom Companion (latest)
-          body: Built from ${{ github.sha }}.
-          files: companion/src-tauri/target/release/whisdom-companion.exe
-          fail_on_unmatched_files: true
-          overwrite_files: true
-          make_latest: true
+          projectPath: companion
+          tauriScript: pnpm exec tauri
+          tagName: companion-v__VERSION__
+          releaseName: Whisdom Companion v__VERSION__
+          releaseBody: Signed Windows installer and updater artifacts.
+          releaseDraft: false
+          prerelease: false
+          updaterJsonPreferNsis: true
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          args: --target x86_64-pc-windows-msvc
+          retryAttempts: 3
 
   deploy:
     name: Deploy GitHub Pages

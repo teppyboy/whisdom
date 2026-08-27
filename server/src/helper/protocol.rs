@@ -16,6 +16,8 @@ pub enum HelperError {
     NotFound,
     #[error("helper bad request: {0}")]
     BadRequest(String),
+    #[error("helper update failed: {0}")]
+    Update(String),
     #[error("helper I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("helper serialization error: {0}")]
@@ -29,7 +31,9 @@ impl IntoResponse for HelperError {
             Self::Busy => StatusCode::CONFLICT,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) | Self::Config(_) => StatusCode::BAD_REQUEST,
-            Self::Io(_) | Self::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Update(_) | Self::Io(_) | Self::Serialization(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         let message = self.to_string();
         (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
@@ -41,6 +45,11 @@ pub struct HealthResponse {
     pub available: bool,
     pub protocol_version: u32,
     pub busy: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateResponse {
+    pub update: Option<super::state::HelperUpdateInfo>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct PairResponse {

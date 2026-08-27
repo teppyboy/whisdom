@@ -43,6 +43,10 @@ If `CARGO_TARGET_DIR` is set, use the corresponding executable under that target
 
 The release executable is the same path under `release` after a non-debug build.
 
+## Updates
+
+When Desktop Companion is paired with Whisdom, the web app can check for a new signed release and start the update. The Companion downloads the signed NSIS updater, verifies its signature, installs it, then Windows relaunches the updated app. Updates require the release signing key configured in CI as `TAURI_SIGNING_PRIVATE_KEY`; never commit that key.
+
 ## Run and configuration
 
 The Companion runs without a main window and exposes the loopback API at:

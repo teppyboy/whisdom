@@ -75,6 +75,43 @@ describe("LocalHelperClient", () => {
     )
   })
 
+  it("checks for and installs a Companion update", async () => {
+    localStorage.setItem("whisdom.local-helper.token.v1", "local-token")
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            update: { version: "0.0.2", body: "Bug fixes" },
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            update: { version: "0.0.2", body: "Bug fixes" },
+          })
+        )
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+    await expect(client.checkForUpdate()).resolves.toEqual({
+      version: "0.0.2",
+      body: "Bug fixes",
+    })
+    await expect(client.installUpdate()).resolves.toEqual({
+      version: "0.0.2",
+      body: "Bug fixes",
+    })
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "http://127.0.0.1:8788/api/v1/update"
+    )
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      "http://127.0.0.1:8788/api/v1/update/install"
+    )
+  })
+
   it("rejects malformed native model capabilities", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(mockHealth())
@@ -316,5 +353,4 @@ describe("LocalHelperClient", () => {
       })
     )
   })
-
 })

@@ -62,6 +62,7 @@ src/wasm/.omo/
 
 # Rust server artifacts and diagnostics
 /server/target/
+/companion/src-tauri/target/
 /server/models/
 /server/tmp/
 /server/check.*

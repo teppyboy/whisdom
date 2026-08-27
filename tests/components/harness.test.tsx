@@ -125,7 +125,10 @@ describe("component harness", () => {
     ).toBeVisible()
     expect(
       screen.getByRole("link", { name: "Get Desktop Companion" })
-    ).toHaveAttribute("href", "https://github.com/teppyboy/whisdom/releases")
+    ).toHaveAttribute(
+      "href",
+      "https://github.com/teppyboy/whisdom/releases/latest"
+    )
   })
 
   it("renders the native picker labels instead of browser drop copy", async () => {

@@ -8,6 +8,7 @@ import type {
   HelperModel,
   HelperPairResponse,
   HelperSelection,
+  HelperUpdate,
 } from "./types"
 import type { ServerJobStatus } from "@/features/server-transcription/types"
 
@@ -128,6 +129,7 @@ function parseProgressStatus(value: unknown): ServerJobStatus | null {
     )
       return null
   }
+  // SAFETY: all fields required by ServerJobStatus are validated above.
   return value as unknown as ServerJobStatus
 }
 
@@ -211,6 +213,48 @@ export class LocalHelperClient {
       { method: "GET", headers: this.authHeaders() }
     )
     return parseCapabilities(data)
+  }
+
+  async checkForUpdate(): Promise<HelperUpdate | null> {
+    const baseUrl = await this.requireBaseUrl()
+    const data = await this.request<unknown>(`${baseUrl}${API_PREFIX}/update`, {
+      method: "GET",
+      headers: this.authHeaders(),
+    })
+    if (
+      !isPlainObject(data) ||
+      (data.update !== null && !isPlainObject(data.update))
+    )
+      throw new Error("Helper returned invalid update information.")
+    if (data.update === null) return null
+    if (
+      typeof data.update.version !== "string" ||
+      (data.update.body !== null && typeof data.update.body !== "string")
+    )
+      throw new Error("Helper returned invalid update information.")
+    // SAFETY: the update object shape is validated immediately above.
+    return data.update as unknown as HelperUpdate
+  }
+
+  async installUpdate(): Promise<HelperUpdate | null> {
+    const baseUrl = await this.requireBaseUrl()
+    const data = await this.request<unknown>(
+      `${baseUrl}${API_PREFIX}/update/install`,
+      { method: "POST", headers: this.authHeaders() }
+    )
+    if (
+      !isPlainObject(data) ||
+      (data.update !== null && !isPlainObject(data.update))
+    )
+      throw new Error("Helper returned invalid update information.")
+    if (data.update === null) return null
+    if (
+      typeof data.update.version !== "string" ||
+      (data.update.body !== null && typeof data.update.body !== "string")
+    )
+      throw new Error("Helper returned invalid update information.")
+    // SAFETY: the update object shape is validated immediately above.
+    return data.update as unknown as HelperUpdate
   }
 
   async selectFiles(): Promise<HelperSelection[]> {

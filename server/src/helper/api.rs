@@ -17,7 +17,7 @@ use super::models::{default_native_model, find_native_model, native_models};
 use super::protocol::{
     CapabilitiesResponse, HealthResponse, HelperError, NativeModelResponse,
     NativeSelectionResponse, PairResponse, SelectFilesResponse, StartSelectionRequest,
-    StartSelectionResponse, PROTOCOL_VERSION,
+    StartSelectionResponse, UpdateResponse, PROTOCOL_VERSION,
 };
 use super::runtime;
 use super::state::HelperState;
@@ -32,6 +32,8 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/api/capabilities", get(capabilities))
         .route("/api/cache/status", get(cache_status))
         .route("/api/cache/clear", post(cache_clear))
+        .route("/api/update", get(update_check))
+        .route("/api/update/install", post(update_install))
         .route(
             "/api/transcribe",
             post(transcribe).layer(DefaultBodyLimit::max(multipart_limit)),
@@ -43,6 +45,8 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/cache/status", get(cache_status))
         .route("/api/v1/cache/clear", post(cache_clear))
+        .route("/api/v1/update", get(update_check))
+        .route("/api/v1/update/install", post(update_install))
         .route(
             "/api/v1/transcribe",
             post(transcribe).layer(DefaultBodyLimit::max(multipart_limit)),
@@ -57,6 +61,8 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/cache/status", get(cache_status))
         .route("/v1/cache/clear", post(cache_clear))
+        .route("/v1/update", get(update_check))
+        .route("/v1/update/install", post(update_install))
         .route(
             "/v1/transcribe",
             post(transcribe).layer(DefaultBodyLimit::max(multipart_limit)),
@@ -162,6 +168,51 @@ async fn cache_clear(
 ) -> Result<axum::Json<super::cache::CacheClearResult>, HelperError> {
     state.auth.authorize(&headers).await?;
     Ok(axum::Json(state.cache.clear(&state.model).await?))
+}
+
+async fn update_check(
+    State(state): State<Arc<HelperState>>,
+    headers: HeaderMap,
+) -> Result<axum::Json<UpdateResponse>, HelperError> {
+    state.auth.authorize(&headers).await?;
+    let check = state
+        .update_check
+        .as_ref()
+        .ok_or(HelperError::NotFound)?
+        .clone();
+    Ok(axum::Json(UpdateResponse {
+        update: check().await?,
+    }))
+}
+
+async fn update_install(
+    State(state): State<Arc<HelperState>>,
+    headers: HeaderMap,
+) -> Result<axum::Json<UpdateResponse>, HelperError> {
+    state.auth.authorize(&headers).await?;
+    if state.cache.is_busy() {
+        return Err(HelperError::Busy);
+    }
+    let check = state
+        .update_check
+        .as_ref()
+        .ok_or(HelperError::NotFound)?
+        .clone();
+    let update = check().await?;
+    if update.is_some() {
+        let install = state
+            .update_install
+            .as_ref()
+            .ok_or(HelperError::NotFound)?
+            .clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if let Err(error) = install().await {
+                tracing::error!(error = %error, "companion update installation failed");
+            }
+        });
+    }
+    Ok(axum::Json(UpdateResponse { update }))
 }
 
 async fn select_files(
@@ -440,6 +491,8 @@ mod tests {
             model: SharedModel::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(picker),
+            update_check: None,
+            update_install: None,
         });
         let app = router(state);
         let response = app
@@ -473,6 +526,87 @@ mod tests {
             .header("content-type", "application/json")
             .body(body)
             .expect("request")
+    }
+
+    #[tokio::test]
+    async fn update_endpoints_require_update_hooks() {
+        let media = tempfile::NamedTempFile::new().expect("test media");
+        let (app, token) = paired_router(media.path().to_owned()).await;
+        let response = app
+            .oneshot(request("GET", "/api/v1/update", &token, Body::empty()))
+            .await
+            .expect("update response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn update_endpoint_returns_hook_result() {
+        let media = tempfile::NamedTempFile::new().expect("test media");
+        let directory = tempfile::tempdir().expect("temporary companion root");
+        let config = HelperConfig {
+            port: 8788,
+            allowed_origins: vec!["https://whisdom.app".into()],
+            root: directory.keep(),
+            ffmpeg_url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/x/file.zip".into(),
+            ffmpeg_sha256: "a".repeat(64),
+            ffmpeg_exe_sha256: "b".repeat(64),
+            max_download_bytes: 1024,
+            max_upload_bytes: 1024,
+        };
+        config.create_dirs().await.expect("cache directories");
+        let auth = HelperAuth::load(&config).await.expect("auth");
+        let update_check: crate::helper::state::UpdateCheck = Arc::new(|| {
+            Box::pin(async {
+                Ok(Some(crate::helper::state::HelperUpdateInfo {
+                    version: "0.0.2".into(),
+                    body: Some("Bug fixes".into()),
+                }))
+            })
+        });
+        let state = Arc::new(HelperState {
+            cache: HelperCache::new(config.clone()),
+            config,
+            auth,
+            queue: HelperQueue::default(),
+            model: SharedModel::default(),
+            selections: SelectionStore::default(),
+            native_file_picker: None,
+            update_check: Some(update_check),
+            update_install: None,
+        });
+        let app = router(state);
+        let pair = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/pair")
+                    .header("origin", "https://whisdom.app")
+                    .body(Body::empty())
+                    .expect("pair request"),
+            )
+            .await
+            .expect("pair response");
+        let body = to_bytes(pair.into_body(), usize::MAX)
+            .await
+            .expect("pair body");
+        let token = serde_json::from_slice::<serde_json::Value>(&body).expect("pair JSON")["token"]
+            .as_str()
+            .expect("pair token")
+            .to_owned();
+        let response = app
+            .oneshot(request("GET", "/api/v1/update", &token, Body::empty()))
+            .await
+            .expect("update response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("update body");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("update JSON"),
+            serde_json::json!({"update": {"version": "0.0.2", "body": "Bug fixes"}})
+        );
+        let _ = media;
     }
 
     #[tokio::test]

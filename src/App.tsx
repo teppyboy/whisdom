@@ -121,6 +121,7 @@ import type {
   HelperCapabilities,
   HelperHealth,
   HelperModel,
+  HelperUpdate,
 } from "@/features/local-helper/types"
 import { ServerTranscriptionApi } from "@/features/server-transcription/api"
 import type {
@@ -168,7 +169,8 @@ const MODES: Array<{ value: ProcessingMode; label: string; detail: string }> = [
 ]
 
 const EXPORTS: ExportFormat[] = ["txt", "json", "srt", "vtt"]
-const COMPANION_RELEASES_URL = "https://github.com/teppyboy/whisdom/releases"
+const COMPANION_RELEASES_URL =
+  "https://github.com/teppyboy/whisdom/releases/latest"
 
 type View = "home" | "settings"
 type CompanionHealthState = HelperHealth | "checking" | null
@@ -273,6 +275,14 @@ const COPY = {
     companionUnavailableDescription:
       "Open the Windows app, or get it from the latest release.",
     downloadCompanion: "Get Desktop Companion",
+    companionUpdateAvailable: (version: string) =>
+      `Desktop Companion update ${version} is ready`,
+    updateCompanion: "Update Companion",
+    updatingCompanion: "Updating Companion…",
+    companionUpdateFailed: "Could not update Desktop Companion.",
+    checkCompanion: "Check for updates",
+    checkingCompanion: "Checking for updates…",
+    companionUpToDate: "Desktop Companion is up to date.",
     companionPreflight:
       "Windows files show their name and size. Duration and chunk estimates appear after transcription starts.",
     companionPickerTitle: "Choose files in Windows",
@@ -499,6 +509,14 @@ const COPY = {
     companionUnavailableDescription:
       "Mở ứng dụng Windows hoặc tải từ bản phát hành mới nhất.",
     downloadCompanion: "Tải Desktop Companion",
+    companionUpdateAvailable: (version: string) =>
+      `Đã có bản cập nhật Desktop Companion ${version}`,
+    updateCompanion: "Cập nhật Companion",
+    updatingCompanion: "Đang cập nhật Companion…",
+    companionUpdateFailed: "Không thể cập nhật Desktop Companion.",
+    checkCompanion: "Kiểm tra bản cập nhật",
+    checkingCompanion: "Đang kiểm tra bản cập nhật…",
+    companionUpToDate: "Desktop Companion đang ở phiên bản mới nhất.",
     companionPreflight:
       "Tệp từ Windows hiển thị tên và dung lượng. Thời lượng và số đoạn sẽ có khi bắt đầu chuyển ngữ.",
     companionPickerTitle: "Chọn tệp trong Windows",
@@ -816,6 +834,11 @@ export function App() {
   const [companionHealth, setCompanionHealth] =
     React.useState<CompanionHealthState>("checking")
   const [companionModelId, setCompanionModelId] = React.useState("")
+  const [companionUpdate, setCompanionUpdate] =
+    React.useState<HelperUpdate | null>(null)
+  const [companionUpdating, setCompanionUpdating] = React.useState(false)
+  const [companionCheckingUpdate, setCompanionCheckingUpdate] =
+    React.useState(false)
   const [selectedQueueId, setSelectedQueueId] = React.useState<string | null>(
     null
   )
@@ -1014,6 +1037,12 @@ export function App() {
             ? { available: true, protocol_version: 1, busy: false }
             : current
         )
+        void localHelperClient
+          .checkForUpdate()
+          .then((update) => {
+            if (!cancelled) setCompanionUpdate(update)
+          })
+          .catch(() => undefined)
         setCompanionModelId((current) =>
           capabilities.models.some((model) => model.id === current)
             ? current
@@ -2267,7 +2296,48 @@ export function App() {
                 serverCapabilities={activeServerCapabilities}
                 helperCapabilities={helperCapabilities}
                 companionHealth={companionHealth}
-                storageActionsDisabled={isBusy(jobState)}
+                companionUpdate={companionUpdate}
+                companionUpdating={companionUpdating}
+                companionCheckingUpdate={companionCheckingUpdate}
+                onCheckCompanion={() => {
+                  setCompanionCheckingUpdate(true)
+                  void localHelperClient
+                    .checkForUpdate()
+                    .then((update) => setCompanionUpdate(update))
+                    .catch(() => {
+                      setToastMessage({
+                        id: createId("toast"),
+                        title: t.transcriptionFailed,
+                        description: t.companionUpdateFailed,
+                        kind: "error",
+                      })
+                    })
+                    .finally(() => setCompanionCheckingUpdate(false))
+                }}
+                onUpdateCompanion={() => {
+                  setCompanionUpdating(true)
+                  void localHelperClient
+                    .installUpdate()
+                    .then((update) => {
+                      if (!update) {
+                        setToastMessage({
+                          id: createId("toast"),
+                          title: t.companionTitle,
+                          description: t.companionUpToDate,
+                        })
+                      }
+                    })
+                    .catch(() => {
+                      setToastMessage({
+                        id: createId("toast"),
+                        title: t.transcriptionFailed,
+                        description: t.companionUpdateFailed,
+                        kind: "error",
+                      })
+                    })
+                    .finally(() => setCompanionUpdating(false))
+                }}
+                storageActionsDisabled={isBusy(jobState) || companionUpdating}
                 companionModelId={companionModelId}
                 onCompanionModelChange={setCompanionModelId}
               />
@@ -2468,6 +2538,11 @@ function MainControls({
   serverCapabilities,
   helperCapabilities,
   companionHealth,
+  companionUpdate,
+  companionUpdating,
+  companionCheckingUpdate,
+  onCheckCompanion,
+  onUpdateCompanion,
   storageActionsDisabled,
   companionModelId,
   onCompanionModelChange,
@@ -2483,6 +2558,11 @@ function MainControls({
   serverCapabilities: ServerCapabilitiesState
   helperCapabilities: HelperCapabilities | null
   companionHealth: CompanionHealthState
+  companionUpdate: HelperUpdate | null
+  companionUpdating: boolean
+  companionCheckingUpdate: boolean
+  onCheckCompanion: () => void
+  onUpdateCompanion: () => void
   storageActionsDisabled: boolean
   companionModelId: string
   onCompanionModelChange: (id: string) => void
@@ -2564,6 +2644,33 @@ function MainControls({
                   >
                     {copy.downloadCompanion}
                   </a>
+                </>
+              ) : null}
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={onCheckCompanion}
+                disabled={companionCheckingUpdate || companionUpdating}
+              >
+                {companionCheckingUpdate
+                  ? copy.checkingCompanion
+                  : copy.checkCompanion}
+              </Button>
+              {companionUpdate ? (
+                <>
+                  <span className="text-muted-foreground">
+                    {copy.companionUpdateAvailable(companionUpdate.version)}
+                  </span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={onUpdateCompanion}
+                    disabled={companionUpdating || companionCheckingUpdate}
+                  >
+                    {companionUpdating
+                      ? copy.updatingCompanion
+                      : copy.updateCompanion}
+                  </Button>
                 </>
               ) : null}
             </div>
