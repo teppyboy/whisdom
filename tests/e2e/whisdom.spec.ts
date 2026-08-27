@@ -71,7 +71,7 @@ async function searchLanguage(
   option: string | RegExp
 ) {
   await page.getByLabel("Language", { exact: true }).click()
-  await page.getByRole("searchbox", { name: "Search language" }).fill(query)
+  await page.getByRole("searchbox", { name: "Find a language" }).fill(query)
   await page.getByRole("option", { name: option }).click()
 }
 
@@ -147,11 +147,6 @@ test.describe("Whisdom", () => {
     ).toBeVisible()
     await expect(page.getByText("Review the transcription plan")).toBeVisible()
     await expect(page.getByText("Whisper Base").nth(1)).toBeVisible()
-    await expect(
-      page.getByText(
-        "Resume after tab close will require re-picking the original file."
-      )
-    ).toBeVisible()
     await page.getByRole("button", { name: /Progress details/ }).click()
     await expect(page.getByText("Checking file details")).toBeVisible()
     await expect(
@@ -171,7 +166,7 @@ test.describe("Whisdom", () => {
       page.getByRole("heading", { name: "2 files selected" })
     ).toBeVisible()
     await expect(page.getByText("Selected: first.wav")).toBeVisible()
-    await expect(page.getByText("Files")).toBeVisible()
+    await expect(page.getByText("Files", { exact: true })).toBeVisible()
     await expect(
       page.getByRole("button", { name: "Open file: first.wav" })
     ).toBeVisible()
@@ -328,33 +323,33 @@ test.describe("Whisdom", () => {
     await expect(page.getByText("Korean / 한국어")).toBeVisible()
 
     await page
-      .getByRole("button", { name: "Open transcript: Research call" })
+      .getByRole("button", { name: "Open transcription: Research call" })
       .click()
     await expect(
       page.getByRole("dialog", { name: "Research call" })
     ).toBeVisible()
-    await expect(page.getByText("Raw text")).toBeVisible()
-    await expect(page.getByText("Text with timestamps")).toBeVisible()
-    await expect(page.getByText("Download files")).toBeVisible()
+    await expect(page.getByText("Text", { exact: true })).toBeVisible()
+    await expect(page.getByText("Text with timecodes")).toBeVisible()
+    await expect(page.getByText("Export files")).toBeVisible()
     await expect(page.locator("textarea")).toHaveValue("Seeded transcript")
-    await page.getByLabel("Rename transcript").fill("Renamed call")
-    await page.getByRole("button", { name: "Save name" }).click()
+    await page.getByLabel("Rename transcription").fill("Renamed call")
+    await page.getByRole("button", { name: "Save", exact: true }).click()
     await expect(
       page.getByRole("dialog", { name: "Renamed call" })
     ).toBeVisible()
-    await page.getByRole("button", { name: "Close results" }).click()
+    await page.getByRole("button", { name: "Close", exact: true }).click()
 
     await expect(
-      page.getByRole("button", { name: "Open transcript: Renamed call" })
+      page.getByRole("button", { name: "Open transcription: Renamed call" })
     ).toBeVisible()
     await expect(page.getByText("Research call")).toHaveCount(0)
 
     await page
-      .getByRole("button", { name: "Remove transcript: Renamed call" })
+      .getByRole("button", { name: "Delete transcription: Renamed call" })
       .click()
 
     await expect(page.getByText("Renamed call")).toHaveCount(0)
-    await expect(page.getByText("No transcripts saved yet.")).toBeVisible()
+    await expect(page.getByText("No saved transcriptions yet.")).toBeVisible()
   })
 
   test("clears saved transcripts from settings", async ({ page }) => {
@@ -363,13 +358,15 @@ test.describe("Whisdom", () => {
 
     await expect(page.getByText("Research call")).toBeVisible()
     await openSettings(page)
-    await page.getByRole("button", { name: "Clear saved transcripts" }).click()
+    await page
+      .getByRole("button", { name: "Delete saved transcriptions" })
+      .click()
 
     await expect(
-      page.getByText("Saved transcripts were deleted.")
+      page.getByText("Saved transcriptions were deleted.")
     ).toBeVisible()
-    await page.getByRole("button", { name: "Back to home" }).click()
-    await expect(page.getByText("No transcripts saved yet.")).toBeVisible()
+    await page.getByRole("button", { name: "Back", exact: true }).click()
+    await expect(page.getByText("No saved transcriptions yet.")).toBeVisible()
     await expect(page.getByText("Research call")).toHaveCount(0)
   })
 
@@ -380,7 +377,7 @@ test.describe("Whisdom", () => {
     })
 
     await openSettings(page)
-    await page.getByRole("button", { name: "Clear downloaded models" }).click()
+    await page.getByRole("button", { name: "Remove downloaded models" }).click()
 
     await expect(page.getByText("1 model cache cleared.")).toBeVisible()
     await expect

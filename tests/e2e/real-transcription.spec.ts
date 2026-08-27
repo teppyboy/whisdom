@@ -76,7 +76,7 @@ async function selectLanguage(
   option: string | RegExp
 ) {
   await page.getByLabel("Language", { exact: true }).click()
-  await page.getByRole("searchbox", { name: "Search language" }).fill(query)
+  await page.getByRole("searchbox", { name: "Find a language" }).fill(query)
   await page.getByRole("option", { name: option }).click()
 }
 
