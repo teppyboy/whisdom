@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
@@ -71,7 +71,7 @@ describe("component harness", () => {
     expect(indexedDB).toBeDefined()
   })
 
-  it("shows Desktop Companion availability on the main page", async () => {
+  it("shows Desktop Companion availability and a clear model description", async () => {
     await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
     vi.spyOn(localHelperClient, "discover").mockResolvedValue(health)
     vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
@@ -79,6 +79,36 @@ describe("component harness", () => {
     renderCompanion()
 
     expect(await screen.findByText("Desktop Companion is ready")).toBeVisible()
+    expect(
+      screen.getByText(
+        "High accuracy with faster processing than full Large v3. Download: about 548 MB."
+      )
+    ).toBeVisible()
+    expect(screen.queryByText(/high -/i)).not.toBeInTheDocument()
+  })
+
+  it("refreshes Desktop Companion health every second and stops after unmount", async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const discover = vi
+      .spyOn(localHelperClient, "discover")
+      .mockResolvedValue(health)
+    vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
+
+    const { unmount } = renderCompanion()
+    await screen.findByText("Desktop Companion is ready")
+    const initialCalls = discover.mock.calls.length
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(discover).toHaveBeenCalledTimes(initialCalls + 1)
+
+    unmount()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(discover).toHaveBeenCalledTimes(initialCalls + 1)
+    vi.useRealTimers()
   })
 
   it("links to Releases when Desktop Companion is unavailable", async () => {

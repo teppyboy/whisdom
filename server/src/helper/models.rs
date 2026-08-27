@@ -16,7 +16,7 @@ pub struct NativeModel {
     pub sha256: &'static str,
 }
 
-const NATIVE_MODELS: [NativeModel; 4] = [
+const NATIVE_MODELS: [NativeModel; 5] = [
     NativeModel {
         id: "ggml-tiny-q5_1",
         label: "Whisper Tiny",
@@ -52,6 +52,15 @@ const NATIVE_MODELS: [NativeModel; 4] = [
         filename: "ggml-large-v3-turbo-q5_0.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin?download=true",
         sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+    },
+    NativeModel {
+        id: "ggml-large-v3-q5_0",
+        label: "Whisper Large v3",
+        quality: "best",
+        size_bytes: 1_081_140_203,
+        filename: "ggml-large-v3-q5_0.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-q5_0.bin?download=true",
+        sha256: "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
     },
 ];
 
@@ -106,6 +115,14 @@ mod tests {
                 574_041_195,
                 "ggml-large-v3-turbo-q5_0.bin",
                 "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+            ),
+            (
+                "ggml-large-v3-q5_0",
+                "Whisper Large v3",
+                "best",
+                1_081_140_203,
+                "ggml-large-v3-q5_0.bin",
+                "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
             ),
         ];
 

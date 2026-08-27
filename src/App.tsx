@@ -120,6 +120,7 @@ import { normalizeHelperProgress } from "@/features/local-helper/progress"
 import type {
   HelperCapabilities,
   HelperHealth,
+  HelperModel,
 } from "@/features/local-helper/types"
 import { ServerTranscriptionApi } from "@/features/server-transcription/api"
 import type {
@@ -281,7 +282,16 @@ const COPY = {
     moveFileUp: "Move up",
     moveFileDown: "Move down",
     companionModelDescription:
-      "Whisper Large v3 Turbo runs in Desktop Companion with Vulkan or CPU acceleration. Download: about 574 MB.",
+      "Choose a model to see its speed, accuracy, and download size.",
+    companionModelDescriptions: {
+      "ggml-tiny-q5_1": "Fastest option for quick drafts.",
+      "ggml-base-q5_1": "Good balance of speed and accuracy.",
+      "ggml-small-q5_1": "More accurate, with a slower download.",
+      "ggml-large-v3-turbo-q5_0":
+        "High accuracy with faster processing than full Large v3.",
+      "ggml-large-v3-q5_0":
+        "Best accuracy. Largest download and slowest processing.",
+    } satisfies Record<string, string>,
     serverUnavailable: "Server is unavailable",
     serverModelsUnavailable:
       "Available server models could not be loaded. Check the server, then try again.",
@@ -498,7 +508,16 @@ const COPY = {
     moveFileUp: "Di chuyển lên",
     moveFileDown: "Di chuyển xuống",
     companionModelDescription:
-      "Whisper Large v3 Turbo chạy trong Desktop Companion bằng Vulkan hoặc CPU. Cần tải khoảng 574 MB.",
+      "Chọn mô hình để xem tốc độ, độ chính xác và dung lượng cần tải.",
+    companionModelDescriptions: {
+      "ggml-tiny-q5_1": "Nhanh nhất, phù hợp bản nháp nhanh.",
+      "ggml-base-q5_1": "Cân bằng tốt giữa tốc độ và độ chính xác.",
+      "ggml-small-q5_1": "Chính xác hơn, nhưng tải xuống chậm hơn.",
+      "ggml-large-v3-turbo-q5_0":
+        "Độ chính xác cao, xử lý nhanh hơn Large v3 đầy đủ.",
+      "ggml-large-v3-q5_0":
+        "Độ chính xác cao nhất. Cần tải nhiều nhất và xử lý chậm nhất.",
+    } satisfies Record<string, string>,
     serverUnavailable: "Máy chủ hiện không khả dụng",
     serverModelsUnavailable:
       "Không tải được các mô hình trên máy chủ. Kiểm tra máy chủ rồi thử lại.",
@@ -673,6 +692,16 @@ const COPY = {
 } as const
 
 type Copy = (typeof COPY)[UiLanguage]
+
+function companionModelDetails(model: HelperModel, copy: Copy) {
+  const description =
+    (copy.companionModelDescriptions as Record<string, string>)[model.id] ??
+    model.label
+  return copy.downloadDescription(
+    description,
+    Math.ceil(model.size_bytes / (1024 * 1024))
+  )
+}
 
 function getDriveStatusText(status: DriveStatus, copy: Copy) {
   switch (status.type) {
@@ -955,12 +984,20 @@ export function App() {
   }, [activeServerCapabilities])
 
   React.useEffect(() => {
+    if (settings.mode !== "local-helper") return
     let cancelled = false
-    void localHelperClient.discover().then((health) => {
-      if (!cancelled) setCompanionHealth(health)
-    })
+    const refresh = () => {
+      void localHelperClient.discover().then((health) => {
+        if (!cancelled) setCompanionHealth(health)
+      })
+    }
+    refresh()
+    const interval = window.setInterval(refresh, 1000)
+    window.addEventListener("focus", refresh)
     return () => {
       cancelled = true
+      window.clearInterval(interval)
+      window.removeEventListener("focus", refresh)
     }
   }, [settings.mode])
 
@@ -2557,19 +2594,12 @@ function MainControls({
                 (item) => item.id === companionModelId
               ) ? (
                 <p className="text-xs leading-5 text-muted-foreground">
-                  {
+                  {companionModelDetails(
                     helperCapabilities.models.find(
                       (item) => item.id === companionModelId
-                    )?.quality
-                  }{" "}
-                  - ~
-                  {Math.ceil(
-                    (helperCapabilities.models.find(
-                      (item) => item.id === companionModelId
-                    )?.size_bytes ?? 0) /
-                      (1024 * 1024)
-                  )}{" "}
-                  MB
+                    )!,
+                    copy
+                  )}
                 </p>
               ) : (
                 <p className="text-xs leading-5 text-muted-foreground">
