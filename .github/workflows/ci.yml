@@ -92,6 +92,10 @@ jobs:
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y cmake ffmpeg
 
+      - name: Refresh Sherpa-ONNX prebuilt libraries
+        working-directory: server
+        run: rm -rf target
+
       - name: Build server
         working-directory: server
         run: cargo build --release
