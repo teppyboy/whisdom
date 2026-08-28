@@ -31,14 +31,25 @@ try {
     Pop-Location
 }
 
-$binary = Join-Path $TargetDir "release\whisdom-companion.exe"
+$releaseDir = Join-Path $TargetDir "release"
+$binary = Join-Path $releaseDir "whisdom-companion.exe"
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
     throw "Built companion binary not found: $binary"
 }
 
+$runtimeDlls = @(Get-ChildItem -LiteralPath $releaseDir -Filter "*.dll" -File)
+if (-not ($runtimeDlls.Name -contains "sherpa-onnx-c-api.dll")) {
+    throw "Required sherpa runtime DLL not found: $(Join-Path $releaseDir 'sherpa-onnx-c-api.dll')"
+}
+
 Copy-Item -LiteralPath $binary -Destination $destination -Force
+foreach ($dll in $runtimeDlls) {
+    Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path (Split-Path -Parent $destination) $dll.Name) -Force
+}
+
 $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
 $item = Get-Item -LiteralPath $destination
 Write-Output "Copied: $($item.FullName)"
 Write-Output "Size: $($item.Length) bytes"
 Write-Output "SHA-256: $hash"
+Write-Output "Runtime DLLs: $($runtimeDlls.Name -join ', ')"
