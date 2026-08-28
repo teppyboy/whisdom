@@ -114,6 +114,37 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.4.357.0
+          destination: C:\VulkanSDK
+          install_runtime: true
+          cache: true
+
+      - name: Verify Vulkan SDK
+        shell: pwsh
+        run: |
+          if (-not $env:VULKAN_SDK) {
+            throw "VULKAN_SDK was not exported by the Vulkan SDK action"
+          }
+          $required = @(
+            (Join-Path $env:VULKAN_SDK "Include\vulkan\vulkan.h"),
+            (Join-Path $env:VULKAN_SDK "Lib\vulkan-1.lib"),
+            (Join-Path $env:VULKAN_SDK "Bin\glslc.exe")
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Vulkan SDK file not found: $path"
+            }
+          }
+          Write-Output "VULKAN_SDK=$env:VULKAN_SDK"
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -146,7 +177,8 @@ jobs:
           $targetRoot = "companion/src-tauri/target"
           $releaseDir = Join-Path $targetRoot "$target/release"
           cargo build --release --target $target `
-            --target-dir $targetRoot --manifest-path $manifest
+            --target-dir $targetRoot --manifest-path $manifest `
+            --features vulkan
           $requiredDll = Join-Path $releaseDir "sherpa-onnx-c-api.dll"
           if (-not (Test-Path -LiteralPath $requiredDll -PathType Leaf)) {
             throw "Required sherpa runtime DLL not found: $requiredDll"
@@ -191,7 +223,7 @@ jobs:
           updaterJsonPreferNsis: true
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
-          args: --target x86_64-pc-windows-msvc
+          args: --target x86_64-pc-windows-msvc --features vulkan
           retryAttempts: 3
 
       - name: Package portable Companion ZIP
