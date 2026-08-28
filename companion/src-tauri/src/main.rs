@@ -12,10 +12,10 @@ use whisdom_server::helper;
 use whisdom_server::helper::auth::HelperAuth;
 use whisdom_server::helper::cache::HelperCache;
 use whisdom_server::helper::config::HelperConfig;
+use whisdom_server::helper::engine::SharedRuntime;
 use whisdom_server::helper::logging::{self, HelperLogGuard};
 use whisdom_server::helper::selection::SelectionStore;
 use whisdom_server::helper::state::{HelperQueue, HelperState, NativeFilePicker};
-use whisdom_server::helper::engine::SharedRuntime;
 
 fn ensure_companion_root() {
     if std::env::var_os("WHISDOM_HELPER_ROOT").is_some() {
@@ -157,6 +157,8 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
             runtime: SharedRuntime::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(native_file_picker),
+            update_check: None,
+            update_install: None,
         });
         let log_guard: HelperLogGuard = match logging::init(&state.config) {
             Ok(guard) => guard,
