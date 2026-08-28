@@ -234,10 +234,10 @@ test.describe("Whisdom", () => {
       .getByRole("option", { name: "Whisper Large v3", exact: true })
       .click()
 
-    await expect(page.getByText("q4 browser weights")).toBeVisible()
+    await expect(page.getByText("q4 browser weights").first()).toBeVisible()
 
     await chooseAudio(page)
-    await expect(page.getByText("q4 browser weights")).toBeVisible()
+    await expect(page.getByText("q4 browser weights").last()).toBeVisible()
     await page.getByRole("button", { name: /Start transcription/i }).click()
 
     await expect(page.getByText("needs WebGPU in this browser")).toBeVisible()
