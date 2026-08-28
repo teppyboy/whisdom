@@ -154,6 +154,70 @@ jobs:
           args: --target x86_64-pc-windows-msvc
           retryAttempts: 3
 
+      - name: Package portable Companion ZIP
+        shell: pwsh
+        run: |
+          $targetRoot = Join-Path $env:GITHUB_WORKSPACE `
+            "companion\src-tauri\target"
+          $releaseDirs = @(
+            (Join-Path $targetRoot "x86_64-pc-windows-msvc\release"),
+            (Join-Path $targetRoot "release")
+          )
+          $releaseDir = $releaseDirs |
+            Where-Object {
+              Test-Path (Join-Path $_ "whisdom-companion.exe")
+            } |
+            Select-Object -First 1
+          if (-not $releaseDir) {
+            throw "Built companion release directory not found: $targetRoot"
+          }
+          $stagingDir = Join-Path $env:RUNNER_TEMP `
+            "whisdom-companion-portable"
+          $zip = Join-Path $env:GITHUB_WORKSPACE `
+            "dist\bin\whisdom-companion-portable.zip"
+          Remove-Item -LiteralPath $stagingDir -Recurse -Force `
+            -ErrorAction SilentlyContinue
+          $zipDir = Split-Path -Parent $zip
+          New-Item -ItemType Directory -Force `
+            -Path @($stagingDir, $zipDir) | Out-Null
+
+          $binary = Join-Path $releaseDir "whisdom-companion.exe"
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw "Built companion binary not found: $binary"
+          }
+
+          $runtimeDlls = @(Get-ChildItem -LiteralPath $releaseDir `
+            -Filter "*.dll" -File)
+          $requiredDll = Join-Path $releaseDir "sherpa-onnx-c-api.dll"
+          if (-not ($runtimeDlls.Name -contains "sherpa-onnx-c-api.dll")) {
+            throw "Required sherpa runtime DLL not found: $requiredDll"
+          }
+
+          Copy-Item -LiteralPath $binary -Destination $stagingDir -Force
+          Copy-Item -LiteralPath $runtimeDlls.FullName `
+            -Destination $stagingDir -Force
+          $stagingFiles = Join-Path $stagingDir "*"
+          Compress-Archive -Path $stagingFiles -DestinationPath $zip `
+            -Force
+          Write-Output "Portable package: $zip"
+          Write-Output "Runtime DLLs: $($runtimeDlls.Name -join ', ')"
+
+      - name: Upload portable Companion artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisdom-companion-portable
+          path: dist/bin/whisdom-companion-portable.zip
+          if-no-files-found: error
+
+      - name: Upload portable ZIP to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "companion-v0.0.${{ github.run_number }}" `
+            "dist/bin/whisdom-companion-portable.zip" `
+            --clobber
+
   deploy:
     name: Deploy GitHub Pages
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
