@@ -97,7 +97,10 @@ function parseModel(
 }
 
 function parseUpdate(value: unknown): HelperUpdate | null {
-  if (!isPlainObject(value) || (value.update !== null && !isPlainObject(value.update)))
+  if (
+    !isPlainObject(value) ||
+    (value.update !== null && !isPlainObject(value.update))
+  )
     throw new Error("Helper returned invalid update information.")
   if (value.update === null) return null
   if (

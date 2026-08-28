@@ -1107,8 +1107,8 @@ export function App() {
   const selectedQueueItem = queue.find((item) => item.id === selectedQueueId)
   const companionBackendReady = Boolean(
     selectedCompanionModel &&
-      (selectedCompanionModel.engine === "whisper.cpp" ||
-        selectedCompanionModel.active_backend !== "unavailable")
+    (selectedCompanionModel.engine === "whisper.cpp" ||
+      selectedCompanionModel.active_backend !== "unavailable")
   )
   const companionLanguageReady = Boolean(
     selectedCompanionModel &&
