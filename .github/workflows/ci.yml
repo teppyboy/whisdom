@@ -138,6 +138,30 @@ jobs:
             ConvertTo-Json -Depth 20 |
             Set-Content companion/src-tauri/tauri.conf.json
 
+      - name: Prepare Companion runtime DLLs
+        shell: pwsh
+        run: |
+          $target = "x86_64-pc-windows-msvc"
+          $manifest = "companion/src-tauri/Cargo.toml"
+          $targetRoot = "companion/src-tauri/target"
+          $releaseDir = Join-Path $targetRoot "$target/release"
+          cargo build --release --target $target --manifest-path $manifest
+          $requiredDll = Join-Path $releaseDir "sherpa-onnx-c-api.dll"
+          if (-not (Test-Path -LiteralPath $requiredDll -PathType Leaf)) {
+            throw "Required sherpa runtime DLL not found: $requiredDll"
+          }
+          $runtimeDlls = @(Get-ChildItem -LiteralPath $releaseDir `
+            -Filter '*.dll' -File)
+          if (-not $runtimeDlls) {
+            throw "No runtime DLLs found in $releaseDir"
+          }
+          $dllNames = $runtimeDlls.Name -join ', '
+          $distDir = Join-Path $env:GITHUB_WORKSPACE "dist/bin"
+          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+          Copy-Item -LiteralPath $runtimeDlls.FullName `
+            -Destination $distDir -Force
+          Write-Output "Runtime DLLs: $dllNames"
+
       - name: Build and publish Companion updater
         uses: tauri-apps/tauri-action@v1
         env:
