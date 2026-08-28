@@ -107,6 +107,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      CARGO_TARGET_DIR: D:\w-companion
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -182,7 +184,7 @@ jobs:
         shell: pwsh
         run: |
           $target = "x86_64-pc-windows-msvc"
-          $targetRoot = "companion/src-tauri/target"
+          $targetRoot = $env:CARGO_TARGET_DIR
           $releaseDir = Join-Path $targetRoot "$target/release"
           cargo build --release --target $target `
             --target-dir $targetRoot `
@@ -237,8 +239,7 @@ jobs:
       - name: Package portable Companion ZIP
         shell: pwsh
         run: |
-          $targetRoot = Join-Path $env:GITHUB_WORKSPACE `
-            "companion\src-tauri\target"
+          $targetRoot = $env:CARGO_TARGET_DIR
           $releaseDirs = @(
             (Join-Path $targetRoot "x86_64-pc-windows-msvc\release"),
             (Join-Path $targetRoot "release")
