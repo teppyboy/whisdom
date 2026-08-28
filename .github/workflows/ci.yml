@@ -160,6 +160,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $distDir | Out-Null
           Copy-Item -LiteralPath $runtimeDlls.FullName `
             -Destination $distDir -Force
+          $configPath = Join-Path $env:GITHUB_WORKSPACE `
+            "companion/src-tauri/tauri.conf.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $config.bundle.resources = @{ "../../dist/bin/*.dll" = "" }
+          $config | ConvertTo-Json -Depth 20 | Set-Content $configPath
           Write-Output "Runtime DLLs: $dllNames"
 
       - name: Build and publish Companion updater
