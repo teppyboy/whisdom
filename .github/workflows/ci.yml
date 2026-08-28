@@ -145,7 +145,8 @@ jobs:
           $manifest = "companion/src-tauri/Cargo.toml"
           $targetRoot = "companion/src-tauri/target"
           $releaseDir = Join-Path $targetRoot "$target/release"
-          cargo build --release --target $target --manifest-path $manifest
+          cargo build --release --target $target `
+            --target-dir $targetRoot --manifest-path $manifest
           $requiredDll = Join-Path $releaseDir "sherpa-onnx-c-api.dll"
           if (-not (Test-Path -LiteralPath $requiredDll -PathType Leaf)) {
             throw "Required sherpa runtime DLL not found: $requiredDll"
@@ -163,7 +164,12 @@ jobs:
           $configPath = Join-Path $env:GITHUB_WORKSPACE `
             "companion/src-tauri/tauri.conf.json"
           $config = Get-Content $configPath -Raw | ConvertFrom-Json
-          $config.bundle.resources = @{ "../../dist/bin/*.dll" = "" }
+          $resources = @{}
+          foreach ($dll in $runtimeDlls) {
+            $resources[$dll.FullName] = $dll.Name
+          }
+          $config.bundle | Add-Member -NotePropertyName resources `
+            -NotePropertyValue $resources -Force
           $config | ConvertTo-Json -Depth 20 | Set-Content $configPath
           Write-Output "Runtime DLLs: $dllNames"
 
