@@ -136,13 +136,9 @@ jobs:
             throw "MSVC compiler was not found on PATH"
           }
           Get-Command cl.exe -ErrorAction Stop | Out-Null
-          Get-Command ninja.exe -ErrorAction Stop | Out-Null
-          "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
-          "CMAKE_C_COMPILER=cl.exe" >> $env:GITHUB_ENV
-          "CMAKE_CXX_COMPILER=cl.exe" >> $env:GITHUB_ENV
-          "CMAKE_MAKE_PROGRAM=ninja.exe" >> $env:GITHUB_ENV
+          "CMAKE_GENERATOR=Visual Studio 18 2026" >> $env:GITHUB_ENV
+          "CMAKE_GENERATOR_PLATFORM=x64" >> $env:GITHUB_ENV
           "CMAKE_TRY_COMPILE_CONFIGURATION=Release" >> $env:GITHUB_ENV
-          "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded" >> $env:GITHUB_ENV
           if (-not $env:VULKAN_SDK) {
             throw "VULKAN_SDK was not exported by the Vulkan SDK action"
           }
