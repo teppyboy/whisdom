@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::watch;
 
@@ -132,58 +134,68 @@ pub async fn run_transcription(
         job,
         id,
         "transcribing",
-        Some(10.0),
-        Some("loading native transcription model".into()),
+        Some(5.0),
+        Some("Preparing audio".into()),
     )
     .await;
     let ffmpeg = super::ffmpeg::ensure_ffmpeg(&state.cache).await?;
     let chunks_dir = work_dir.join("chunks");
-    let chunk_seconds = 20 * 60;
-    tracing::info!(
-        job_id = %id,
-        chunk_seconds,
-        "splitting media into native WAV chunks"
-    );
-    let chunks = super::ffmpeg::split_to_wav_chunks(
-        &ffmpeg,
-        input,
-        &chunks_dir,
-        chunk_seconds,
-        cancel_rx.clone(),
-    )
-    .await?;
-    tracing::info!(job_id = %id, chunk_count = chunks.len(), "native WAV chunks ready");
-    if is_cancelled(&cancel_rx) {
-        return Err(cancelled_error());
-    }
-    let inference_seconds = 30;
-    let inference_dir = chunks_dir.join("inference");
     let mut pending = VecDeque::new();
-    for (index, chunk) in chunks.into_iter().enumerate() {
-        let outer_dir = inference_dir.join(format!("outer-{index:05}"));
-        let outer_chunks = super::ffmpeg::split_to_wav_chunks(
+    let mut full_file_whisper = false;
+    if model_spec.engine == super::models::AsrEngine::WhisperCpp {
+        let wav_path = work_dir.join("input.wav");
+        super::ffmpeg::convert_to_wav(&ffmpeg, input, &wav_path, cancel_rx.clone()).await?;
+        // Whisper.cpp manages its own 30-second windows. Keep the complete WAV
+        // intact so its decoder can preserve context across those windows.
+        pending.push_back((wav_path, 0.0, 0));
+        full_file_whisper = true;
+    } else {
+        let chunk_seconds = 20 * 60;
+        tracing::info!(
+            job_id = %id,
+            chunk_seconds,
+            "splitting media into native WAV chunks"
+        );
+        let chunks = super::ffmpeg::split_to_wav_chunks(
             &ffmpeg,
-            &chunk,
-            &outer_dir,
-            inference_seconds,
+            input,
+            &chunks_dir,
+            chunk_seconds,
             cancel_rx.clone(),
         )
         .await?;
-        let outer_offset = index as f32 * chunk_seconds as f32;
-        for (inner_index, inner_chunk) in outer_chunks.into_iter().enumerate() {
-            pending.push_back((
-                inner_chunk,
-                outer_offset + inner_index as f32 * inference_seconds as f32,
+        tracing::info!(job_id = %id, chunk_count = chunks.len(), "native WAV chunks ready");
+        let inference_seconds = 30;
+        let inference_dir = chunks_dir.join("inference");
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            let outer_dir = inference_dir.join(format!("outer-{index:05}"));
+            let outer_chunks = super::ffmpeg::split_to_wav_chunks(
+                &ffmpeg,
+                &chunk,
+                &outer_dir,
                 inference_seconds,
-            ));
+                cancel_rx.clone(),
+            )
+            .await?;
+            let outer_offset = index as f32 * chunk_seconds as f32;
+            for (inner_index, inner_chunk) in outer_chunks.into_iter().enumerate() {
+                pending.push_back((
+                    inner_chunk,
+                    outer_offset + inner_index as f32 * inference_seconds as f32,
+                    inference_seconds,
+                ));
+            }
         }
+    }
+    if is_cancelled(&cancel_rx) {
+        return Err(cancelled_error());
     }
     let initial_chunk_count = pending.len();
     tracing::info!(
         job_id = %id,
-        chunk_seconds = inference_seconds,
-        chunk_count = initial_chunk_count,
-        "native inference chunks ready"
+        work_item_count = initial_chunk_count,
+        full_file = model_spec.engine == super::models::AsrEngine::WhisperCpp,
+        "native inference work items ready"
     );
     let mut completed_chunks = 0usize;
     let mut retry_id = 0usize;
@@ -194,21 +206,64 @@ pub async fn run_transcription(
         }
         tracing::info!(
             job_id = %id,
-            chunk_seconds = current_seconds,
+            work_item_seconds = current_seconds,
             engine = model_spec.engine.id(),
-            "loading native model for chunk"
+            "starting native inference work item"
         );
+        set_phase(
+            state,
+            job,
+            id,
+            "transcribing",
+            Some(10.0),
+            Some("Loading transcription model".into()),
+        )
+        .await;
         let runtime = engine::load_runtime(&state.cache, &state.runtime, model_spec).await?;
-        match engine::transcribe_wav(
+        set_phase(
+            state,
+            job,
+            id,
+            "transcribing",
+            Some(10.0),
+            Some("Transcribing audio".into()),
+        )
+        .await;
+        let native_progress = (model_spec.engine == super::models::AsrEngine::WhisperCpp)
+            .then(|| Arc::new(AtomicU32::new(0)));
+        let inference = engine::transcribe_wav(
             &chunk,
             runtime,
             model_spec,
             language.clone(),
             cancel_rx.clone(),
             &guard,
-        )
-        .await
-        {
+            native_progress.clone(),
+        );
+        tokio::pin!(inference);
+        let inference_result = if let Some(progress) = native_progress {
+            let mut ticker = tokio::time::interval(Duration::from_millis(500));
+            loop {
+                tokio::select! {
+                    result = &mut inference => break result,
+                    _ = ticker.tick() => {
+                        let native_percent = progress.load(Ordering::Acquire).min(100);
+                        set_phase(
+                            state,
+                            job,
+                            id,
+                            "transcribing",
+                            Some(10.0 + native_percent as f32 * 0.8),
+                            Some("Transcribing audio".into()),
+                        )
+                        .await;
+                    }
+                }
+            }
+        } else {
+            inference.await
+        };
+        match inference_result {
             Ok(chunk_segments) => {
                 segments.extend(chunk_segments.into_iter().map(|mut segment| {
                     segment.start += offset_seconds;
@@ -221,30 +276,33 @@ pub async fn run_transcription(
                     job,
                     id,
                     "transcribing",
-                    Some(
+                    Some(if full_file_whisper {
+                        90.0
+                    } else {
                         10.0 + 85.0 * completed_chunks as f32
-                            / (completed_chunks + pending.len()).max(1) as f32,
-                    ),
-                    Some(format!(
-                        "transcribed chunk {} of {}",
-                        completed_chunks,
-                        (completed_chunks + pending.len()).max(initial_chunk_count)
-                    )),
+                            / (completed_chunks + pending.len()).max(1) as f32
+                    }),
+                    Some("Transcribing audio".into()),
                 )
                 .await;
             }
             Err(error)
                 if engine::is_retryable_inference_error(model_spec.engine, &error)
-                    && current_seconds > 5 =>
+                    && (full_file_whisper || current_seconds > 5) =>
             {
-                let next_seconds = (current_seconds / 2).max(5);
+                full_file_whisper = false;
+                let next_seconds = if current_seconds == 0 {
+                    30
+                } else {
+                    (current_seconds / 2).max(5)
+                };
                 retry_id += 1;
                 let retry_dir = chunks_dir.join(format!("retry-{retry_id:05}"));
                 tracing::warn!(
                     job_id = %id,
                     failed_chunk_seconds = current_seconds,
                     retry_chunk_seconds = next_seconds,
-                    "native inference chunk failed; splitting into smaller physical chunks"
+                    "native inference work item failed; splitting into smaller physical chunks"
                 );
                 {
                     let mut loaded = state.runtime.write().await;
@@ -269,6 +327,15 @@ pub async fn run_transcription(
             Err(error) => return Err(error),
         }
     }
+    set_phase(
+        state,
+        job,
+        id,
+        "transcribing",
+        Some(95.0),
+        Some("Finalizing transcript".into()),
+    )
+    .await;
     let text = segments
         .iter()
         .map(|segment| segment.text.as_str())

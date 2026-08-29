@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::Arc;
 
 use tokio::sync::{watch, RwLock};
@@ -58,6 +58,7 @@ pub async fn transcribe_wav(
     language: Option<String>,
     cancel_rx: watch::Receiver<bool>,
     guard: &JobGuard,
+    progress: Option<Arc<AtomicU32>>,
 ) -> Result<Vec<TranscriptSegment>, HelperError> {
     match (&*runtime, model.engine) {
         (LoadedRuntime::Whisper(loaded), AsrEngine::WhisperCpp) => {
@@ -68,6 +69,7 @@ pub async fn transcribe_wav(
                 Arc::new(AtomicBool::new(false)),
                 cancel_rx,
                 guard,
+                progress,
             )
             .await
         }
@@ -82,9 +84,19 @@ pub async fn transcribe_wav(
 
 pub fn configured_backend(model: &NativeModel) -> &'static str {
     match model.engine {
-        // Capabilities are reported before model loading. The Whisper backend
-        // is therefore unknown until a job initializes the model.
-        AsrEngine::WhisperCpp => "unavailable",
+        // Whisper's backend is selected by the Companion build and load path.
+        // Report that compiled capability instead of calling an available model
+        // unavailable before its first transcription job.
+        AsrEngine::WhisperCpp => {
+            #[cfg(feature = "vulkan")]
+            {
+                "vulkan"
+            }
+            #[cfg(not(feature = "vulkan"))]
+            {
+                "cpu"
+            }
+        }
         // sherpa-onnx does not expose a runtime provider query. Its DirectML
         // provider can silently fall back to CPU, so capabilities stay honest.
         AsrEngine::SherpaOnnx => "cpu",
@@ -125,6 +137,15 @@ mod tests {
         let parakeet = find_native_model("sherpa-parakeet-tdt-v3-int8").unwrap();
         assert_eq!(engine_for(parakeet), AsrEngine::SherpaOnnx);
         assert_eq!(configured_backend(parakeet), "cpu");
+        let whisper = find_native_model("ggml-base-q5_1").unwrap();
+        assert_eq!(
+            configured_backend(whisper),
+            if cfg!(feature = "vulkan") {
+                "vulkan"
+            } else {
+                "cpu"
+            }
+        );
         assert!(should_try_next_parakeet_backend(&HelperError::BadRequest(
             "Parakeet Vulkan runtime initialization failed".into()
         )));

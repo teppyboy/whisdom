@@ -116,7 +116,11 @@ import {
 } from "@/lib/transcription-worker-client"
 import { transcribeChunkWithServer } from "@/features/server-transcription/client"
 import { localHelperClient } from "@/features/local-helper/client"
-import { normalizeHelperProgress } from "@/features/local-helper/progress"
+import {
+  helperErrorMessage,
+  helperStatusMessage,
+  normalizeHelperProgress,
+} from "@/features/local-helper/progress"
 import type {
   HelperCapabilities,
   HelperHealth,
@@ -322,7 +326,7 @@ const COPY = {
     preparingModel: "Preparing model",
     downloadingModelAssets: "Downloading model files",
     downloading: (file: string) => `Downloading ${file}`,
-    transcribingAudio: "Transcribing",
+    transcribingAudio: "Transcribing audio",
     loadingFfmpeg: "Loading media converter",
     reusingFfmpeg: "Using loaded media converter",
     convertingMedia: "Preparing media",
@@ -558,7 +562,7 @@ const COPY = {
     preparingModel: "Đang chuẩn bị mô hình",
     downloadingModelAssets: "Đang tải tệp mô hình",
     downloading: (file: string) => `Đang tải ${file}`,
-    transcribingAudio: "Đang chuyển ngữ",
+    transcribingAudio: "Đang chuyển giọng nói thành văn bản",
     loadingFfmpeg: "Đang tải công cụ xử lý tệp",
     reusingFfmpeg: "Đang dùng công cụ xử lý tệp đã tải",
     convertingMedia: "Đang chuẩn bị tệp",
@@ -832,6 +836,18 @@ function localizeProgressMessage(message: string, copy: Copy) {
 
   if (message.startsWith("Downloading ")) {
     return copy.downloading(message.slice("Downloading ".length))
+  }
+
+  if (message === "Preparing audio") {
+    return copy.convertingMedia
+  }
+
+  if (message === "Loading transcription model") {
+    return copy.loadingWhisper
+  }
+
+  if (message === "Finalizing transcript") {
+    return copy.transcriptReady
   }
 
   if (message === "Transcribing audio") {
@@ -1822,7 +1838,11 @@ export function App() {
           const mapped = mapServerPhase(status.phase)
           recordProgress({
             phase: mapped,
-            message: status.message ?? t.transcribingAudio,
+            message: helperStatusMessage(
+              status.phase,
+              runSettings.uiLanguage,
+              status.message
+            ),
             progress: normalizeHelperProgress(status.progress),
           })
           setJobState(mapped)
@@ -1877,7 +1897,13 @@ export function App() {
             if (settled) return
             settled = true
             connection.unsubscribe()
-            reject(new Error(status.error ?? "Transcription cancelled"))
+            reject(
+              new Error(
+                status.phase === "cancelled"
+                  ? helperStatusMessage("cancelled", runSettings.uiLanguage)
+                  : helperErrorMessage(runSettings.uiLanguage)
+              )
+            )
           }
         },
         (caught) => {

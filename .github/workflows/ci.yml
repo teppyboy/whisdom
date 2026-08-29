@@ -109,7 +109,6 @@ jobs:
       contents: write
     env:
       CARGO_TARGET_DIR: D:\c
-      TrackFileAccess: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -137,9 +136,9 @@ jobs:
             throw "MSVC compiler was not found on PATH"
           }
           Get-Command cl.exe -ErrorAction Stop | Out-Null
-          "CMAKE_GENERATOR=Visual Studio 18 2026" >> $env:GITHUB_ENV
-          "CMAKE_GENERATOR_PLATFORM=x64" >> $env:GITHUB_ENV
-          "CMAKE_TRY_COMPILE_CONFIGURATION=Release" >> $env:GITHUB_ENV
+          "CMAKE_GENERATOR=NMake Makefiles" >> $env:GITHUB_ENV
+          "CMAKE_OBJECT_PATH_MAX=128" >> $env:GITHUB_ENV
+          "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $env:GITHUB_ENV
           if (-not $env:VULKAN_SDK) {
             throw "VULKAN_SDK was not exported by the Vulkan SDK action"
           }

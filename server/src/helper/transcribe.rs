@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "vulkan")]
 use std::sync::Once;
@@ -197,6 +197,7 @@ pub async fn transcribe_wav(
     cancel: Arc<AtomicBool>,
     cancel_rx: watch::Receiver<bool>,
     _job_guard: &JobGuard,
+    progress: Option<Arc<AtomicU32>>,
 ) -> Result<Vec<TranscriptSegment>, HelperError> {
     let wav_path = wav_path.to_owned();
     if !mark_pre_cancelled(&cancel, &cancel_rx) {
@@ -218,7 +219,14 @@ pub async fn transcribe_wav(
             .into_samples::<i16>()
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| HelperError::BadRequest(format!("WAV read failed: {error}")))?;
-        transcribe_chunk(&model.context, &samples, language.as_deref(), cancel, 0.0)
+        transcribe_chunk(
+            &model.context,
+            &samples,
+            language.as_deref(),
+            cancel,
+            0.0,
+            progress,
+        )
     })
     .await
     .map_err(|error| HelperError::BadRequest(format!("Whisper task failed: {error}")))?
@@ -230,6 +238,7 @@ fn transcribe_chunk(
     language: Option<&str>,
     cancel: Arc<AtomicBool>,
     offset_seconds: f32,
+    progress: Option<Arc<AtomicU32>>,
 ) -> Result<Vec<TranscriptSegment>, HelperError> {
     let mut state = context.create_state().map_err(|error| {
         HelperError::BadRequest(format!("Whisper state creation failed: {error}"))
@@ -237,7 +246,7 @@ fn transcribe_chunk(
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(4);
     params.set_translate(false);
-    params.set_no_context(true);
+    params.set_no_context(false);
     params.set_single_segment(false);
     params.set_print_special(false);
     params.set_print_progress(false);
@@ -245,6 +254,11 @@ fn transcribe_chunk(
     params.set_print_timestamps(false);
     params.set_token_timestamps(true);
     params.set_temperature_inc(0.2);
+    if let Some(progress) = progress {
+        params.set_progress_callback_safe(move |value: i32| {
+            progress.store(value.clamp(0, 100) as u32, Ordering::Release);
+        });
+    }
     // SAFETY: `cancel` remains alive until `state.full` returns, so the callback's userdata
     // remains valid for the entire native inference call.
     unsafe {

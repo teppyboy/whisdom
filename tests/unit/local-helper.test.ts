@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { LocalHelperClient } from "../../src/features/local-helper/client"
+import {
+  helperStatusMessage,
+  normalizeHelperProgress,
+} from "../../src/features/local-helper/progress"
 
 const health = { available: true, protocol_version: 2, busy: false }
 const capabilities = {
@@ -31,6 +35,15 @@ function mockHealth() {
 }
 
 describe("LocalHelperClient", () => {
+  it("uses professional localized Companion status messages", () => {
+    expect(helperStatusMessage("transcribing", "en")).toBe("Transcribing audio")
+    expect(helperStatusMessage("transcribing", "vi")).toBe(
+      "Đang chuyển giọng nói thành văn bản"
+    )
+    expect(helperStatusMessage("transcribing", "en")).not.toContain("chunk")
+    expect(normalizeHelperProgress(undefined)).toBe(0)
+    expect(normalizeHelperProgress(45)).toBe(0.45)
+  })
   beforeEach(() => {
     const storage = new Map<string, string>()
     Object.defineProperty(globalThis, "localStorage", {
