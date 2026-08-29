@@ -108,7 +108,8 @@ jobs:
     permissions:
       contents: write
     env:
-      CARGO_TARGET_DIR: D:\w-companion
+      CARGO_TARGET_DIR: D:\c
+      TrackFileAccess: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
