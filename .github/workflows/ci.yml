@@ -137,6 +137,7 @@ jobs:
           }
           Get-Command cl.exe -ErrorAction Stop | Out-Null
           "CMAKE_GENERATOR=NMake Makefiles" >> $env:GITHUB_ENV
+          "CMAKE_GENERATOR_PLATFORM=x64" >> $env:GITHUB_ENV
           "CMAKE_OBJECT_PATH_MAX=128" >> $env:GITHUB_ENV
           "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $env:GITHUB_ENV
           if (-not $env:VULKAN_SDK) {

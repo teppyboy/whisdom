@@ -74,6 +74,8 @@ $configureArgs = @(
 )
 if ($Generator -like "Visual Studio*") {
     $configureArgs += @("-A", "x64")
+} elseif ($Generator -eq "NMake Makefiles") {
+    $configureArgs += @("-DCMAKE_GENERATOR_PLATFORM=x64")
 }
 $configureArgs += @(
     "-DCMAKE_BUILD_TYPE=Release",
