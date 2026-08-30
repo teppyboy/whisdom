@@ -209,10 +209,6 @@ jobs:
             --target-dir $targetRoot `
             --manifest-path "companion/src-tauri/Cargo.toml" `
             --features "vulkan,directml"
-          $requiredDll = Join-Path $releaseDir "sherpa-onnx-c-api.dll"
-          if (-not (Test-Path -LiteralPath $requiredDll -PathType Leaf)) {
-            throw "Required sherpa runtime DLL not found: $requiredDll"
-          }
           $bundleBin = Join-Path $env:GITHUB_WORKSPACE `
             "native/sherpa-directml/bin"
           $bundleDlls = @(Get-ChildItem -LiteralPath $bundleBin `
@@ -220,8 +216,6 @@ jobs:
           if (-not $bundleDlls) {
             throw "No DirectML runtime DLLs found in $bundleBin"
           }
-          $runtimeDlls = @(Get-ChildItem -LiteralPath $releaseDir `
-            -Filter '*.dll' -File)
           foreach ($dll in $bundleDlls) {
             Copy-Item -LiteralPath $dll.FullName `
               -Destination (Join-Path $releaseDir $dll.Name) -Force
