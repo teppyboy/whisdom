@@ -276,6 +276,9 @@ describe("component harness", () => {
     expect(vad).toBeChecked()
     await user.click(vad)
     expect(vad).not.toBeChecked()
+    expect(
+      screen.queryByText("Experimental voice activity detection is enabled.")
+    ).not.toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Go to home" }))
     await user.click(
       screen.getByRole("button", { name: "Start transcription" })

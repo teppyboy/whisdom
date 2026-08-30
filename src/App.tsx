@@ -2788,7 +2788,8 @@ function MainControls({
                   <p className="text-xs leading-5 text-muted-foreground">
                     {companionModelDetails(selectedCompanionModel, copy)}
                   </p>
-                  {helperCapabilities?.experimental_vad &&
+                  {settings.experimentalVad &&
+                  helperCapabilities?.experimental_vad &&
                   selectedCompanionModel.engine === "whisper.cpp" ? (
                     <p className="text-xs leading-5 text-muted-foreground">
                       {copy.companionVadEnabled}
