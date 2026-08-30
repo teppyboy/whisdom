@@ -256,8 +256,12 @@ jobs:
           Set-Content $configPath $configJson
           Write-Output "Runtime DLLs: $dllNames"
           $configCheck = Get-Content $configPath -Raw | ConvertFrom-Json
+          $resourceJson = $configJson |
+            Select-String -Pattern '"resources"\s*:\s*(\[[^\]]*\])' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value }
+          $resourcePaths = @($resourceJson | ConvertFrom-Json)
           foreach ($name in $requiredDirectML) {
-            $resourcePath = @($configCheck.bundle.resources) |
+            $resourcePath = $resourcePaths |
               Where-Object { (Split-Path -Leaf $_) -eq $name }
             if (-not $resourcePath) {
               throw "Missing mapped DirectML runtime DLL: $name"
