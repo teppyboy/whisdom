@@ -248,19 +248,15 @@ jobs:
           foreach ($dll in $runtimeDlls) {
             $resources[$dll.FullName] = $dll.Name
           }
-          $config.bundle | Add-Member -NotePropertyName resources `
-            -NotePropertyValue $resources -Force
+          $config.bundle.resources = @($runtimeDlls.FullName)
           $config | ConvertTo-Json -Depth 20 | Set-Content $configPath
           Write-Output "Runtime DLLs: $dllNames"
           $configCheck = Get-Content $configPath -Raw | ConvertFrom-Json
-          if (-not $configCheck.bundle.resources) {
-            throw "Tauri resource mapping was not written"
-          }
-          $resourceNames = @(
-            $configCheck.bundle.resources.PSObject.Properties.Name
-          )
+          $resourcePaths = @($configCheck.bundle.resources)
           foreach ($name in $requiredDirectML) {
-            if (-not ($resourceNames -contains $name)) {
+            $resourcePath = $resourcePaths |
+              Where-Object { (Split-Path -Leaf $_) -eq $name }
+            if (-not $resourcePath) {
               throw "Missing mapped DirectML runtime DLL: $name"
             }
           }
