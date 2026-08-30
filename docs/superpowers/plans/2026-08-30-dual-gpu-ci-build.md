@@ -4,7 +4,7 @@
 
 **Goal:** Build the Windows Companion with Vulkan enabled for whisper.cpp and DirectML enabled for sherpa-onnx.
 
-**Architecture:** Keep one Companion binary and one sequential processing path. Restore the Vulkan SDK needed by `whisper-rs-sys`, retain `SHERPA_ONNX_LIB_DIR` for the custom DirectML sherpa runtime, and disable Visual Studio file tracking only in CI to avoid `FTK1011` during Vulkan shader generation.
+**Architecture:** Keep one Companion binary and one sequential processing path. Restore the Vulkan SDK needed by `whisper-rs-sys`, retain `SHERPA_ONNX_LIB_DIR` for the custom DirectML sherpa runtime, and use Ninja in CI so Vulkan shader generation does not invoke the failing Visual Studio tracker.
 
 **Tech Stack:** GitHub Actions, PowerShell, Rust/Cargo, `whisper-rs`/whisper.cpp Vulkan, sherpa-onnx 1.13.6 DirectML, MSVC.
 
@@ -18,7 +18,7 @@
 
 - [ ] **Step 1: Restore Vulkan prerequisites and CI-only CMake workaround**
 
-Replace the current MSVC verification step with the Vulkan SDK installation and verification below. `CMAKE_VS_GLOBALS=TrackFileAccess=false` disables the failing MSVC tracker while leaving Vulkan enabled.
+Replace the current MSVC verification step with the Vulkan SDK installation and verification below. `CMAKE_GENERATOR=Ninja` keeps the Vulkan build enabled while avoiding the failing Visual Studio generator and its file tracker.
 
 ```yaml
       - name: Install Vulkan SDK
@@ -39,7 +39,11 @@ Replace the current MSVC verification step with the Vulkan SDK installation and 
           if (-not $env:VULKAN_SDK) {
             throw "VULKAN_SDK was not exported by the Vulkan SDK action"
           }
-          "CMAKE_VS_GLOBALS=TrackFileAccess=false" >> $env:GITHUB_ENV
+          if (-not (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
+            throw "Ninja was not found on PATH"
+          }
+          "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
+          "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $env:GITHUB_ENV
           $required = @(
             (Join-Path $env:VULKAN_SDK "Include\vulkan\vulkan.h"),
             (Join-Path $env:VULKAN_SDK "Lib\vulkan-1.lib"),
