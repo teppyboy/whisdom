@@ -249,8 +249,13 @@ jobs:
           if (-not $configCheck.bundle.resources) {
             throw "Tauri resource mapping was not written"
           }
-          if ($configCheck.bundle.resources.Count -lt $requiredDirectML.Count) {
-            throw "Tauri resource mapping is missing DirectML runtime DLLs"
+          $resourceNames = @(
+            $configCheck.bundle.resources.PSObject.Properties.Name
+          )
+          foreach ($name in $requiredDirectML) {
+            if (-not ($resourceNames -contains $name)) {
+              throw "Missing mapped DirectML runtime DLL: $name"
+            }
           }
 
       - name: Publish Companion updater
