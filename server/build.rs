@@ -13,8 +13,7 @@ fn main() {
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 panic!(
-                    "the `directml` feature requires SHERPA_ONNX_LIB_DIR; "
-                        "run scripts/build-sherpa-directml.ps1 first"
+                    "the `directml` feature requires SHERPA_ONNX_LIB_DIR; run scripts/build-sherpa-directml.ps1 first"
                 )
             });
         let bundle_dir = lib_dir.parent().unwrap_or(&lib_dir);
