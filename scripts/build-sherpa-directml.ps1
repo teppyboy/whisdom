@@ -70,8 +70,12 @@ if (-not $SkipBuild) {
 $configureArgs = @(
     "-S", $sourceRoot,
     "-B", $BuildDir,
-    "-G", $Generator,
-    "-A", "x64",
+    "-G", $Generator
+)
+if ($Generator -like "Visual Studio*") {
+    $configureArgs += @("-A", "x64")
+}
+$configureArgs += @(
     "-DCMAKE_BUILD_TYPE=Release",
     "-DCMAKE_INSTALL_PREFIX=$OutputDir",
     "-DBUILD_SHARED_LIBS=ON",
