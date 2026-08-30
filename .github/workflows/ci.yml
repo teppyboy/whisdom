@@ -121,14 +121,36 @@ jobs:
         with:
           arch: x64
 
-      - name: Verify MSVC toolchain
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.4.357.0
+          destination: C:\VulkanSDK
+          install_runtime: true
+          cache: true
+
+      - name: Verify Vulkan toolchain
         shell: pwsh
         run: |
           if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
             throw "MSVC compiler was not found on PATH"
           }
           Get-Command cl.exe -ErrorAction Stop | Out-Null
-          Write-Output "MSVC compiler ready"
+          if (-not $env:VULKAN_SDK) {
+            throw "VULKAN_SDK was not exported by the Vulkan SDK action"
+          }
+          "CMAKE_VS_GLOBALS=TrackFileAccess=false" >> $env:GITHUB_ENV
+          $required = @(
+            (Join-Path $env:VULKAN_SDK "Include\vulkan\vulkan.h"),
+            (Join-Path $env:VULKAN_SDK "Lib\vulkan-1.lib"),
+            (Join-Path $env:VULKAN_SDK "Bin\glslc.exe")
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Vulkan SDK file not found: $path"
+            }
+          }
+          Write-Output "VULKAN_SDK=$env:VULKAN_SDK"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -184,7 +206,7 @@ jobs:
           cargo build --release --target $target `
             --target-dir $targetRoot `
             --manifest-path "companion/src-tauri/Cargo.toml" `
-            --features "directml"
+            --features "vulkan,directml"
           $bundleBin = Join-Path $env:GITHUB_WORKSPACE `
             "native/sherpa-directml/bin"
           $bundleDlls = @(Get-ChildItem -LiteralPath $bundleBin `
@@ -255,7 +277,7 @@ jobs:
           updaterJsonPreferNsis: true
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
-          args: --target x86_64-pc-windows-msvc --features directml
+          args: --target x86_64-pc-windows-msvc --features vulkan,directml
           retryAttempts: 3
 
       - name: Package portable Companion ZIP
