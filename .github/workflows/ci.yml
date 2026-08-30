@@ -243,18 +243,18 @@ jobs:
             -Destination $distDir -Force
           $configPath = Join-Path $env:GITHUB_WORKSPACE `
             "companion/src-tauri/tauri.conf.json"
-          $config = Get-Content $configPath -Raw | ConvertFrom-Json
-          $resources = @{}
-          foreach ($dll in $runtimeDlls) {
-            $resources[$dll.FullName] = $dll.Name
-          }
-          $config.bundle.resources = @($runtimeDlls.FullName)
-          $config | ConvertTo-Json -Depth 20 | Set-Content $configPath
+          $resourcePaths = @($runtimeDlls.FullName)
+          $resourceJson = $resourcePaths |
+            ConvertTo-Json -Compress
+          $configJson = Get-Content $configPath -Raw
+          $configJson = $configJson -replace `
+            '"resources"\s*:\s*\{\}',
+            ('"resources":' + $resourceJson)
+          Set-Content $configPath $configJson
           Write-Output "Runtime DLLs: $dllNames"
           $configCheck = Get-Content $configPath -Raw | ConvertFrom-Json
-          $resourcePaths = @($configCheck.bundle.resources)
           foreach ($name in $requiredDirectML) {
-            $resourcePath = $resourcePaths |
+            $resourcePath = @($configCheck.bundle.resources) |
               Where-Object { (Split-Path -Leaf $_) -eq $name }
             if (-not $resourcePath) {
               throw "Missing mapped DirectML runtime DLL: $name"
