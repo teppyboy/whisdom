@@ -184,7 +184,7 @@ jobs:
           $env:Path = "${env:ProgramFiles}\CMake\bin;${env:Path}"
           & "$env:GITHUB_WORKSPACE/scripts/build-sherpa-directml.ps1" `
             -BuildDir "D:\sdml-build" `
-            -Generator "Visual Studio 18 2022"
+            -Generator "Visual Studio 18 2026"
           if ($LASTEXITCODE -ne 0) {
             throw "DirectML sherpa build failed: $LASTEXITCODE"
           }
