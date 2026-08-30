@@ -245,21 +245,27 @@ jobs:
             -Destination $distDir -Force
           $configPath = Join-Path $env:GITHUB_WORKSPACE `
             "companion/src-tauri/tauri.conf.json"
-          $resourcePaths = @($runtimeDlls.FullName)
-          $resourceJson = ConvertTo-Json -InputObject $resourcePaths `
-            -Compress
-          $configJson = Get-Content $configPath -Raw
-          $configJson = $configJson -replace `
-            '"resources"\s*:\s*\{\}',
-            ('"resources":' + $resourceJson)
-          if ($configJson -notmatch '"resources"\s*:\s*\[') {
-            throw "Tauri resource array was not written"
+          $resourceMap = @{}
+          foreach ($dll in $runtimeDlls) {
+            $resourceMap[$dll.FullName] = $dll.Name
           }
-          Set-Content $configPath $configJson
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $config.bundle.resources = $resourceMap
+          $config | ConvertTo-Json -Depth 20 | Set-Content $configPath
+          $configCheck = Get-Content $configPath -Raw | ConvertFrom-Json
+          $mappedResources = @(
+            $configCheck.bundle.resources.psobject.Properties
+          )
           Write-Output "Runtime DLLs: $dllNames"
           foreach ($name in $requiredDirectML) {
-            if ($resourceJson -notmatch [regex]::Escape($name)) {
+            if (-not ($mappedResources.Value -contains $name)) {
               throw "Missing mapped DirectML runtime DLL: $name"
+            }
+          }
+          foreach ($dll in $runtimeDlls) {
+            if (-not ($mappedResources.Value -contains $dll.Name)) {
+              throw "Runtime DLL was not mapped beside the executable: " +
+                $dll.Name
             }
           }
 
@@ -284,13 +290,50 @@ jobs:
           args: --target x86_64-pc-windows-msvc --features vulkan,directml
           retryAttempts: 3
 
+      - name: Validate Companion installer resources
+        shell: pwsh
+        run: |
+          $targetRoot = $env:CARGO_TARGET_DIR
+          $releaseDir = Join-Path $targetRoot "x86_64-pc-windows-msvc\release"
+          $nsisDir = Join-Path $releaseDir "bundle\nsis"
+          $installer = Get-ChildItem -LiteralPath $nsisDir `
+            -Filter "*.exe" -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw "NSIS installer not found under $nsisDir"
+          }
+          $sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
+          if (-not $sevenZip) {
+            $sevenZipPath = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+            if (Test-Path -LiteralPath $sevenZipPath -PathType Leaf) {
+              $sevenZip = Get-Item -LiteralPath $sevenZipPath
+            }
+          }
+          if (-not $sevenZip) {
+            throw "7z.exe is required to inspect the NSIS installer"
+          }
+          $archiveEntries = & $sevenZip.Source l -slt $installer.FullName |
+            Where-Object { $_ -like "Path = *" } |
+            ForEach-Object { $_.Substring(7) }
+          foreach ($name in @(
+              "sherpa-onnx-c-api.dll",
+              "sherpa-onnx-cxx-api.dll",
+              "onnxruntime.dll",
+              "DirectML.dll"
+            )) {
+            if (-not ($archiveEntries -contains $name)) {
+              throw "Installer does not place $name beside the executable"
+            }
+          }
+          Write-Output "Installer resources are beside the executable"
+
       - name: Package portable Companion ZIP
         shell: pwsh
         run: |
           $targetRoot = $env:CARGO_TARGET_DIR
           $releaseDirs = @(
-            (Join-Path $targetRoot "x86_64-pc-windows-msvc\release"),
-            (Join-Path $targetRoot "release")
+            (Join-Path $targetRoot "x86_64-pc-windows-msvc\release")
           )
           $releaseDir = $releaseDirs |
             Where-Object {
