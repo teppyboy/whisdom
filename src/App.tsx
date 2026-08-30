@@ -1834,7 +1834,7 @@ export function App() {
       selection.selectionId,
       language,
       companionModelId,
-      runSettings.experimentalVad
+      runSettings.experimentalVad === true
     )
     return new Promise<TranscriptDocument>((resolve, reject) => {
       let settled = false

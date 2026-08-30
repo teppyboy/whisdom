@@ -238,6 +238,57 @@ describe("component harness", () => {
     })
   })
 
+  it("sends the current VAD toggle value when starting Companion transcription", async () => {
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      mode: "local-helper",
+      experimentalVad: true,
+    })
+    vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
+    vi.spyOn(localHelperClient, "selectFiles").mockResolvedValue([
+      nativeSelection(),
+    ])
+    vi.spyOn(localHelperClient, "startSelection").mockResolvedValue({
+      jobId: "job-vad-toggle",
+    })
+    vi.spyOn(localHelperClient, "subscribeProgress").mockImplementation(
+      (_jobId, onStatus) => {
+        onStatus({
+          id: "job-vad-toggle",
+          phase: "queued",
+          progress: 0,
+        })
+        return { unsubscribe: vi.fn() }
+      }
+    )
+    const user = userEvent.setup()
+    renderCompanion()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Choose files in Windows" })
+    )
+    await screen.findByText("meeting.mkv")
+    await user.click(screen.getByRole("button", { name: "Account menu" }))
+    await user.click(screen.getByText("Settings"))
+    const vad = screen.getByRole("switch", {
+      name: "Experimental voice activity detection",
+    })
+    expect(vad).toBeChecked()
+    await user.click(vad)
+    expect(vad).not.toBeChecked()
+    await user.click(screen.getByRole("button", { name: "Go to home" }))
+    await user.click(screen.getByRole("button", { name: "Start transcription" }))
+
+    await waitFor(() =>
+      expect(localHelperClient.startSelection).toHaveBeenCalledWith(
+        "selection-1",
+        "auto",
+        "ggml-large-v3-turbo-q5_0",
+        false
+      )
+    )
+  })
+
   it("marks a companion queue row as Error when progress rejects after an invalid complete status", async () => {
     await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
     vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
