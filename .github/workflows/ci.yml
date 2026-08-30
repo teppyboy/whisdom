@@ -136,9 +136,8 @@ jobs:
             throw "MSVC compiler was not found on PATH"
           }
           Get-Command cl.exe -ErrorAction Stop | Out-Null
-          "CMAKE_GENERATOR=NMake Makefiles" >> $env:GITHUB_ENV
-          "CMAKE_GENERATOR_PLATFORM=x64" >> $env:GITHUB_ENV
           "CMAKE_OBJECT_PATH_MAX=128" >> $env:GITHUB_ENV
+          "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $env:GITHUB_ENV
           "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $env:GITHUB_ENV
           if (-not $env:VULKAN_SDK) {
             throw "VULKAN_SDK was not exported by the Vulkan SDK action"
@@ -185,7 +184,7 @@ jobs:
           $env:Path = "${env:ProgramFiles}\CMake\bin;${env:Path}"
           & "$env:GITHUB_WORKSPACE/scripts/build-sherpa-directml.ps1" `
             -BuildDir "D:\sdml-build" `
-            -Generator "NMake Makefiles"
+            -Generator "Visual Studio 18 2022"
           if ($LASTEXITCODE -ne 0) {
             throw "DirectML sherpa build failed: $LASTEXITCODE"
           }

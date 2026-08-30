@@ -104,6 +104,8 @@ $configureArgs += @(
 if (-not $SkipBuild) {
     Write-Output "Building sherpa-onnx revision $sourceRevision"
     Write-Output "ONNX Runtime DirectML $onnxRuntimeVersion; DirectML $directMlVersion"
+    Remove-Item Env:CMAKE_GENERATOR -ErrorAction SilentlyContinue
+    Remove-Item Env:CMAKE_GENERATOR_PLATFORM -ErrorAction SilentlyContinue
     & cmake @configureArgs
     if ($LASTEXITCODE -ne 0) { throw "CMake configure failed: $LASTEXITCODE" }
     & cmake --build $BuildDir --config Release --parallel 1
