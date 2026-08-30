@@ -3,11 +3,7 @@ export type LanguageCode = "auto" | (string & {})
 export type UiLanguage = "en" | "vi"
 
 export type ProcessingMode =
-  | "local-webgpu"
-  | "cloudflare-ai"
-  | "local-wasm"
-  | "local-helper"
-  | "server"
+  "local-webgpu" | "cloudflare-ai" | "local-wasm" | "local-helper" | "server"
 
 export type JobState =
   | "idle"
@@ -101,6 +97,7 @@ export type AppSettings = {
   mode: ProcessingMode
   chunkSeconds: number
   overlapSeconds: number
+  experimentalVad: boolean
   persistMediaBlobs: boolean
   serverModelId: string | null
 }

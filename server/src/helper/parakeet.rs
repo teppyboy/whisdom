@@ -13,7 +13,6 @@ const THREADS: i32 = 2;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParakeetBackend {
     DirectMl,
-    Vulkan,
     Cpu,
 }
 
@@ -21,7 +20,6 @@ impl ParakeetBackend {
     pub const fn id(self) -> &'static str {
         match self {
             Self::DirectMl => "directml",
-            Self::Vulkan => "vulkan",
             Self::Cpu => "cpu",
         }
     }
@@ -30,20 +28,17 @@ impl ParakeetBackend {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BackendAvailability {
     pub directml: bool,
-    pub vulkan: bool,
     pub cpu: bool,
 }
 
-pub const BACKEND_ORDER: [ParakeetBackend; 3] = [
+pub const BACKEND_ORDER: [ParakeetBackend; 2] = [
     ParakeetBackend::DirectMl,
-    ParakeetBackend::Vulkan,
     ParakeetBackend::Cpu,
 ];
 
 pub fn select_backend(available: BackendAvailability) -> Option<ParakeetBackend> {
     BACKEND_ORDER.into_iter().find(|backend| match backend {
         ParakeetBackend::DirectMl => available.directml,
-        ParakeetBackend::Vulkan => available.vulkan,
         ParakeetBackend::Cpu => available.cpu,
     })
 }
@@ -63,13 +58,13 @@ pub struct LoadedParakeet {
 
 // The crates.io sherpa-onnx archive is CPU-only. A DirectML build must be
 // supplied through SHERPA_ONNX_LIB_DIR and compiled with the `directml` feature.
+// sherpa-onnx 1.13.6 accepts `directml` and configures ORT_SEQUENTIAL plus
+// disabled memory patterns internally, which matches the serialized job gate.
+// Its public Rust API has no provider query; only the native bundle manifest
+// and requested provider are observable here.
 pub fn available_backends() -> BackendAvailability {
     BackendAvailability {
-        // This enables the DirectML attempt. sherpa-onnx 1.13.6 can silently
-        // fall back to CPU, so capabilities report CPU until a provider query
-        // proves the active backend.
         directml: cfg!(feature = "directml") && cfg!(target_os = "windows"),
-        vulkan: false,
         cpu: true,
     }
 }
@@ -85,7 +80,6 @@ pub fn is_backend_initialization_error(error: &HelperError) -> bool {
         error,
         HelperError::BadRequest(message)
             if message == "Parakeet DirectML runtime initialization failed"
-                || message == "Parakeet Vulkan runtime initialization failed"
                 || message == "Parakeet CPU runtime initialization failed"
     )
 }
@@ -107,7 +101,7 @@ pub async fn load_model(
         Err(error)
             if backend == ParakeetBackend::DirectMl && is_backend_initialization_error(&error) =>
         {
-            tracing::warn!("Parakeet DirectML initialization failed; falling back to CPU");
+            tracing::warn!(error = %error, "Parakeet DirectML initialization failed; falling back to CPU");
             load_model_with_backend(cache, model, ParakeetBackend::Cpu).await
         }
         result => result,
@@ -157,18 +151,11 @@ async fn load_model_with_backend(
             backend.id()
         )));
     };
+    tracing::info!(backend = backend.id(), "Parakeet recognizer initialized");
 
     Ok(Arc::new(LoadedParakeet {
         recognizer,
-        // sherpa-onnx 1.13.6 does not expose the provider actually selected.
-        // Keep this conservative: a DirectML request that initializes cannot
-        // prove it avoided the CPU fallback, so report CPU.
-        backend: if backend == ParakeetBackend::DirectMl {
-            // The recognizer may have silently fallen back to CPU.
-            ParakeetBackend::Cpu
-        } else {
-            backend
-        },
+        backend,
         model_id: model.id,
     }))
 }
@@ -254,7 +241,7 @@ pub fn normalize_tokens(
         }
         let starts_word = token.text.chars().next().is_some_and(char::is_whitespace);
         let punctuation = piece.chars().all(|character| !character.is_alphanumeric());
-        if starts_word && !current.is_empty() {
+        if starts_word && !current.is_empty() && !punctuation {
             words.push(TranscriptSegment {
                 start: current_start,
                 end: current_end,
@@ -344,7 +331,6 @@ mod tests {
         assert_eq!(
             select_backend(BackendAvailability {
                 directml: true,
-                vulkan: true,
                 cpu: true,
             }),
             Some(ParakeetBackend::DirectMl)
@@ -352,15 +338,6 @@ mod tests {
         assert_eq!(
             select_backend(BackendAvailability {
                 directml: false,
-                vulkan: true,
-                cpu: true,
-            }),
-            Some(ParakeetBackend::Vulkan)
-        );
-        assert_eq!(
-            select_backend(BackendAvailability {
-                directml: false,
-                vulkan: false,
                 cpu: true,
             }),
             Some(ParakeetBackend::Cpu)
@@ -382,7 +359,7 @@ mod tests {
         .expect("valid tokens");
         assert_eq!(segments[0].text, "Hello, world!");
         assert_eq!(segments[0].start, 0.0);
-        assert_eq!(segments[0].end, 0.9);
+        assert!((segments[0].end - 0.9).abs() < 0.000001);
     }
 
     #[test]

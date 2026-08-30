@@ -12,13 +12,13 @@ The first production choice is **NVIDIA Parakeet TDT 0.6B v3 INT8 through sherpa
 
 ## Research decision
 
-| Candidate | Decision | Reason |
-| --- | --- | --- |
-| Parakeet TDT 0.6B v3 via sherpa-onnx + DirectML | First Windows path | Offline Rust/Tauri path, documented DirectML build, INT8 artifact, timestamps, CC-BY-4.0. |
-| NeMo-Speech.cpp Parakeet | Vulkan fallback | Only researched Windows Vulkan route with official C ABI and word timestamps; early maturity, separate model bundle. |
-| Moonshine English | Later evaluation | Small and fast; needs separate ONNX Runtime/C API packaging or an immature Rust wrapper. |
-| Canary-Qwen-2.5B | Excluded | English-only, 2.5B, no proven Rust/Windows packaging or timestamp contract. |
-| Vosk | Excluded | Useful low-spec streaming fallback; not a quality-oriented replacement for Companion Whisper. |
+| Candidate                                       | Decision           | Reason                                                                                                               |
+| ----------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Parakeet TDT 0.6B v3 via sherpa-onnx + DirectML | First Windows path | Offline Rust/Tauri path, documented DirectML build, INT8 artifact, timestamps, CC-BY-4.0.                            |
+| NeMo-Speech.cpp Parakeet                        | Vulkan fallback    | Only researched Windows Vulkan route with official C ABI and word timestamps; early maturity, separate model bundle. |
+| Moonshine English                               | Later evaluation   | Small and fast; needs separate ONNX Runtime/C API packaging or an immature Rust wrapper.                             |
+| Canary-Qwen-2.5B                                | Excluded           | English-only, 2.5B, no proven Rust/Windows packaging or timestamp contract.                                          |
+| Vosk                                            | Excluded           | Useful low-spec streaming fallback; not a quality-oriented replacement for Companion Whisper.                        |
 
 Parakeet TDT v3 supports 25 European languages, including English, German, French, Spanish, Russian, and Ukrainian. It does **not** support Vietnamese. Its model card documents word- and segment-level timestamps and CC-BY-4.0 licensing. Sherpa-onnx documents a Windows executable, Rust API, and a fixed INT8 bundle containing `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, and `tokens.txt`.
 

@@ -10,6 +10,10 @@ const DEFAULT_FFMPEG_SHA256: &str =
     "0e7829b6e1ba867e37bbad17153de258bd3bffaa3b745626a6424df0ea113970";
 const DEFAULT_FFMPEG_EXE_SHA256: &str =
     "5d5e06fbb900fd7a45a82eb0529e67f905853432139f673ac90aff45930504d8";
+pub const VAD_MODEL_URL: &str =
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin?download=true";
+pub const VAD_MODEL_SHA256: &str =
+    "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987";
 
 #[derive(Clone, Debug)]
 pub struct HelperConfig {

@@ -129,11 +129,12 @@ async fn capabilities(
                 .map(|language| (*language).into())
                 .collect(),
             supports_auto_language: model.supports_auto_language,
-            active_backend: engine::configured_backend(model),
+            active_backend: engine::active_backend(model, &state.runtime).await,
         });
     }
     Ok(axum::Json(CapabilitiesResponse {
         available: true,
+        experimental_vad: true,
         engine: "catalog",
         accelerator: "per-model",
         model_id: default_native_model().id.into(),
@@ -245,6 +246,7 @@ async fn transcribe_selection(
         selection.filename,
         request.language.filter(|value| !value.is_empty()),
         model,
+        request.experimental_vad,
     )
     .await?;
     Ok(axum::Json(StartSelectionResponse { job_id }))

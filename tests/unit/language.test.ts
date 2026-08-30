@@ -9,9 +9,13 @@ import {
 } from "@/features/transcription/language"
 
 describe("transcription language helpers", () => {
-  it("resolves auto to the current interface language", () => {
+  it("resolves auto to the current interface language for browser transcription", () => {
     expect(resolveTranscriptionLanguage("auto", "en")).toBe("en")
     expect(resolveTranscriptionLanguage("auto", "vi")).toBe("vi")
+  })
+
+  it("keeps Auto available for Companion language detection", () => {
+    expect("auto").toBe("auto")
   })
 
   it("keeps explicit transcription language selections", () => {

@@ -297,6 +297,10 @@ const COPY = {
     moveFileDown: "Move down",
     companionModelDescription:
       "Choose a model to see its speed, accuracy, and download size.",
+    companionVadEnabled: "Experimental voice activity detection is enabled.",
+    experimentalVad: "Experimental voice activity detection",
+    experimentalVadDescription:
+      "Can reduce processing during silence. May miss very quiet speech.",
     companionModelDescriptions: {
       "ggml-tiny-q5_1": "Fastest option for quick drafts.",
       "ggml-base-q5_1": "Good balance of speed and accuracy.",
@@ -533,6 +537,10 @@ const COPY = {
     moveFileDown: "Di chuyển xuống",
     companionModelDescription:
       "Chọn mô hình để xem tốc độ, độ chính xác và dung lượng cần tải.",
+    companionVadEnabled: "Đã bật tính năng phát hiện giọng nói thử nghiệm.",
+    experimentalVad: "Phát hiện giọng nói thử nghiệm",
+    experimentalVadDescription:
+      "Có thể giảm thời gian xử lý khi im lặng. Có thể bỏ sót giọng nói rất nhỏ.",
     companionModelDescriptions: {
       "ggml-tiny-q5_1": "Nhanh nhất, phù hợp bản nháp nhanh.",
       "ggml-base-q5_1": "Cân bằng tốt giữa tốc độ và độ chính xác.",
@@ -1811,10 +1819,7 @@ export function App() {
       throw new Error("Invalid companion queue item.")
     const selection = item.source
     if (!companionModelId) throw new Error("No companion model is available.")
-    const language = resolveTranscriptionLanguage(
-      runSettings.language,
-      runSettings.uiLanguage
-    )
+    const language = runSettings.language
     setSelectedQueueId(item.id)
     updateQueueItem(item.id, { status: "active", error: undefined })
     setError(null)
@@ -1828,7 +1833,8 @@ export function App() {
     const { jobId } = await localHelperClient.startSelection(
       selection.selectionId,
       language,
-      companionModelId
+      companionModelId,
+      runSettings.experimentalVad
     )
     return new Promise<TranscriptDocument>((resolve, reject) => {
       let settled = false
@@ -2778,9 +2784,17 @@ function MainControls({
                 </SelectContent>
               </Select>
               {selectedCompanionModel ? (
-                <p className="text-xs leading-5 text-muted-foreground">
-                  {companionModelDetails(selectedCompanionModel, copy)}
-                </p>
+                <>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    {companionModelDetails(selectedCompanionModel, copy)}
+                  </p>
+                  {helperCapabilities?.experimental_vad &&
+                  selectedCompanionModel.engine === "whisper.cpp" ? (
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      {copy.companionVadEnabled}
+                    </p>
+                  ) : null}
+                </>
               ) : (
                 <p className="text-xs leading-5 text-muted-foreground">
                   {copy.companionModelDescription}
@@ -3069,6 +3083,20 @@ function SettingsPage({
           <CardDescription>{copy.processingDescription}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-5">
+          {settings.mode === "local-helper" ? (
+            <SettingRow
+              label={copy.experimentalVad}
+              description={copy.experimentalVadDescription}
+            >
+              <Switch
+                checked={settings.experimentalVad}
+                aria-label={copy.experimentalVad}
+                onCheckedChange={(checked) =>
+                  updateSetting("experimentalVad", checked)
+                }
+              />
+            </SettingRow>
+          ) : null}
           {settings.mode !== "server" ? (
             <>
               <SettingRow

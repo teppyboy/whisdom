@@ -19,8 +19,18 @@ pub async fn start_path_job(
     filename: String,
     language: Option<String>,
     model: &'static NativeModel,
+    experimental_vad: bool,
 ) -> Result<String, HelperError> {
-    start_path_job_inner(state, input, filename, language, model, None).await
+    start_path_job_inner(
+        state,
+        input,
+        filename,
+        language,
+        model,
+        experimental_vad,
+        None,
+    )
+    .await
 }
 
 pub async fn start_staged_job(
@@ -31,7 +41,16 @@ pub async fn start_staged_job(
     staged_dir: PathBuf,
     model: &'static NativeModel,
 ) -> Result<String, HelperError> {
-    start_path_job_inner(state, input, filename, language, model, Some(staged_dir)).await
+    start_path_job_inner(
+        state,
+        input,
+        filename,
+        language,
+        model,
+        false,
+        Some(staged_dir),
+    )
+    .await
 }
 
 async fn start_path_job_inner(
@@ -40,6 +59,7 @@ async fn start_path_job_inner(
     filename: String,
     language: Option<String>,
     model: &'static NativeModel,
+    experimental_vad: bool,
     staged_dir: Option<PathBuf>,
 ) -> Result<String, HelperError> {
     let metadata = tokio::fs::metadata(&input).await?;
@@ -96,6 +116,7 @@ async fn start_path_job_inner(
             &input,
             language,
             model,
+            experimental_vad,
             cancel_for_job.subscribe(),
             admission_guard,
         )
@@ -121,6 +142,7 @@ pub async fn run_transcription(
     input: &Path,
     language: Option<String>,
     model_spec: &'static NativeModel,
+    experimental_vad: bool,
     cancel_rx: tokio::sync::watch::Receiver<bool>,
     guard: JobGuard,
 ) -> Result<(), HelperError> {
@@ -135,13 +157,42 @@ pub async fn run_transcription(
         id,
         "transcribing",
         Some(5.0),
-        Some("Preparing audio".into()),
+        Some(
+            if experimental_vad && model_spec.engine == super::models::AsrEngine::WhisperCpp {
+                "Preparing audio and voice detection"
+            } else {
+                "Preparing audio"
+            }
+            .into(),
+        ),
     )
     .await;
     let ffmpeg = super::ffmpeg::ensure_ffmpeg(&state.cache).await?;
     let chunks_dir = work_dir.join("chunks");
     let mut pending = VecDeque::new();
     let mut full_file_whisper = false;
+    let vad_model_path = if experimental_vad
+        && model_spec.engine == super::models::AsrEngine::WhisperCpp
+    {
+        set_phase(
+            state,
+            job,
+            id,
+            "downloading",
+            Some(7.0),
+            Some("Preparing voice detection".into()),
+        )
+        .await;
+        match state.cache.ensure_vad_model().await {
+            Ok(path) => Some(path),
+            Err(error) => {
+                tracing::warn!(job_id = %id, error = %error, "experimental voice detection unavailable; continuing without it");
+                None
+            }
+        }
+    } else {
+        None
+    };
     if model_spec.engine == super::models::AsrEngine::WhisperCpp {
         let wav_path = work_dir.join("input.wav");
         super::ffmpeg::convert_to_wav(&ffmpeg, input, &wav_path, cancel_rx.clone()).await?;
@@ -239,6 +290,7 @@ pub async fn run_transcription(
             cancel_rx.clone(),
             &guard,
             native_progress.clone(),
+            vad_model_path.clone(),
         );
         tokio::pin!(inference);
         let inference_result = if let Some(progress) = native_progress {

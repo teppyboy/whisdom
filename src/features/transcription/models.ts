@@ -35,7 +35,8 @@ export const WHISPER_MODELS: WhisperModel[] = [
     sizeMb: 1450,
     quality: "high",
     multilingual: true,
-    notes: "High-accuracy multilingual model with timestamp-focused weights for high-end devices.",
+    notes:
+      "High-accuracy multilingual model with timestamp-focused weights for high-end devices.",
   },
   {
     id: "onnx-community/whisper-large-v3-turbo",
@@ -43,7 +44,8 @@ export const WHISPER_MODELS: WhisperModel[] = [
     sizeMb: 1600,
     quality: "high",
     multilingual: true,
-    notes: "Best high-end default: much higher accuracy than Small while staying faster than full Large v3.",
+    notes:
+      "Best high-end default: much higher accuracy than Small while staying faster than full Large v3.",
   },
   {
     id: "onnx-community/whisper-large-v3-ONNX",
@@ -51,7 +53,8 @@ export const WHISPER_MODELS: WhisperModel[] = [
     sizeMb: 3100,
     quality: "high",
     multilingual: true,
-    notes: "Maximum accuracy option. Very large download and long initialization; intended for high-end devices.",
+    notes:
+      "Maximum accuracy option. Very large download and long initialization; intended for high-end devices.",
   },
   {
     id: "onnx-community/whisper-tiny.en",
@@ -70,12 +73,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mode: "local-webgpu",
   chunkSeconds: 30,
   overlapSeconds: 1,
+  experimentalVad: false,
   persistMediaBlobs: false,
   serverModelId: null,
 }
 
 export function findModel(modelId: string) {
-  return WHISPER_MODELS.find((model) => model.id === modelId) ?? WHISPER_MODELS[0]
+  return (
+    WHISPER_MODELS.find((model) => model.id === modelId) ?? WHISPER_MODELS[0]
+  )
 }
 
 export function getLocalModelDtype(model: WhisperModel): LocalModelDtype {
@@ -86,6 +92,9 @@ export function requiresWebGpuForLocalModel(model: WhisperModel) {
   return getLocalModelDtype(model) === "q4"
 }
 
-export function canRunModelLocally(model: WhisperModel, device: "webgpu" | "wasm") {
+export function canRunModelLocally(
+  model: WhisperModel,
+  device: "webgpu" | "wasm"
+) {
   return !requiresWebGpuForLocalModel(model) || device === "webgpu"
 }

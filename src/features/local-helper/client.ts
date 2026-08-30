@@ -117,6 +117,7 @@ function parseCapabilities(value: unknown): HelperCapabilities {
     throw new Error("Helper returned invalid capabilities.")
   const {
     available,
+    experimental_vad: experimentalVad,
     engine,
     accelerator,
     model_id: modelId,
@@ -126,6 +127,7 @@ function parseCapabilities(value: unknown): HelperCapabilities {
   } = value
   if (
     typeof available !== "boolean" ||
+    (experimentalVad !== undefined && typeof experimentalVad !== "boolean") ||
     typeof engine !== "string" ||
     typeof accelerator !== "string" ||
     !validOpaqueId(modelId) ||
@@ -148,6 +150,7 @@ function parseCapabilities(value: unknown): HelperCapabilities {
     throw new Error("Helper returned invalid capabilities.")
   return {
     available,
+    experimental_vad: experimentalVad === true,
     engine,
     accelerator,
     model_id: modelId,
@@ -343,7 +346,8 @@ export class LocalHelperClient {
   async startSelection(
     id: string,
     language: LanguageCode,
-    modelId: string
+    modelId: string,
+    experimentalVad = false
   ): Promise<{ jobId: string }> {
     const baseUrl = await this.requireBaseUrl()
     const response = await fetch(
@@ -351,7 +355,12 @@ export class LocalHelperClient {
       {
         method: "POST",
         headers: { ...this.authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ selection_id: id, language, model: modelId }),
+        body: JSON.stringify({
+          selection_id: id,
+          language,
+          model: modelId,
+          experimental_vad: experimentalVad,
+        }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       }
     )

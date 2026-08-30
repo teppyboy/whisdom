@@ -114,6 +114,11 @@ const SETTINGS_V1_KEYS = [
   "uiLanguage",
 ] as const
 const SETTINGS_V2_KEYS = [...SETTINGS_V1_KEYS, "explicitModelId"] as const
+const SETTINGS_V3_LEGACY_KEYS = [
+  ...SETTINGS_V1_KEYS,
+  "experimentalVad",
+] as const
+const SETTINGS_V3_KEYS = [...SETTINGS_V2_KEYS, "experimentalVad"] as const
 const SCHEMA = {
   stores: [
     "conflictCandidates",
@@ -677,11 +682,15 @@ export function parseCompatibilitySettings(
 ): CompatibilityResult<CompatibilitySettingsProjection> {
   if (value === undefined) return ok({ ...defaults, explicitModelId: null })
   if (!isPlainObject(value)) return fail("compatibility.invalid-shape", "$")
-  const version = hasExactKeys(value, SETTINGS_V1_KEYS)
-    ? 1
-    : hasExactKeys(value, SETTINGS_V2_KEYS)
-      ? 2
-      : null
+  const version = hasExactKeys(value, SETTINGS_V3_KEYS)
+    ? 3
+    : hasExactKeys(value, SETTINGS_V3_LEGACY_KEYS)
+      ? 3
+      : hasExactKeys(value, SETTINGS_V2_KEYS)
+        ? 2
+        : hasExactKeys(value, SETTINGS_V1_KEYS)
+          ? 1
+          : null
   if (version === null) return fail("compatibility.invalid-shape", "$")
   if (typeof value.uiLanguage !== "string")
     return fail("compatibility.invalid-shape", "$.uiLanguage")
@@ -720,6 +729,8 @@ export function parseCompatibilitySettings(
     value.overlapSeconds < 0
   )
     return fail("compatibility.out-of-bounds", "$.overlapSeconds")
+  if (version === 3 && typeof value.experimentalVad !== "boolean")
+    return fail("compatibility.invalid-shape", "$.experimentalVad")
   if (typeof value.persistMediaBlobs !== "boolean")
     return fail("compatibility.invalid-shape", "$.persistMediaBlobs")
   const serverModelId =
@@ -728,7 +739,7 @@ export function parseCompatibilitySettings(
       : boundedString(value.serverModelId, "$.serverModelId", 1, 128, 512, true)
   if (!serverModelId.ok) return serverModelId
   const explicitModelId =
-    version === 2
+    version === 2 || hasExactKeys(value, SETTINGS_V3_KEYS)
       ? value.explicitModelId === null
         ? ok<string | null>(null)
         : boundedString(
@@ -749,6 +760,10 @@ export function parseCompatibilitySettings(
     mode: value.mode as ProcessingMode,
     chunkSeconds: value.chunkSeconds,
     overlapSeconds: value.overlapSeconds,
+    experimentalVad:
+      version === 3
+        ? (value.experimentalVad as boolean)
+        : defaults.experimentalVad,
     persistMediaBlobs: value.persistMediaBlobs,
     serverModelId: serverModelId.value,
   })

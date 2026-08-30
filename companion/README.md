@@ -9,10 +9,25 @@ Optional Windows tray companion for the hosted Whisdom web app. The web app rema
 - Rust with the MSVC toolchain.
 - CMake and a working Visual C++ build environment for `whisper-rs`.
 - Optional Vulkan SDK and a Vulkan-capable driver for the Whisper Vulkan build.
-- Optional custom sherpa-onnx DirectML build for Parakeet acceleration. The standard sherpa-onnx crates.io package is CPU-only; DirectML builds require `SHERPA_ONNX_LIB_DIR`.
+- Optional custom sherpa-onnx DirectML build for Parakeet acceleration. The standard sherpa-onnx crates.io package is CPU-only.
 - Node.js and pnpm from the repository requirements.
 
 ## Build
+
+Build the Windows NSIS installer and portable ZIP locally from the repository root:
+
+```powershell
+.\scripts\build-companion-local.ps1
+```
+
+The default builds Whisper with Vulkan. Use `-CpuOnly` when Vulkan SDK tooling is unavailable, or `-DirectML` after building the custom sherpa-onnx DirectML bundle:
+
+```powershell
+.\scripts\build-companion-local.ps1 -CpuOnly
+.\scripts\build-companion-local.ps1 -DirectML
+```
+
+Artifacts are written to `dist\companion\`. Set `-TargetDir F:\w-tauri` to use a short Cargo target path. The script restores `tauri.conf.json` after injecting the exact runtime DLL resources required by the local bundle.
 
 CPU/debug check:
 
@@ -30,14 +45,17 @@ $env:CARGO_TARGET_DIR = "F:\w-tauri"
 pnpm --filter whisdom-companion exec tauri build --features vulkan
 ```
 
-DirectML Parakeet build. Build sherpa-onnx for Windows x64 with `SHERPA_ONNX_ENABLE_DIRECTML=ON`, then point `SHERPA_ONNX_LIB_DIR` at the directory containing that custom build's libraries before compiling:
+DirectML Parakeet build. The repository pins sherpa-onnx `v1.13.6` at commit `1cb484af5e69d3c7803c1eb0b3b5ab8041e0e911`. From a Windows x64 Developer PowerShell with CMake and MSVC:
 
 ```powershell
-$env:SHERPA_ONNX_LIB_DIR = "C:\path\to\sherpa-onnx\lib"
+.\scripts\build-sherpa-directml.ps1
+$env:SHERPA_ONNX_LIB_DIR = (Resolve-Path .\native\sherpa-directml\lib)
 pnpm --filter whisdom-companion exec tauri build --features directml
 ```
 
-The packaged Windows installer is produced under `companion/src-tauri/target/release/bundle/` unless `CARGO_TARGET_DIR` is set.
+The script uses sherpa's pinned DirectML recipe (ONNX Runtime DirectML `1.14.1`, Microsoft.AI.DirectML `1.15.0`), builds shared libraries, disables unrelated components, installs the runtime, verifies the DLL set, and writes `native/sherpa-directml/manifest.json`. The Tauri bundle resource glob includes the generated `bin/*.dll` files beside the executable. Do not set `SHERPA_ONNX_LIB_DIR` to a system ONNX Runtime directory.
+
+The packaged Windows installer is produced under `companion/src-tauri/target/release/bundle/` unless `CARGO_TARGET_DIR` is set. `scripts/build-companion.ps1 -CpuOnly` builds CPU-only; `scripts/build-companion.ps1 -DirectML` requires the generated `native/sherpa-directml` bundle and packages its exact DLL set.
 
 ## Launch
 
@@ -47,7 +65,7 @@ Launch the executable produced by the build (for example, from the repository ro
 .\companion\src-tauri\target\debug\whisdom-companion.exe
 ```
 
-If `CARGO_TARGET_DIR` is set, use the corresponding executable under that target directory. An executable or installer was not manually verified in this session.
+If `CARGO_TARGET_DIR` is set, use the corresponding executable under that target directory. Verify the selected provider from the Companion log: `backend=directml` means the DirectML bundle was selected and recognizer construction succeeded; `Parakeet DirectML initialization failed; falling back to CPU` means CPU. Do not remove a directly imported DLL to test fallback: Windows may fail before Rust starts. Use a separate test bundle with the DirectML feature disabled, or a test-only native probe that returns initialization failure. The installer/real GPU transcription still requires Windows x64 validation with compatible DirectX 12 hardware. After downloading the pinned Parakeet archive, run `.\scripts\smoke-test-sherpa-directml.ps1 -ModelDir <extracted-model-directory> -WavPath <small-wav>`; success prints `directml_recognizer=create_ok` and `transcription=ok`.
 
 The release executable is the same path under `release` after a non-debug build.
 
@@ -102,7 +120,7 @@ POST   /api/v1/cancel/{job_id}
 
 `select-files` returns display metadata only: opaque `id`, sanitized `filename`, `size_bytes`, and optional `extension`. Selection entries live in Companion memory for 30 minutes, are single-use when started, and can be deleted before starting. Canceling the native picker returns `204 No Content`, creates no queue row, and is not an error.
 
-Capabilities expose the Companion's native model catalog, including model ID, label, quality, size, engine, supported languages, active backend, and installed state. Parakeet attempts DirectML when the Companion was built with `directml`; if DirectML recognizer creation fails, it falls back to CPU. sherpa-onnx 1.13.6 can silently fall back to CPU when DirectML is unavailable, so capabilities intentionally report `cpu` unless a future runtime exposes a verified provider query. The existing `vulkan` feature applies to Whisper only and does not make Parakeet Vulkan-capable. The browser can request only a catalog model ID; model URLs, filenames, and checksums are not caller-controlled. Missing models download on demand from pinned HTTPS assets. Every redirect hop is host-allowlisted and HTTPS-validated, the response is size-limited, SHA-256-verified, and atomically finalized before use. Redirects or checksums that fail verification abort the download.
+Capabilities expose the Companion's native model catalog, including model ID, label, quality, size, engine, supported languages, active backend, and installed state. Parakeet first creates a sherpa-onnx recognizer with provider `directml` when the DirectML feature is compiled; if that recognizer returns null, the partial runtime is discarded and a fresh provider `cpu` recognizer is created. sherpa-onnx 1.13.6 exposes no active-provider query, so `directml` means the verified DirectML bundle was selected and recognizer construction succeeded; it is not a low-level execution-provider trace. sherpa-onnx configures DirectML with sequential execution and disabled memory patterns; the Companion's existing single-job gate serializes inference. The existing `vulkan` feature applies to Whisper only and does not make Parakeet Vulkan-capable. The browser can request only a catalog model ID; model URLs, filenames, and checksums are not caller-controlled. Missing models download on demand from pinned HTTPS assets. Every redirect hop is host-allowlisted and HTTPS-validated, the response is size-limited, SHA-256-verified, and atomically finalized before use. Redirects or checksums that fail verification abort the download.
 
 Paths and source media never leave the Companion process. The browser sends no filesystem path, URL, multipart media, or media bytes.
 

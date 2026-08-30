@@ -178,6 +178,27 @@ jobs:
             ConvertTo-Json -Depth 20 |
             Set-Content companion/src-tauri/tauri.conf.json
 
+      - name: Build pinned sherpa-onnx DirectML runtime
+        shell: pwsh
+        run: |
+          $env:Path = "${env:ProgramFiles}\CMake\bin;${env:Path}"
+          & "$env:GITHUB_WORKSPACE/scripts/build-sherpa-directml.ps1" `
+            -BuildDir "D:\sdml-build" `
+            -Generator "Visual Studio 17 2022"
+          if ($LASTEXITCODE -ne 0) {
+            throw "DirectML sherpa build failed: $LASTEXITCODE"
+          }
+          $libPath = Join-Path $env:GITHUB_WORKSPACE `
+            "native/sherpa-directml/lib"
+          $libDir = (Resolve-Path $libPath).Path
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE `
+            "native/sherpa-directml/manifest.json"
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "DirectML bundle manifest missing: $manifestPath"
+          }
+          "SHERPA_ONNX_LIB_DIR=$libDir" >> $env:GITHUB_ENV
+          Write-Output "SHERPA_ONNX_LIB_DIR=$libDir"
+
       - name: Prepare Companion runtime DLLs
         shell: pwsh
         run: |
@@ -186,7 +207,8 @@ jobs:
           $releaseDir = Join-Path $targetRoot "$target/release"
           cargo build --release --target $target `
             --target-dir $targetRoot `
-            --manifest-path "companion/src-tauri/Cargo.toml"
+            --manifest-path "companion/src-tauri/Cargo.toml" `
+            --features "vulkan,directml"
           $requiredDll = Join-Path $releaseDir "sherpa-onnx-c-api.dll"
           if (-not (Test-Path -LiteralPath $requiredDll -PathType Leaf)) {
             throw "Required sherpa runtime DLL not found: $requiredDll"
@@ -195,6 +217,17 @@ jobs:
             -Filter '*.dll' -File)
           if (-not $runtimeDlls) {
             throw "No runtime DLLs found in $releaseDir"
+          }
+          $requiredDirectML = @(
+            'sherpa-onnx-c-api.dll',
+            'onnxruntime.dll',
+            'DirectML.dll'
+          )
+          foreach ($name in $requiredDirectML) {
+            if (-not ($runtimeDlls.Name -contains $name)) {
+              $path = Join-Path $releaseDir $name
+              throw "Required DirectML runtime DLL not found: $path"
+            }
           }
           $dllNames = $runtimeDlls.Name -join ', '
           $distDir = Join-Path $env:GITHUB_WORKSPACE "dist/bin"
@@ -212,6 +245,13 @@ jobs:
             -NotePropertyValue $resources -Force
           $config | ConvertTo-Json -Depth 20 | Set-Content $configPath
           Write-Output "Runtime DLLs: $dllNames"
+          $configCheck = Get-Content $configPath -Raw | ConvertFrom-Json
+          if (-not $configCheck.bundle.resources) {
+            throw "Tauri resource mapping was not written"
+          }
+          if ($configCheck.bundle.resources.Count -lt $requiredDirectML.Count) {
+            throw "Tauri resource mapping is missing DirectML runtime DLLs"
+          }
 
       - name: Publish Companion updater
         uses: tauri-apps/tauri-action@v1
@@ -231,7 +271,7 @@ jobs:
           updaterJsonPreferNsis: true
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
-          args: --target x86_64-pc-windows-msvc --features vulkan
+          args: --target x86_64-pc-windows-msvc --features vulkan,directml
           retryAttempts: 3
 
       - name: Package portable Companion ZIP
@@ -267,9 +307,16 @@ jobs:
 
           $runtimeDlls = @(Get-ChildItem -LiteralPath $releaseDir `
             -Filter "*.dll" -File)
-          $requiredDll = Join-Path $releaseDir "sherpa-onnx-c-api.dll"
-          if (-not ($runtimeDlls.Name -contains "sherpa-onnx-c-api.dll")) {
-            throw "Required sherpa runtime DLL not found: $requiredDll"
+          $requiredDirectML = @(
+            "sherpa-onnx-c-api.dll",
+            "onnxruntime.dll",
+            "DirectML.dll"
+          )
+          foreach ($name in $requiredDirectML) {
+            if (-not ($runtimeDlls.Name -contains $name)) {
+              $path = Join-Path $releaseDir $name
+              throw "Required DirectML runtime DLL not found: $path"
+            }
           }
 
           Copy-Item -LiteralPath $binary -Destination $stagingDir -Force
@@ -278,6 +325,12 @@ jobs:
           $stagingFiles = Join-Path $stagingDir "*"
           Compress-Archive -Path $stagingFiles -DestinationPath $zip `
             -Force
+          $archiveEntries = tar.exe -tf $zip
+          foreach ($name in $requiredDirectML) {
+            if (-not ($archiveEntries -contains $name)) {
+              throw "Portable package missing $name"
+            }
+          }
           Write-Output "Portable package: $zip"
           Write-Output "Runtime DLLs: $($runtimeDlls.Name -join ', ')"
 

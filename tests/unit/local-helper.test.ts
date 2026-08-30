@@ -9,6 +9,7 @@ import {
 const health = { available: true, protocol_version: 2, busy: false }
 const capabilities = {
   available: true,
+  experimental_vad: false,
   engine: "whisper.cpp",
   accelerator: "cpu",
   model_id: "ggml-large-v3-turbo-q5_0",
@@ -101,6 +102,7 @@ describe("LocalHelperClient", () => {
         new Response(
           JSON.stringify({
             ...capabilities,
+            experimental_vad: undefined,
             models: capabilities.models.map((model) => ({
               id: model.id,
               label: model.label,
@@ -301,6 +303,7 @@ describe("LocalHelperClient", () => {
       selection_id: "selection-1",
       language: "vi",
       model: "ggml-base-q5_1",
+      experimental_vad: false,
     })
   })
 

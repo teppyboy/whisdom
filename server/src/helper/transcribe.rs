@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "vulkan")]
@@ -7,7 +7,9 @@ use std::sync::Once;
 
 use hound::WavReader;
 use tokio::sync::{watch, RwLock};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadParams,
+};
 
 use super::cache::{HelperCache, JobGuard};
 use super::models::{AsrEngine, NativeModel};
@@ -198,6 +200,7 @@ pub async fn transcribe_wav(
     cancel_rx: watch::Receiver<bool>,
     _job_guard: &JobGuard,
     progress: Option<Arc<AtomicU32>>,
+    vad_model_path: Option<PathBuf>,
 ) -> Result<Vec<TranscriptSegment>, HelperError> {
     let wav_path = wav_path.to_owned();
     if !mark_pre_cancelled(&cancel, &cancel_rx) {
@@ -226,6 +229,7 @@ pub async fn transcribe_wav(
             cancel,
             0.0,
             progress,
+            vad_model_path,
         )
     })
     .await
@@ -239,6 +243,7 @@ fn transcribe_chunk(
     cancel: Arc<AtomicBool>,
     offset_seconds: f32,
     progress: Option<Arc<AtomicU32>>,
+    vad_model_path: Option<PathBuf>,
 ) -> Result<Vec<TranscriptSegment>, HelperError> {
     let mut state = context.create_state().map_err(|error| {
         HelperError::BadRequest(format!("Whisper state creation failed: {error}"))
@@ -259,6 +264,18 @@ fn transcribe_chunk(
             progress.store(value.clamp(0, 100) as u32, Ordering::Release);
         });
     }
+    if let Some(path) = vad_model_path.as_deref() {
+        let path = path.to_string_lossy();
+        params.set_vad_model_path(Some(&path));
+        let mut vad_params = WhisperVadParams::new();
+        vad_params.set_threshold(0.5);
+        vad_params.set_min_speech_duration(250);
+        vad_params.set_min_silence_duration(120);
+        vad_params.set_speech_pad(80);
+        vad_params.set_samples_overlap(0.1);
+        params.set_vad_params(vad_params);
+        params.enable_vad(true);
+    }
     // SAFETY: `cancel` remains alive until `state.full` returns, so the callback's userdata
     // remains valid for the entire native inference call.
     unsafe {
@@ -267,6 +284,8 @@ fn transcribe_chunk(
     }
     if let Some(language) = language.filter(|value| *value != "auto") {
         params.set_language(Some(language));
+    } else {
+        params.set_detect_language(true);
     }
 
     let audio = samples

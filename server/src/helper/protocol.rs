@@ -73,6 +73,7 @@ pub struct NativeModelResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct CapabilitiesResponse {
     pub available: bool,
+    pub experimental_vad: bool,
     pub engine: &'static str,
     pub accelerator: &'static str,
     pub model_id: String,
@@ -101,6 +102,8 @@ pub struct StartSelectionRequest {
     pub selection_id: String,
     pub language: Option<String>,
     pub model: String,
+    #[serde(default)]
+    pub experimental_vad: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

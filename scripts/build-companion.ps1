@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$CpuOnly,
-    [string]$TargetDir = "F:\w-latest-companion"
+    [switch]$DirectML,
+    [string]$TargetDir = ".\companion\src-tauri\target"
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,7 +10,17 @@ $repo = Split-Path -Parent $PSScriptRoot
 $manifest = Join-Path $repo "companion\src-tauri\Cargo.toml"
 $destination = Join-Path $repo "dist\bin\whisdom-companion.exe"
 
-if (-not $CpuOnly) {
+if ($CpuOnly -and $DirectML) {
+    throw "Choose either -CpuOnly or -DirectML."
+}
+if ($DirectML) {
+    $bundle = Join-Path $repo "native\sherpa-directml\lib"
+    if (-not (Test-Path -LiteralPath $bundle -PathType Container)) {
+        throw "DirectML bundle missing: run scripts/build-sherpa-directml.ps1 first"
+    }
+    $env:SHERPA_ONNX_LIB_DIR = (Resolve-Path $bundle).Path
+    $features = @("--features", "directml")
+} elseif (-not $CpuOnly) {
     if (-not $env:VULKAN_SDK) {
         $env:VULKAN_SDK = "E:\VulkanSDK\1.4.357.0"
     }
@@ -40,6 +51,17 @@ if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
 $runtimeDlls = @(Get-ChildItem -LiteralPath $releaseDir -Filter "*.dll" -File)
 if (-not ($runtimeDlls.Name -contains "sherpa-onnx-c-api.dll")) {
     throw "Required sherpa runtime DLL not found: $(Join-Path $releaseDir 'sherpa-onnx-c-api.dll')"
+}
+if ($DirectML) {
+    $expectedManifest = Join-Path $repo "native\sherpa-directml\manifest.json"
+    if (-not (Test-Path -LiteralPath $expectedManifest -PathType Leaf)) {
+        throw "DirectML bundle manifest missing: run scripts/build-sherpa-directml.ps1 first"
+    }
+    foreach ($name in @("onnxruntime.dll", "DirectML.dll")) {
+        if (-not ($runtimeDlls.Name -contains $name)) {
+            throw "Required DirectML runtime DLL not found in Cargo output: $name"
+        }
+    }
 }
 
 Copy-Item -LiteralPath $binary -Destination $destination -Force

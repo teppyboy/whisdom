@@ -156,6 +156,26 @@ impl HelperCache {
         result
     }
 
+    pub async fn ensure_vad_model(&self) -> Result<PathBuf, HelperError> {
+        let _lock = self.model_lock.lock().await;
+        let path = self.config.models_dir().join("ggml-silero-v6.2.0.bin");
+        if path.is_file() && verify_file_sha256(&path, super::config::VAD_MODEL_SHA256).await? {
+            return Ok(path);
+        }
+        if path.exists() {
+            tokio::fs::remove_file(&path).await?;
+        }
+        download_verified(
+            &self.client,
+            super::config::VAD_MODEL_URL,
+            &path,
+            super::config::VAD_MODEL_SHA256,
+            self.config.max_download_bytes,
+        )
+        .await?;
+        Ok(path)
+    }
+
     pub async fn model_is_installed(&self, model: &NativeModel) -> Result<bool, HelperError> {
         let Some(archive) = model.archive else {
             let path = self.model_path(model);

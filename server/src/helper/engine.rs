@@ -27,8 +27,12 @@ pub async fn load_runtime(
     model: &'static NativeModel,
 ) -> Result<Arc<LoadedRuntime>, HelperError> {
     if let Some(loaded) = runtime.read().await.as_ref() {
-        if matches!((&**loaded, model.engine), (LoadedRuntime::Whisper(loaded), AsrEngine::WhisperCpp) if loaded.model_id == model.id)
-        {
+        let same_model = match (&**loaded, model.engine) {
+            (LoadedRuntime::Whisper(loaded), AsrEngine::WhisperCpp) => loaded.model_id == model.id,
+            (LoadedRuntime::Parakeet(loaded), AsrEngine::SherpaOnnx) => loaded.model_id == model.id,
+            _ => false,
+        };
+        if same_model {
             return Ok(Arc::clone(loaded));
         }
     }
@@ -59,6 +63,7 @@ pub async fn transcribe_wav(
     cancel_rx: watch::Receiver<bool>,
     guard: &JobGuard,
     progress: Option<Arc<AtomicU32>>,
+    vad_model_path: Option<std::path::PathBuf>,
 ) -> Result<Vec<TranscriptSegment>, HelperError> {
     match (&*runtime, model.engine) {
         (LoadedRuntime::Whisper(loaded), AsrEngine::WhisperCpp) => {
@@ -70,6 +75,7 @@ pub async fn transcribe_wav(
                 cancel_rx,
                 guard,
                 progress,
+                vad_model_path,
             )
             .await
         }
@@ -82,28 +88,23 @@ pub async fn transcribe_wav(
     }
 }
 
-pub fn configured_backend(model: &NativeModel) -> &'static str {
-    match model.engine {
-        // Whisper's backend is selected by the Companion build and load path.
-        // Report that compiled capability instead of calling an available model
-        // unavailable before its first transcription job.
-        AsrEngine::WhisperCpp => {
-            #[cfg(feature = "vulkan")]
-            {
-                "vulkan"
-            }
-            #[cfg(not(feature = "vulkan"))]
-            {
-                "cpu"
-            }
+// sherpa-onnx 1.13.6 exposes no active-provider query. The loaded backend is
+// therefore the provider requested for the custom, verified runtime bundle.
+pub async fn active_backend(model: &NativeModel, runtime: &SharedRuntime) -> &'static str {
+    let Some(loaded_runtime) = runtime.read().await.as_ref().cloned() else {
+        return "cpu";
+    };
+    match (&*loaded_runtime, model.engine) {
+        (LoadedRuntime::Whisper(loaded), AsrEngine::WhisperCpp) if loaded.model_id == model.id => {
+            loaded_backend(loaded_runtime.as_ref())
         }
-        // sherpa-onnx does not expose a runtime provider query. Its DirectML
-        // provider can silently fall back to CPU, so capabilities stay honest.
-        AsrEngine::SherpaOnnx => "cpu",
+        (LoadedRuntime::Parakeet(loaded), AsrEngine::SherpaOnnx) if loaded.model_id == model.id => {
+            loaded_backend(loaded_runtime.as_ref())
+        }
+        _ => "cpu",
     }
 }
 
-#[allow(dead_code)]
 pub fn loaded_backend(runtime: &LoadedRuntime) -> &'static str {
     match runtime {
         LoadedRuntime::Whisper(model) => match model.backend {
@@ -136,18 +137,17 @@ mod tests {
         );
         let parakeet = find_native_model("sherpa-parakeet-tdt-v3-int8").unwrap();
         assert_eq!(engine_for(parakeet), AsrEngine::SherpaOnnx);
-        assert_eq!(configured_backend(parakeet), "cpu");
         let whisper = find_native_model("ggml-base-q5_1").unwrap();
         assert_eq!(
-            configured_backend(whisper),
-            if cfg!(feature = "vulkan") {
-                "vulkan"
-            } else {
-                "cpu"
-            }
+            futures::executor::block_on(active_backend(whisper, &SharedRuntime::default())),
+            "cpu"
+        );
+        assert_eq!(
+            futures::executor::block_on(active_backend(parakeet, &SharedRuntime::default())),
+            "cpu"
         );
         assert!(should_try_next_parakeet_backend(&HelperError::BadRequest(
-            "Parakeet Vulkan runtime initialization failed".into()
+            "Parakeet DirectML runtime initialization failed".into()
         )));
         assert!(!should_try_next_parakeet_backend(&HelperError::BadRequest(
             "Parakeet transcription failed".into()

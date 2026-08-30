@@ -28,6 +28,7 @@ export type HelperModel = {
 
 export type HelperCapabilities = {
   available: boolean
+  experimental_vad: boolean
   engine: string
   accelerator: string
   model_id: string
