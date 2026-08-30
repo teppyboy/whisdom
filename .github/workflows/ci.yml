@@ -244,8 +244,8 @@ jobs:
           $configPath = Join-Path $env:GITHUB_WORKSPACE `
             "companion/src-tauri/tauri.conf.json"
           $resourcePaths = @($runtimeDlls.FullName)
-          $resourceJson = $resourcePaths |
-            ConvertTo-Json -Compress
+          $resourceJson = ConvertTo-Json -InputObject $resourcePaths `
+            -Compress
           $configJson = Get-Content $configPath -Raw
           $configJson = $configJson -replace `
             '"resources"\s*:\s*\{\}',
