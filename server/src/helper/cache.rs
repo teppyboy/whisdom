@@ -337,18 +337,34 @@ async fn verify_extracted_files_against_archive(
                 .map_err(|error| std::io::Error::other(error.to_string()))?
                 .into_owned();
             let components = path.components().collect::<Vec<_>>();
+            if path.is_absolute()
+                || components
+                    .iter()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+            {
+                return Err(std::io::Error::other("invalid model archive entry"));
+            }
+            let entry_type = entry.header().entry_type();
+            if entry_type.is_dir() {
+                continue;
+            }
+            if !entry_type.is_file() {
+                return Err(std::io::Error::other("invalid model archive entry"));
+            }
             let Some(filename) = path
                 .file_name()
                 .and_then(|part| part.to_str())
                 .map(ToOwned::to_owned)
             else {
-                return Err(std::io::Error::other("invalid model archive entry"));
+                continue;
             };
             let allowed = components.len() == 2
                 && components[0].as_os_str() == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
                 && expected_files.iter().any(|expected| expected == &filename);
-            let is_file = entry.header().entry_type().is_file();
-            if !allowed || !is_file {
+            if !allowed {
+                continue;
+            }
+            if !verified.insert(filename.clone()) {
                 return Err(std::io::Error::other("invalid model archive entry"));
             }
             let extracted = directory.join(&filename);
@@ -375,7 +391,6 @@ async fn verify_extracted_files_against_archive(
             if extracted_digest.finalize() != archive_digest.finalize() {
                 return Ok(false);
             }
-            verified.insert(filename);
         }
         Ok(verified.len() == expected_files.len()
             && expected_files.iter().all(|file| verified.contains(file)))
@@ -420,15 +435,31 @@ async fn extract_archive(
                 .path()
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             let components = path.components().collect::<Vec<_>>();
-            let filename = path.file_name().and_then(|part| part.to_str());
+            if path.is_absolute()
+                || components
+                    .iter()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+            {
+                return Err(std::io::Error::other("invalid model archive entry"));
+            }
+            let entry_type = entry.header().entry_type();
+            if entry_type.is_dir() {
+                continue;
+            }
+            if !entry_type.is_file() {
+                return Err(std::io::Error::other("invalid model archive entry"));
+            }
+            let Some(filename) = path.file_name().and_then(|part| part.to_str()) else {
+                continue;
+            };
             let allowed = components.len() == 2
                 && components[0].as_os_str() == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
-                && filename
-                    .is_some_and(|name| expected_files.iter().any(|expected| *expected == name));
-            let Some(filename) = filename.map(ToOwned::to_owned) else {
-                return Err(std::io::Error::other("invalid model archive entry"));
-            };
-            if !allowed || found.contains(&filename) || !entry.header().entry_type().is_file() {
+                && expected_files.iter().any(|expected| *expected == filename);
+            if !allowed {
+                continue;
+            }
+            let filename = filename.to_owned();
+            if found.contains(&filename) {
                 return Err(std::io::Error::other("invalid model archive entry"));
             }
             let output = destination.join(&filename);
@@ -583,6 +614,122 @@ mod tests {
         let model = super::super::models::find_native_model("sherpa-parakeet-tdt-v3-int8")
             .expect("Parakeet exists");
         assert!(model.archive.expect("archive").file_hashes.is_none());
+    }
+
+    #[tokio::test]
+    async fn archive_extraction_ignores_safe_extra_entries() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let archive_path = root.path().join("model.tar.bz2");
+        let destination = root.path().join("model");
+        let files = [
+            ("encoder.int8.onnx", b"encoder".as_slice()),
+            ("decoder.int8.onnx", b"decoder".as_slice()),
+            ("joiner.int8.onnx", b"joiner".as_slice()),
+            ("tokens.txt", b"tokens".as_slice()),
+        ];
+        let archive_bytes = {
+            let encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::best());
+            let mut tar = tar::Builder::new(encoder);
+
+            let mut root_header = tar::Header::new_gnu();
+            root_header
+                .set_path("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/")
+                .expect("root archive path");
+            root_header.set_entry_type(tar::EntryType::Directory);
+            root_header.set_size(0);
+            root_header.set_mode(0o755);
+            root_header.set_cksum();
+            tar.append(&root_header, std::io::empty())
+                .expect("root entry");
+
+            for (name, contents) in files {
+                let mut header = tar::Header::new_gnu();
+                header
+                    .set_path(format!(
+                        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/{name}"
+                    ))
+                    .expect("model archive path");
+                header.set_size(contents.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append(&header, contents).expect("model entry");
+            }
+
+            let mut test_wavs_header = tar::Header::new_gnu();
+            test_wavs_header
+                .set_path("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/test_wavs/")
+                .expect("test directory path");
+            test_wavs_header.set_entry_type(tar::EntryType::Directory);
+            test_wavs_header.set_size(0);
+            test_wavs_header.set_mode(0o755);
+            test_wavs_header.set_cksum();
+            tar.append(&test_wavs_header, std::io::empty())
+                .expect("test directory entry");
+
+            let mut extra_header = tar::Header::new_gnu();
+            extra_header
+                .set_path("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav")
+                .expect("extra archive path");
+            extra_header.set_size(5);
+            extra_header.set_mode(0o644);
+            extra_header.set_cksum();
+            tar.append(&extra_header, &b"extra"[..])
+                .expect("extra archive entry");
+
+            let encoder = tar.into_inner().expect("finish tar");
+            encoder.finish().expect("finish bzip2")
+        };
+        std::fs::write(&archive_path, archive_bytes).expect("write archive");
+
+        extract_archive(
+            &archive_path,
+            &destination,
+            &[
+                "encoder.int8.onnx",
+                "decoder.int8.onnx",
+                "joiner.int8.onnx",
+                "tokens.txt",
+            ],
+            None,
+        )
+        .await
+        .expect("extract archive");
+
+        let entries = std::fs::read_dir(&destination)
+            .expect("read extracted directory")
+            .map(|entry| {
+                entry
+                    .expect("read extracted entry")
+                    .file_name()
+                    .into_string()
+                    .expect("UTF-8 extracted filename")
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            entries,
+            [
+                "encoder.int8.onnx",
+                "decoder.int8.onnx",
+                "joiner.int8.onnx",
+                "tokens.txt",
+            ]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect()
+        );
+        assert!(!destination.join("test_wavs").exists());
+        assert!(verify_extracted_files_against_archive(
+            &destination,
+            &archive_path,
+            &[
+                "encoder.int8.onnx",
+                "decoder.int8.onnx",
+                "joiner.int8.onnx",
+                "tokens.txt",
+            ],
+        )
+        .await
+        .expect("verify archive contents"));
     }
 
     #[tokio::test]
