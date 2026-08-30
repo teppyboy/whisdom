@@ -250,6 +250,9 @@ jobs:
           $configJson = $configJson -replace `
             '"resources"\s*:\s*\{\}',
             ('"resources":' + $resourceJson)
+          if ($configJson -notmatch '"resources"\s*:\s*\[') {
+            throw "Tauri resource array was not written"
+          }
           Set-Content $configPath $configJson
           Write-Output "Runtime DLLs: $dllNames"
           $configCheck = Get-Content $configPath -Raw | ConvertFrom-Json
