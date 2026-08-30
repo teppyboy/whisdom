@@ -277,7 +277,9 @@ describe("component harness", () => {
     await user.click(vad)
     expect(vad).not.toBeChecked()
     await user.click(screen.getByRole("button", { name: "Go to home" }))
-    await user.click(screen.getByRole("button", { name: "Start transcription" }))
+    await user.click(
+      screen.getByRole("button", { name: "Start transcription" })
+    )
 
     await waitFor(() =>
       expect(localHelperClient.startSelection).toHaveBeenCalledWith(
