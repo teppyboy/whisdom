@@ -71,12 +71,8 @@ def command_path(name: str) -> str | None:
             Path(os.environ.get("PROGRAMFILES", "")),
             Path(os.environ.get("PROGRAMFILES(X86)", "")),
         ]
-        candidates = [
-            root / "CMake" / "bin" / "cmake.exe"
-            for root in roots
-        ] + [
-            root / "Ninja" / "ninja.exe"
-            for root in roots
+        candidates = [root / "CMake" / "bin" / "cmake.exe" for root in roots] + [
+            root / "Ninja" / "ninja.exe" for root in roots
         ]
         for candidate in candidates:
             if candidate.is_file() and candidate.name.lower() == f"{name}.exe":
@@ -124,23 +120,22 @@ def main() -> int:
         args.vulkan = True
     if args.directml and os.name != "nt":
         raise RuntimeError("DirectML is only available on Windows")
-
     repo = Path(__file__).resolve().parent.parent
     companion = repo / "companion"
     config_path = companion / "src-tauri" / "tauri.conf.json"
     target_dir = resolve_target_dir(repo, args.target_dir)
     artifact_dir = repo / "dist" / "companion"
     env = os.environ.copy()
+    if args.vulkan and os.name == "nt" and not env.get("VULKAN_SDK"):
+        env["VULKAN_SDK"] = r"E:\VulkanSDK\1.4.357.0"
     env["CARGO_TARGET_DIR"] = str(target_dir)
 
     check_tools()
     cmake = command_path("cmake")
     if args.vulkan and cmake is None:
         raise RuntimeError("cmake is required for the Vulkan build")
-    if args.vulkan and not env.get("VULKAN_SDK"):
-        env["VULKAN_SDK"] = r"E:\VulkanSDK\1.4.357.0"
-    if args.vulkan and not Path(env["VULKAN_SDK"]).is_dir():
-        raise RuntimeError(f"VULKAN_SDK not found: {env['VULKAN_SDK']}")
+    if args.vulkan and not Path(env.get("VULKAN_SDK", "")).is_dir():
+        raise RuntimeError(f"VULKAN_SDK not found: {env.get('VULKAN_SDK', '')}")
     ninja = command_path("ninja")
     if args.vulkan and platform.system() == "Windows" and ninja is None:
         raise RuntimeError("ninja is required for the Windows Vulkan build")
