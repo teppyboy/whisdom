@@ -62,9 +62,57 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def command_path(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    if os.name == "nt":
+        roots = [
+            Path(os.environ.get("PROGRAMFILES", "")),
+            Path(os.environ.get("PROGRAMFILES(X86)", "")),
+        ]
+        candidates = [
+            root / "CMake" / "bin" / "cmake.exe"
+            for root in roots
+        ] + [
+            root / "Ninja" / "ninja.exe"
+            for root in roots
+        ]
+        for candidate in candidates:
+            if candidate.is_file() and candidate.name.lower() == f"{name}.exe":
+                return str(candidate)
+        if name == "cmake":
+            vswhere = (
+                Path(os.environ.get("PROGRAMFILES(X86)", ""))
+                / "Microsoft Visual Studio"
+                / "Installer"
+                / "vswhere.exe"
+            )
+            if vswhere.is_file():
+                result = subprocess.run(
+                    [
+                        str(vswhere),
+                        "-latest",
+                        "-products",
+                        "*",
+                        "-requires",
+                        "Microsoft.VisualStudio.Component.VC.CMake.Project",
+                        "-find",
+                        "Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                discovered = result.stdout.strip().splitlines()
+                if discovered and Path(discovered[0]).is_file():
+                    return discovered[0]
+    return None
+
+
 def check_tools() -> None:
     for name in ("cargo", "pnpm"):
-        if shutil.which(name) is None:
+        if command_path(name) is None:
             raise RuntimeError(f"{name} is required and was not found on PATH")
 
 
@@ -86,20 +134,26 @@ def main() -> int:
     env["CARGO_TARGET_DIR"] = str(target_dir)
 
     check_tools()
-    if args.vulkan and shutil.which("cmake") is None:
-        raise RuntimeError(
-            "cmake is required for the Vulkan build; install CMake and add it to PATH"
-        )
+    cmake = command_path("cmake")
+    if args.vulkan and cmake is None:
+        raise RuntimeError("cmake is required for the Vulkan build")
     if args.vulkan and not env.get("VULKAN_SDK"):
-        raise RuntimeError("VULKAN_SDK is required when --vulkan is enabled")
-    if args.vulkan and platform.system() == "Windows" and shutil.which("ninja") is None:
+        env["VULKAN_SDK"] = r"E:\VulkanSDK\1.4.357.0"
+    if args.vulkan and not Path(env["VULKAN_SDK"]).is_dir():
+        raise RuntimeError(f"VULKAN_SDK not found: {env['VULKAN_SDK']}")
+    ninja = command_path("ninja")
+    if args.vulkan and platform.system() == "Windows" and ninja is None:
         raise RuntimeError("ninja is required for the Windows Vulkan build")
+    if cmake:
+        env["PATH"] = str(Path(cmake).parent) + os.pathsep + env.get("PATH", "")
+    if ninja:
+        env["PATH"] = str(Path(ninja).parent) + os.pathsep + env["PATH"]
     if args.directml:
         bundle = repo / "native" / "sherpa-directml"
         lib_dir = bundle / "lib"
         manifest = bundle / "manifest.json"
         if not lib_dir.is_dir() or not manifest.is_file():
-                raise RuntimeError(
+            raise RuntimeError(
                 "DirectML bundle missing; run the existing "
                 "scripts/build-sherpa-directml.ps1 first"
             )
