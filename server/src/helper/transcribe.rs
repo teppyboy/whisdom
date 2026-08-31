@@ -284,9 +284,10 @@ fn transcribe_chunk(
     }
     if let Some(language) = language.filter(|value| *value != "auto") {
         params.set_language(Some(language));
-    } else {
-        params.set_detect_language(true);
     }
+    // Leave detect_language false for auto mode. whisper.cpp still detects the
+    // language when language is null, then continues into transcription; setting
+    // it true makes whisper_full return immediately after detection.
 
     let audio = samples
         .iter()
