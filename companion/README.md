@@ -14,20 +14,22 @@ Optional Windows tray companion for the hosted Whisdom web app. The web app rema
 
 ## Build
 
-Build the Windows NSIS installer and portable ZIP locally from the repository root:
+Build the Companion installer and portable ZIP locally from the repository root with Python:
 
 ```powershell
-.\scripts\build-companion-local.ps1
+python scripts/build_companion.py
 ```
 
-The default builds Whisper with Vulkan. Use `-CpuOnly` when Vulkan SDK tooling is unavailable, or `-DirectML` after building the custom sherpa-onnx DirectML bundle:
+The default enables Vulkan for whisper.cpp. Add DirectML after building the custom sherpa-onnx bundle. Use `--cpu-only` when GPU tooling is unavailable:
 
 ```powershell
-.\scripts\build-companion-local.ps1 -CpuOnly
-.\scripts\build-companion-local.ps1 -DirectML
+python scripts/build_companion.py --vulkan --directml --target-dir F:\w-tauri
+python scripts/build_companion.py --cpu-only
 ```
 
-Artifacts are written to `dist\companion\`. Set `-TargetDir F:\w-tauri` to use a short Cargo target path. The script restores `tauri.conf.json` after injecting the exact runtime DLL resources required by the local bundle.
+On Windows, the combined build requires the Vulkan SDK, CMake, Ninja, and the custom DirectML bundle. On Linux and macOS, the script selects the native Tauri bundle for that host; DirectML remains Windows-only.
+
+Artifacts are written to `dist\companion\`. The script restores `tauri.conf.json` after injecting the exact runtime library map required by the local bundle.
 
 CPU/debug check:
 
@@ -55,7 +57,7 @@ pnpm --filter whisdom-companion exec tauri build --features directml
 
 The script uses sherpa's pinned DirectML recipe (ONNX Runtime DirectML `1.14.1`, Microsoft.AI.DirectML `1.15.0`), builds shared libraries, disables unrelated components, installs the runtime, verifies the DLL set, and writes `native/sherpa-directml/manifest.json`. The Tauri bundle resource glob includes the generated `bin/*.dll` files beside the executable. Do not set `SHERPA_ONNX_LIB_DIR` to a system ONNX Runtime directory.
 
-The packaged Windows installer is produced under `companion/src-tauri/target/release/bundle/` unless `CARGO_TARGET_DIR` is set. `scripts/build-companion.ps1 -CpuOnly` builds CPU-only; `scripts/build-companion.ps1 -DirectML` requires the generated `native/sherpa-directml` bundle and packages its exact DLL set.
+The packaged Windows installer is produced under `companion/src-tauri/target/release/bundle/` unless `CARGO_TARGET_DIR` is set. `scripts/build_companion.py --cpu-only` builds CPU-only; `scripts/build_companion.py --directml` requires the generated `native/sherpa-directml` bundle and packages its exact DLL set.
 
 ## Launch
 
