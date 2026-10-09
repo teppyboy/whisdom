@@ -83,6 +83,8 @@ export type TranscriptionProgress = {
   phase: JobState
   message: string
   progress: number
+  /** True when the current phase reports no usable percent. */
+  indeterminate?: boolean
   detail?: {
     id: string
     message: string

@@ -4,13 +4,8 @@ import {
   ArrowLeft,
   CheckCircle2,
   Check,
-  ChevronDown,
-  ChevronUp,
-  ChevronsUpDown,
   Download,
   ExternalLink,
-  FileAudio,
-  FileVideo,
   Gauge,
   HardDrive,
   Languages,
@@ -18,11 +13,9 @@ import {
   Moon,
   Play,
   Settings2,
-  Search,
   Sparkles,
   Sun,
   Trash2,
-  UploadCloud,
   User,
 } from "lucide-react"
 
@@ -55,7 +48,6 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Progress } from "@/components/ui/progress"
 import {
   Select,
   SelectContent,
@@ -83,7 +75,6 @@ import {
   getLanguageLabel,
   isEnglishOnlyLanguageMismatch,
   resolveTranscriptionLanguage,
-  TRANSCRIPTION_LANGUAGES,
 } from "@/features/transcription/language"
 import { formatProductError, type ProductError } from "@/app/copy"
 import { ProductErrorPanel } from "@/components/product/ProductErrorPanel"
@@ -126,10 +117,26 @@ import type {
   HelperCapabilities,
   HelperDiagnostics,
   HelperHealth,
+  HelperLogEvent,
   HelperModel,
   HelperStreamPhase,
   HelperUpdate,
 } from "@/features/local-helper/types"
+import {
+  queueFileName,
+  type QueuedFile,
+  type QueueSource,
+  type QueuedFileStatus,
+} from "@/features/transcription/queue"
+import { DropZone } from "@/components/app/DropZone"
+import { FileQueuePanel } from "@/components/app/FileQueuePanel"
+import { LanguageCombobox } from "@/components/app/LanguageCombobox"
+import { AppToast, type ToastMessage } from "@/components/app/AppToast"
+import {
+  TranscriptionProgressPanel,
+  type ProgressPanelLogLine,
+  type TranscriptionProgressCopy,
+} from "@/components/product/TranscriptionProgressPanel"
 import { ServerTranscriptionApi } from "@/features/server-transcription/api"
 import type {
   ServerCapabilities,
@@ -197,28 +204,12 @@ type ProgressLogEntry = {
   progress?: number
   updatedAt: string
 }
-type QueuedFileStatus = "pending" | "active" | "complete" | "error"
-type QueueSource =
-  | { kind: "browser"; file: File }
-  | { kind: "companion"; selectionId: string; name: string; sizeBytes: number }
-type QueuedFile = {
+type HelperLogLine = {
   id: string
-  source: QueueSource
-  status: QueuedFileStatus
-  transcriptId?: string
-  error?: string
-}
-
-function queueFileName(item: QueuedFile) {
-  return item.source.kind === "browser"
-    ? item.source.file.name
-    : item.source.name
-}
-
-function queueFileSize(item: QueuedFile) {
-  return item.source.kind === "browser"
-    ? item.source.file.size
-    : item.source.sizeBytes
+  ts: string
+  level: HelperLogEvent["level"]
+  target: string
+  message: string
 }
 
 function resolveTranscriptModelLabel(
@@ -235,12 +226,6 @@ function resolveTranscriptModelLabel(
       )?.label ?? transcript.modelId
     )
   return findModel(transcript.modelId).label
-}
-type ToastMessage = {
-  id: string
-  title: string
-  description: string
-  kind?: "success" | "error"
 }
 type DriveStatus =
   | { type: "idle" }
@@ -423,6 +408,9 @@ const COPY = {
     fileQueue: "Files",
     selectFile: "Open file",
     removeFile: "Remove",
+    stepAddFiles: "Step 1 · Add files",
+    stepConfigure: "Step 2 · Configure",
+    stepTranscribe: "Step 3 · Transcribe",
     transcribeSelected: "Transcribe selected file",
     transcribeAll: (count: number) => `Transcribe all ${count} files`,
     queueStatusLabels: {
@@ -439,9 +427,18 @@ const COPY = {
     emptyPreflight:
       "Choose a file to see its duration, chunk plan, and required downloads.",
     downloads: "Required downloads",
-    detailedLog: "Progress details",
-    showDetailedLog: "Show progress details",
-    hideDetailedLog: "Hide progress details",
+    phasePrepare: "Prepare",
+    phaseModel: "Model",
+    phaseTranscribe: "Transcribe",
+    technicalDetails: "Technical details",
+    noLogEvents: "No log events yet.",
+    etaRemaining: (text: string) => `~${text} remaining`,
+    etaSeconds: (seconds: number) => `${seconds}s`,
+    etaMinutes: (minutes: number, seconds: number) => `${minutes}m ${seconds}s`,
+    cancelTranscription: "Cancel transcription",
+    cancelling: "Cancelling…",
+    cancelFailed: "Could not cancel the transcription.",
+    errorDetailsTitle: "Open error details",
     unknownDuration: "Not available",
     confirmTranscribe: "Start transcription",
     transcript: "Transcription",
@@ -683,6 +680,9 @@ const COPY = {
     fileQueue: "Tệp đã chọn",
     selectFile: "Mở tệp",
     removeFile: "Xóa",
+    stepAddFiles: "Bước 1 · Thêm tệp",
+    stepConfigure: "Bước 2 · Thiết lập",
+    stepTranscribe: "Bước 3 · Chuyển ngữ",
     transcribeSelected: "Chuyển ngữ tệp đang chọn",
     transcribeAll: (count: number) => `Chuyển ngữ tất cả ${count} tệp`,
     queueStatusLabels: {
@@ -699,9 +699,19 @@ const COPY = {
     emptyPreflight:
       "Chọn tệp để xem thời lượng, kế hoạch chia đoạn và các tệp cần tải.",
     downloads: "Tệp cần tải",
-    detailedLog: "Chi tiết tiến trình",
-    showDetailedLog: "Hiện chi tiết tiến trình",
-    hideDetailedLog: "Ẩn chi tiết tiến trình",
+    phasePrepare: "Chuẩn bị",
+    phaseModel: "Tải mô hình",
+    phaseTranscribe: "Chuyển ngữ",
+    technicalDetails: "Chi tiết kỹ thuật",
+    noLogEvents: "Chưa có nhật ký sự kiện.",
+    etaRemaining: (text: string) => `còn khoảng ${text}`,
+    etaSeconds: (seconds: number) => `${seconds} giây`,
+    etaMinutes: (minutes: number, seconds: number) =>
+      `${minutes} phút ${seconds} giây`,
+    cancelTranscription: "Hủy chuyển ngữ",
+    cancelling: "Đang hủy…",
+    cancelFailed: "Không thể hủy phiên chuyển ngữ.",
+    errorDetailsTitle: "Xem chi tiết lỗi",
     unknownDuration: "Chưa có dữ liệu",
     confirmTranscribe: "Bắt đầu chuyển ngữ",
     transcript: "Bản chuyển ngữ",
@@ -781,7 +791,7 @@ const COPY = {
   },
 } as const
 
-type Copy = (typeof COPY)[UiLanguage]
+export type Copy = (typeof COPY)[UiLanguage]
 
 function companionModelSupportsLanguage(
   model: HelperModel,
@@ -970,6 +980,16 @@ export function App() {
     progress: 0,
   })
   const [progressLog, setProgressLog] = React.useState<ProgressLogEntry[]>([])
+  const [helperEventLogs, setHelperEventLogs] = React.useState<HelperLogLine[]>([])
+  const [etaSeconds, setEtaSeconds] = React.useState<number | null>(null)
+  const [activeHelperJobId, setActiveHelperJobId] = React.useState<
+    string | null
+  >(null)
+  const [cancellingHelperJob, setCancellingHelperJob] = React.useState(false)
+  const etaTrackerRef = React.useRef<{
+    startedAt: number | null
+    lastValue: number
+  }>({ startedAt: null, lastValue: 0 })
   const [transcript, setTranscript] = React.useState<TranscriptDocument | null>(
     null
   )
@@ -1153,6 +1173,22 @@ export function App() {
             event.status === "queued" || event.status === "running"
           )
         },
+        onLog: (event) => {
+          if (cancelled) return
+          setHelperEventLogs((current) => {
+            const next = [
+              ...current,
+              {
+                id: createId("log"),
+                ts: event.ts,
+                level: event.level,
+                target: event.target,
+                message: event.message,
+              },
+            ]
+            return next.length > 50 ? next.slice(next.length - 50) : next
+          })
+        },
       },
       () => {
         if (cancelled) return
@@ -1252,7 +1288,76 @@ export function App() {
     isEnglishOnlyLanguageMismatch(settings.language, settings.uiLanguage) &&
     !model.multilingual
 
+  const progressPanelCopy: TranscriptionProgressCopy = {
+    phasePrepare: t.phasePrepare,
+    phaseModel: t.phaseModel,
+    phaseTranscribe: t.phaseTranscribe,
+    technicalDetails: t.technicalDetails,
+    copyDiagnostics: t.copyDiagnostics,
+    diagnosticsCopied: t.diagnosticsCopied,
+    diagnosticsCopyFailed: t.diagnosticsCopyFailed,
+    noLogEvents: t.noLogEvents,
+    etaRemaining: t.etaRemaining,
+    etaSeconds: t.etaSeconds,
+    etaMinutes: t.etaMinutes,
+    cancelTranscription: t.cancelTranscription,
+    cancelling: t.cancelling,
+    errorDetailsTitle: t.errorDetailsTitle,
+  }
+  const progressPanelLogs: ProgressPanelLogLine[] =
+    helperEventLogs.length > 0
+      ? helperEventLogs.map((log) => ({
+          id: log.id,
+          timestamp: new Date(log.ts).toLocaleTimeString(),
+          level: log.level,
+          message: log.target
+            ? `${log.target} — ${log.message}`
+            : log.message,
+        }))
+      : progressLog.map((entry) => ({
+          id: entry.id,
+          timestamp: entry.updatedAt,
+          level: entry.phase === "error" ? ("error" as const) : undefined,
+          message:
+            entry.progress === undefined
+              ? entry.message
+              : `${entry.message} (${Math.round(entry.progress * 100)}%)`,
+        }))
+  const canCancelHelperJob =
+    settings.mode === "local-helper" &&
+    isBusy(jobState) &&
+    activeHelperJobId !== null
+
+  function updateEtaEstimate(nextProgress: TranscriptionProgress) {
+    const value = nextProgress.indeterminate === true ? null : nextProgress.progress
+    const tracker = etaTrackerRef.current
+    const shouldReset =
+      value === null ||
+      value <= 0.02 ||
+      value >= 0.98 ||
+      value < tracker.lastValue - 0.1
+    if (shouldReset) {
+      etaTrackerRef.current = { startedAt: null, lastValue: value ?? 0 }
+      setEtaSeconds(null)
+      return
+    }
+    if (tracker.startedAt === null) {
+      etaTrackerRef.current = { startedAt: Date.now(), lastValue: value }
+      setEtaSeconds(null)
+      return
+    }
+    etaTrackerRef.current = { startedAt: tracker.startedAt, lastValue: value }
+    const elapsedSeconds = (Date.now() - tracker.startedAt) / 1000
+    if (elapsedSeconds < 2) {
+      setEtaSeconds(null)
+      return
+    }
+    const raw = (elapsedSeconds * (1 - value)) / value
+    setEtaSeconds(raw >= 5 && raw <= 3600 ? Math.round(raw) : null)
+  }
+
   function recordProgress(nextProgress: TranscriptionProgress) {
+    updateEtaEstimate(nextProgress)
     const localizedProgress: TranscriptionProgress = {
       ...nextProgress,
       message: localizeProgressMessage(nextProgress.message, t),
@@ -1690,6 +1795,7 @@ export function App() {
               phase: mapped,
               message: status.message ?? "",
               progress: status.progress ?? 0,
+              indeterminate: status.progress == null,
             })
 
             if (status.phase === "complete" && status.segments) {
@@ -1760,6 +1866,7 @@ export function App() {
             phase: mapped,
             message: status.message ?? "",
             progress: status.progress ?? 0,
+            indeterminate: status.progress == null,
           })
 
           if (status.phase === "complete" && status.segments) {
@@ -1927,8 +2034,13 @@ export function App() {
       companionModelId,
       runSettings.experimentalVad === true
     )
+    setActiveHelperJobId(jobId)
     return new Promise<TranscriptDocument>((resolve, reject) => {
       let settled = false
+      function finishSettled() {
+        settled = true
+        setActiveHelperJobId(null)
+      }
       const connection = localHelperClient.subscribeEvents(
         {
           onProgress: (event) => {
@@ -1945,13 +2057,20 @@ export function App() {
               progress: normalizeHelperProgress(
                 event.percent === null ? undefined : event.percent * 100
               ),
+              indeterminate: event.percent === null,
+              detail: event.detail
+                ? {
+                    id: `detail:${event.phase}:${event.detail}`,
+                    message: event.detail,
+                  }
+                : undefined,
             })
             setJobState(mapped)
           },
           onJob: (event) => {
             if (settled || event.job_id !== jobId) return
             if (event.status === "queued" || event.status === "running") return
-            settled = true
+            finishSettled()
             connection.unsubscribe()
             if (event.status === "complete") {
               void localHelperClient
@@ -2021,11 +2140,59 @@ export function App() {
         },
         (caught) => {
           if (settled) return
-          settled = true
+          finishSettled()
+          connection.unsubscribe()
           reject(caught)
         }
       )
     })
+  }
+
+  async function cancelActiveHelperJob() {
+    const jobId = activeHelperJobId
+    if (!jobId || cancellingHelperJob) return
+    setCancellingHelperJob(true)
+    try {
+      await localHelperClient.cancelJob(jobId)
+    } catch {
+      setToastMessage({
+        id: createId("toast"),
+        title: t.cancelTranscription,
+        description: t.cancelFailed,
+        kind: "error",
+      })
+    } finally {
+      setCancellingHelperJob(false)
+    }
+  }
+
+  async function copyDiagnosticsBundle(): Promise<boolean> {
+    let diagnostics: HelperDiagnostics | { error: string }
+    try {
+      diagnostics = await localHelperClient.getDiagnostics()
+    } catch (caught) {
+      diagnostics = {
+        error: caught instanceof Error ? caught.message : String(caught),
+      }
+    }
+    const bundle = {
+      generated_at: new Date().toISOString(),
+      job: {
+        state: jobState,
+        phase: progress.phase,
+        progress: progress.progress,
+        message: progress.message,
+        job_id: activeHelperJobId,
+      },
+      diagnostics,
+      logs: helperEventLogs,
+    }
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(bundle, null, 2))
+      return true
+    } catch {
+      return false
+    }
   }
 
   async function startTranscription() {
@@ -2468,8 +2635,87 @@ export function App() {
             className="grid flex-1 animate-in gap-6 duration-300 ease-out fade-in slide-in-from-bottom-2 lg:grid-cols-[minmax(0,1fr)_360px]"
           >
             <div className="flex min-w-0 flex-col gap-6">
+              <ModeStatusStrip
+                mode={settings.mode}
+                copy={t}
+                companion={
+                  settings.mode === "local-helper"
+                    ? companionHealth === "checking"
+                      ? "checking"
+                      : companionHealth === null || !companionHealth.available
+                        ? "unavailable"
+                        : companionBusy
+                          ? "busy"
+                          : "available"
+                    : null
+                }
+              />
+
+              {settings.mode === "local-helper" ? (
+                <>
+                  <DropZone
+                    file={null}
+                    fileCount={queue.length}
+                    isBusy={isBusy(jobState)}
+                    copy={t}
+                    stepLabel={t.stepAddFiles}
+                    onPick={() => void selectCompanionFiles()}
+                    onDropFiles={() => undefined}
+                    nativeOnly
+                  />
+                  {queue.length > 0 ? (
+                    <FileQueuePanel
+                      queue={queue}
+                      selectedId={selectedQueueId}
+                      disabled={isBusy(jobState)}
+                      copy={t}
+                      onSelect={(item) => void selectQueueItem(item)}
+                      onRemove={(id) => void removeQueuedFile(id)}
+                      onMove={moveQueueItem}
+                    />
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <DropZone
+                    file={file}
+                    fileCount={queue.length}
+                    isBusy={isBusy(jobState)}
+                    copy={t}
+                    stepLabel={t.stepAddFiles}
+                    onPick={() => fileInputRef.current?.click()}
+                    onDropFiles={(nextFiles) => void handleFiles(nextFiles)}
+                  />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="audio/*,video/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const nextFiles = Array.from(event.target.files ?? [])
+                      if (nextFiles.length > 0) void handleFiles(nextFiles)
+                      event.currentTarget.value = ""
+                    }}
+                  />
+                  {queue.length > 1 ? (
+                    <FileQueuePanel
+                      queue={queue}
+                      selectedId={selectedQueueId}
+                      disabled={isBusy(jobState)}
+                      copy={t}
+                      onSelect={(item) => void selectQueueItem(item)}
+                      onRemove={(id) => void removeQueuedFile(id)}
+                      onMove={moveQueueItem}
+                    />
+                  ) : null}
+                </>
+              )}
+
+
               <MainControls
                 settings={settings}
+                stepLabel={t.stepConfigure}
                 model={model}
                 copy={t}
                 isEnglishOnlyMismatch={isEnglishOnlyMismatch}
@@ -2638,67 +2884,9 @@ export function App() {
                 )
               ) : null}
 
-              {settings.mode === "local-helper" ? (
-                <>
-                  <DropZone
-                    file={null}
-                    fileCount={queue.length}
-                    isBusy={isBusy(jobState)}
-                    copy={t}
-                    onPick={() => void selectCompanionFiles()}
-                    onDropFiles={() => undefined}
-                    nativeOnly
-                  />
-                  {queue.length > 0 ? (
-                    <FileQueuePanel
-                      queue={queue}
-                      selectedId={selectedQueueId}
-                      disabled={isBusy(jobState)}
-                      copy={t}
-                      onSelect={(item) => void selectQueueItem(item)}
-                      onRemove={(id) => void removeQueuedFile(id)}
-                      onMove={moveQueueItem}
-                    />
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <DropZone
-                    file={file}
-                    fileCount={queue.length}
-                    isBusy={isBusy(jobState)}
-                    copy={t}
-                    onPick={() => fileInputRef.current?.click()}
-                    onDropFiles={(nextFiles) => void handleFiles(nextFiles)}
-                  />
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept="audio/*,video/*"
-                    className="hidden"
-                    onChange={(event) => {
-                      const nextFiles = Array.from(event.target.files ?? [])
-                      if (nextFiles.length > 0) void handleFiles(nextFiles)
-                      event.currentTarget.value = ""
-                    }}
-                  />
-                  {queue.length > 1 ? (
-                    <FileQueuePanel
-                      queue={queue}
-                      selectedId={selectedQueueId}
-                      disabled={isBusy(jobState)}
-                      copy={t}
-                      onSelect={(item) => void selectQueueItem(item)}
-                      onRemove={(id) => void removeQueuedFile(id)}
-                      onMove={moveQueueItem}
-                    />
-                  ) : null}
-                </>
-              )}
-
               <PreflightPanel
                 analysis={analysis}
+                stepLabel={t.stepTranscribe}
                 model={
                   settings.mode === "server"
                     ? (selectedServerModel?.label ??
@@ -2710,9 +2898,15 @@ export function App() {
                 }
                 copy={t}
                 progress={progress}
-                progressLog={progressLog}
                 jobState={jobState}
                 error={error}
+                panelCopy={progressPanelCopy}
+                panelLogs={progressPanelLogs}
+                panelEtaSeconds={etaSeconds}
+                canCancelJob={canCancelHelperJob}
+                cancellingJob={cancellingHelperJob}
+                onCancelJob={() => void cancelActiveHelperJob()}
+                onCopyDiagnostics={() => copyDiagnosticsBundle()}
                 canStart={Boolean(canStart)}
                 canStartAll={canStartAll}
                 queueCount={queue.length}
@@ -2794,6 +2988,7 @@ function MainControls({
   settings,
   model,
   copy,
+  stepLabel,
   isEnglishOnlyMismatch,
   updateSetting,
   serverCapabilities,
@@ -2820,6 +3015,7 @@ function MainControls({
   settings: AppSettings
   model: ReturnType<typeof findModel>
   copy: Copy
+  stepLabel: string
   isEnglishOnlyMismatch: boolean
   updateSetting: <T extends keyof AppSettings>(
     key: T,
@@ -2864,6 +3060,9 @@ function MainControls({
     <>
       <Card className="relative z-20 animate-in overflow-visible duration-300 ease-out fade-in slide-in-from-bottom-1">
       <CardHeader>
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {stepLabel}
+        </p>
         <CardTitle className="text-base">{copy.quickSetup}</CardTitle>
         <CardDescription>{copy.quickSetupDescription}</CardDescription>
       </CardHeader>
@@ -3222,143 +3421,6 @@ function DiagnosticsRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-function LanguageCombobox({
-  value,
-  copy,
-  onValueChange,
-}: {
-  value: LanguageCode
-  copy: Copy
-  onValueChange: (value: LanguageCode) => void
-}) {
-  const [open, setOpen] = React.useState(false)
-  const [query, setQuery] = React.useState("")
-  const containerRef = React.useRef<HTMLDivElement>(null)
-  const selectedLabel = getLanguageLabel(value, copy.languageLabels.auto)
-  const normalizedQuery = query.trim().toLowerCase()
-  const options = React.useMemo(() => {
-    const allOptions = [
-      {
-        code: "auto",
-        name: copy.languageLabels.auto,
-        nativeName: copy.languageLabels.auto,
-        whisperName: "auto",
-      },
-      ...TRANSCRIPTION_LANGUAGES,
-    ]
-
-    if (!normalizedQuery) {
-      return allOptions
-    }
-
-    return allOptions.filter((item) =>
-      [item.code, item.name, item.nativeName, item.whisperName]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery)
-    )
-  }, [copy.languageLabels.auto, normalizedQuery])
-
-  React.useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    function closeOnOutsidePointer(event: PointerEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setOpen(false)
-      }
-    }
-
-    document.addEventListener("pointerdown", closeOnOutsidePointer)
-
-    return () =>
-      document.removeEventListener("pointerdown", closeOnOutsidePointer)
-  }, [open])
-
-  return (
-    <div ref={containerRef} className="relative">
-      <Button
-        type="button"
-        variant="outline"
-        aria-label={copy.language}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        className="w-full justify-between"
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="truncate">{selectedLabel}</span>
-        <ChevronsUpDown className="size-4 text-muted-foreground" />
-      </Button>
-
-      {open ? (
-        <div className="absolute z-50 mt-2 w-full min-w-[18rem] animate-in overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg duration-150 fade-in-0 zoom-in-95">
-          <div className="flex items-center gap-2 border-b px-4 py-2.5">
-            <Search className="size-4 text-muted-foreground" />
-            <Input
-              role="searchbox"
-              aria-label={copy.searchLanguage}
-              value={query}
-              className="h-8 border-0 shadow-none focus-visible:ring-0"
-              placeholder={copy.searchLanguage}
-              autoFocus
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  setOpen(false)
-                }
-              }}
-            />
-          </div>
-
-          <div role="listbox" className="max-h-72 overflow-auto p-2">
-            {options.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-                {copy.noLanguages}
-              </p>
-            ) : (
-              options.map((item) => (
-                <button
-                  key={item.code}
-                  type="button"
-                  role="option"
-                  aria-selected={item.code === value}
-                  className="flex w-full items-center gap-3 rounded-sm px-3 py-3 text-left text-sm hover:bg-accent hover:text-accent-foreground aria-selected:bg-accent"
-                  onClick={() => {
-                    onValueChange(item.code)
-                    setQuery("")
-                    setOpen(false)
-                  }}
-                >
-                  <Check
-                    className={cn(
-                      "size-4",
-                      item.code === value ? "opacity-100" : "opacity-0"
-                    )}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">
-                      {item.name}
-                    </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {item.code === "auto"
-                        ? copy.spokenLanguage
-                        : item.nativeName}
-                    </span>
-                  </span>
-                  <span className="shrink-0 pr-1 text-xs text-muted-foreground uppercase">
-                    {item.code}
-                  </span>
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
 function SettingsPage({
   settings,
   updateSetting,
@@ -3538,190 +3600,21 @@ function SettingRow({
   )
 }
 
-function DropZone({
-  file,
-  fileCount,
-  isBusy,
-  copy,
-  onPick,
-  onDropFiles,
-  nativeOnly = false,
-}: {
-  file: File | null
-  fileCount: number
-  isBusy: boolean
-  copy: Copy
-  onPick: () => void
-  onDropFiles: (files: File[]) => void
-  nativeOnly?: boolean
-}) {
-  const title = nativeOnly
-    ? copy.companionPickerTitle
-    : file
-      ? fileCount > 1
-        ? copy.filesSelected(fileCount)
-        : file.name
-      : copy.dropTitle
-  const description = nativeOnly
-    ? copy.companionPickerDescription
-    : file && fileCount > 1
-      ? copy.selectedFile(file.name)
-      : copy.dropDescription
-
-  return (
-    <div
-      className={cn(
-        "group relative grid min-h-[240px] place-items-center rounded-lg border border-dashed bg-card p-6 text-center transition-all duration-200 ease-out",
-        !isBusy && "hover:border-ring hover:bg-accent/40"
-      )}
-      onDragOver={(event) => {
-        event.preventDefault()
-      }}
-      onDrop={(event) => {
-        event.preventDefault()
-        if (nativeOnly) return
-        const droppedFiles = Array.from(event.dataTransfer.files)
-        if (droppedFiles.length > 0) onDropFiles(droppedFiles)
-      }}
-    >
-      <div className="flex max-w-xl flex-col items-center gap-4">
-        <div className="flex size-12 items-center justify-center rounded-md border bg-muted text-muted-foreground [&_svg]:size-5">
-          {file?.type.startsWith("video/") ? (
-            <FileVideo />
-          ) : file ? (
-            <FileAudio />
-          ) : (
-            <UploadCloud />
-          )}
-        </div>
-        <div className="space-y-1.5">
-          <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
-          <p className="mx-auto max-w-[58ch] text-sm leading-6 text-muted-foreground">
-            {description}
-          </p>
-        </div>
-        <Button onClick={onPick} disabled={isBusy}>
-          <UploadCloud />{" "}
-          {nativeOnly ? copy.companionChooseFiles : copy.chooseFile}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function FileQueuePanel({
-  queue,
-  selectedId,
-  disabled,
-  copy,
-  onSelect,
-  onRemove,
-  onMove,
-}: {
-  queue: QueuedFile[]
-  selectedId: string | null
-  disabled: boolean
-  copy: Copy
-  onSelect: (item: QueuedFile) => void
-  onRemove: (id: string) => void
-  onMove: (id: string, direction: -1 | 1) => void
-}) {
-  return (
-    <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
-      <CardHeader className="pb-3">
-        <CardDescription>{copy.fileQueue}</CardDescription>
-        <CardTitle className="text-base">
-          {copy.filesSelected(queue.length)}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-2">
-        {queue.map((item, index) => {
-          const name = queueFileName(item)
-          return (
-            <div
-              key={item.id}
-              className={cn(
-                "grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 rounded-md border px-2 py-2 text-sm transition-colors",
-                selectedId === item.id
-                  ? "border-ring bg-accent"
-                  : "hover:bg-accent/60",
-                disabled && "cursor-not-allowed opacity-70"
-              )}
-            >
-              <button
-                type="button"
-                className="min-w-0 text-left"
-                aria-label={`${copy.selectFile}: ${name}`}
-                disabled={disabled}
-                onClick={() => onSelect(item)}
-              >
-                <span className="block truncate font-medium">{name}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {bytesToMb(queueFileSize(item))} MB
-                </span>
-              </button>
-              <Badge
-                variant={
-                  item.status === "error"
-                    ? "destructive"
-                    : item.status === "complete"
-                      ? "secondary"
-                      : "outline"
-                }
-              >
-                {copy.queueStatusLabels[item.status]}
-              </Badge>
-              <div className="flex">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  aria-label={`${copy.moveFileUp}: ${name}`}
-                  disabled={disabled || index === 0}
-                  onClick={() => onMove(item.id, -1)}
-                >
-                  <ChevronUp />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  aria-label={`${copy.moveFileDown}: ${name}`}
-                  disabled={disabled || index === queue.length - 1}
-                  onClick={() => onMove(item.id, 1)}
-                >
-                  <ChevronDown />
-                </Button>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8 text-muted-foreground hover:text-destructive"
-                aria-label={`${copy.removeFile}: ${name}`}
-                disabled={disabled}
-                onClick={() => onRemove(item.id)}
-              >
-                <Trash2 />
-              </Button>
-            </div>
-          )
-        })}
-      </CardContent>
-    </Card>
-  )
-}
-
 function PreflightPanel({
   analysis,
   model,
   copy,
+  stepLabel,
   progress,
-  progressLog,
   jobState,
   error,
+  panelCopy,
+  panelLogs,
+  panelEtaSeconds,
+  canCancelJob,
+  cancellingJob,
+  onCancelJob,
+  onCopyDiagnostics,
   canStart,
   canStartAll,
   queueCount,
@@ -3733,10 +3626,17 @@ function PreflightPanel({
   analysis: MediaAnalysis | null
   model: string
   copy: Copy
+  stepLabel: string
   progress: TranscriptionProgress
-  progressLog: ProgressLogEntry[]
   jobState: JobState
   error: string | null
+  panelCopy: TranscriptionProgressCopy
+  panelLogs: ProgressPanelLogLine[]
+  panelEtaSeconds: number | null
+  canCancelJob: boolean
+  cancellingJob: boolean
+  onCancelJob: () => void
+  onCopyDiagnostics: () => Promise<boolean>
   canStart: boolean
   canStartAll: boolean
   queueCount: number
@@ -3747,13 +3647,14 @@ function PreflightPanel({
 }) {
   const progressMessage =
     progress.phase === "idle" ? copy.waiting : progress.message
-  const [showDetailedLog, setShowDetailedLog] = React.useState(false)
 
   return (
     <Card>
       <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
         <div className="space-y-1">
-          <CardDescription>{copy.preflight}</CardDescription>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {stepLabel}
+          </p>
           <CardTitle className="text-base">{copy.processingPlan}</CardTitle>
         </div>
         <Badge variant="outline" className="capitalize">
@@ -3823,67 +3724,23 @@ function PreflightPanel({
         ) : null}
 
         <div className="space-y-3">
-          <Progress
-            value={Math.round(progress.progress * 100)}
-            className="h-1.5"
+          <TranscriptionProgressPanel
+            copy={panelCopy}
+            progress={
+              progress.phase === "idle"
+                ? { ...progress, message: progressMessage }
+                : progress
+            }
+            jobState={jobState}
+            error={error}
+            logs={panelLogs}
+            canCancel={canCancelJob}
+            cancelling={cancellingJob}
+            onCancel={onCancelJob}
+            onCopyDiagnostics={onCopyDiagnostics}
+            onErrorClick={() => onErrorClick()}
+            etaSeconds={panelEtaSeconds}
           />
-          <div className="flex items-center justify-between gap-4 text-sm">
-            <span className="text-muted-foreground">{progressMessage}</span>
-            <span className="font-medium">
-              {Math.round(progress.progress * 100)}%
-            </span>
-          </div>
-          {progressLog.length > 0 ? (
-            <div className="rounded-md border bg-muted/20">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-muted/40"
-                onClick={() => setShowDetailedLog((current) => !current)}
-                aria-expanded={showDetailedLog}
-              >
-                <span className="font-medium">{copy.detailedLog}</span>
-                <span className="text-xs text-muted-foreground">
-                  {showDetailedLog
-                    ? copy.hideDetailedLog
-                    : copy.showDetailedLog}
-                </span>
-              </button>
-              {showDetailedLog ? (
-                <div className="max-h-52 overflow-auto border-t px-3 py-2">
-                  <div className="grid gap-2">
-                    {progressLog.map((entry) => (
-                      <div key={entry.id} className="grid gap-1 text-xs">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="min-w-0 truncate text-muted-foreground">
-                            {entry.message}
-                          </span>
-                          <span className="shrink-0 font-medium">
-                            {entry.progress === undefined
-                              ? "--"
-                              : `${Math.round(entry.progress * 100)}%`}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground/70">
-                          <span>{copy.jobStateLabels[entry.phase]}</span>
-                          <span>{entry.updatedAt}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {error ? (
-            <button
-              type="button"
-              className="animate-in cursor-pointer text-left text-sm text-destructive underline decoration-destructive/30 underline-offset-2 duration-200 fade-in slide-in-from-top-1 hover:decoration-destructive"
-              onClick={() => onErrorClick()}
-              title="Open error details"
-            >
-              {error}
-            </button>
-          ) : null}
           <div className={cn("grid gap-2", queueCount > 1 && "sm:grid-cols-2")}>
             <Button className="w-full" disabled={!canStart} onClick={onStart}>
               {isBusy(jobState) ? (
@@ -4134,7 +3991,7 @@ function HistoryPanel({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-8 text-muted-foreground opacity-80 transition-opacity hover:text-destructive sm:opacity-0 sm:group-hover/history-item:opacity-100 sm:focus-visible:opacity-100"
+                className="size-9 text-muted-foreground opacity-80 transition-opacity hover:text-destructive sm:opacity-0 sm:group-hover/history-item:opacity-100 sm:focus-visible:opacity-100"
                 aria-label={`${copy.removeTranscript}: ${item.title}`}
                 onClick={() => onRemove(item.id)}
               >
@@ -4148,57 +4005,6 @@ function HistoryPanel({
   )
 }
 
-function AppToast({
-  message,
-  onDismiss,
-  copy,
-}: {
-  message: ToastMessage | null
-  onDismiss: () => void
-  copy: Copy
-}) {
-  if (!message) {
-    return null
-  }
-
-  return (
-    <div className="fixed right-4 bottom-4 z-50 w-[calc(100vw-2rem)] max-w-sm animate-in duration-200 fade-in slide-in-from-bottom-2">
-      <div
-        role="status"
-        aria-live="polite"
-        className={cn(
-          "rounded-lg border p-4 shadow-lg",
-          message.kind === "error"
-            ? "border-destructive/30 bg-destructive/5 text-destructive"
-            : "bg-popover text-popover-foreground"
-        )}
-      >
-        <div className="flex items-start gap-3">
-          {message.kind === "error" ? (
-            <AlertCircle className="mt-0.5 size-4 shrink-0" />
-          ) : (
-            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">{message.title}</p>
-            <p className="mt-1 text-sm opacity-80">{message.description}</p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2"
-            aria-label={copy.dismissNotification}
-            onClick={onDismiss}
-          >
-            ×
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function Metric({
   icon,
   label,
@@ -4209,10 +4015,43 @@ function Metric({
   value: string
 }) {
   return (
-    <div className="rounded-md border p-3 transition-colors duration-200 hover:bg-accent/40">
+    <div className="rounded-md border p-3">
       <div className="mb-2 text-muted-foreground [&_svg]:size-4">{icon}</div>
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-0.5 truncate text-sm font-medium">{value}</p>
+    </div>
+  )
+}
+
+function ModeStatusStrip({
+  mode,
+  copy,
+  companion,
+}: {
+  mode: ProcessingMode
+  copy: Copy
+  companion: "available" | "busy" | "checking" | "unavailable" | null
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Badge variant="outline" className="gap-1.5 py-1">
+        {copy.modeLabels[mode]}
+        {companion ? (
+          <span
+            aria-hidden="true"
+            className={cn(
+              "size-2 rounded-full",
+              companion === "available"
+                ? "bg-emerald-500"
+                : companion === "busy"
+                  ? "bg-amber-500"
+                  : companion === "checking"
+                    ? "animate-pulse bg-muted-foreground/60"
+                    : "bg-destructive"
+            )}
+          />
+        ) : null}
+      </Badge>
     </div>
   )
 }

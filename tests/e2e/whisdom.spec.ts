@@ -147,7 +147,7 @@ test.describe("Whisdom", () => {
     ).toBeVisible()
     await expect(page.getByText("Review the transcription plan")).toBeVisible()
     await expect(page.getByText("Whisper Base").nth(1)).toBeVisible()
-    await page.getByRole("button", { name: /Progress details/ }).click()
+    await page.getByRole("button", { name: /Technical details/ }).click()
     await expect(page.getByText("Checking file details")).toBeVisible()
     await expect(
       page.getByText("Review the transcription plan").last()

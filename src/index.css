@@ -158,3 +158,13 @@
     background: var(--scrollbar-track);
     }
 }
+
+/* Indeterminate progress indicator for phases without a known percent. */
+@keyframes whisdom-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
