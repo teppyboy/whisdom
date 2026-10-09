@@ -8,6 +8,7 @@ import {
   ChevronUp,
   ChevronsUpDown,
   Download,
+  ExternalLink,
   FileAudio,
   FileVideo,
   Gauge,
@@ -123,8 +124,10 @@ import {
 } from "@/features/local-helper/progress"
 import type {
   HelperCapabilities,
+  HelperDiagnostics,
   HelperHealth,
   HelperModel,
+  HelperStreamPhase,
   HelperUpdate,
 } from "@/features/local-helper/types"
 import { ServerTranscriptionApi } from "@/features/server-transcription/api"
@@ -163,7 +166,7 @@ const MODES: Array<{ value: ProcessingMode; label: string; detail: string }> = [
   {
     value: "local-helper",
     label: "Local Helper",
-    detail: "Native Vulkan/CPU helper on this Windows device",
+    detail: "Native Vulkan/CPU helper on your computer",
   },
   {
     value: "server",
@@ -175,6 +178,15 @@ const MODES: Array<{ value: ProcessingMode; label: string; detail: string }> = [
 const EXPORTS: ExportFormat[] = ["txt", "json", "srt", "vtt"]
 const COMPANION_RELEASES_URL =
   "https://github.com/teppyboy/whisdom/releases/latest"
+
+const COMPANION_STREAM_PHASES: Record<HelperStreamPhase, ServerJobPhase> = {
+  download_model: "downloading",
+  ffmpeg: "downloading",
+  deps: "downloading",
+  convert: "extracting",
+  transcribe: "transcribing",
+  other: "downloading",
+}
 
 type View = "home" | "settings"
 type CompanionHealthState = HelperHealth | "checking" | null
@@ -277,7 +289,7 @@ const COPY = {
     companionBusy: "Desktop Companion is working",
     companionUnavailable: "Desktop Companion is not running",
     companionUnavailableDescription:
-      "Open the Windows app, or get it from the latest release.",
+      "Get the Desktop Companion from the latest GitHub release.",
     downloadCompanion: "Get Desktop Companion",
     companionUpdateAvailable: (version: string) =>
       `Desktop Companion update ${version} is ready`,
@@ -287,12 +299,34 @@ const COPY = {
     checkCompanion: "Check for updates",
     checkingCompanion: "Checking for updates…",
     companionUpToDate: "Desktop Companion is up to date.",
+    updateDependencies: "Update models & FFmpeg",
+    updatingDependencies: "Updating models & FFmpeg…",
+    dependenciesUpdateStarted: "Dependency update started",
+    dependenciesUpdateStartedDescription:
+      "The Desktop Companion is re-downloading models and FFmpeg.",
+    diagnostics: "Diagnostics",
+    diagnosticsDescription:
+      "Desktop Companion runtime details, useful for bug reports.",
+    diagnosticsLoading: "Loading diagnostics…",
+    diagnosticsLoadFailed: "Could not load diagnostics.",
+    copyDiagnostics: "Copy diagnostics",
+    diagnosticsCopied: "Diagnostics copied to clipboard.",
+    diagnosticsCopyFailed: "Could not copy diagnostics.",
+    diagnosticsSystem: "System",
+    diagnosticsActiveBackend: "Active backend",
+    diagnosticsPreferredBackend: "Preferred backend",
+    diagnosticsGpuFeatures: "GPU features",
+    diagnosticsFfmpeg: "FFmpeg",
+    diagnosticsModels: "Models",
+    diagnosticsNone: "None",
+    diagnosticsInstalled: "Installed",
+    diagnosticsNotInstalled: "Not installed",
     companionPreflight:
-      "Windows files show their name and size. Duration and chunk estimates appear after transcription starts.",
-    companionPickerTitle: "Choose files in Windows",
+      "Companion files show their name and size. Duration and chunk estimates appear after transcription starts.",
+    companionPickerTitle: "Choose files on your computer",
     companionPickerDescription:
-      "Use the Windows file picker to add one or more files. Drag and drop is not available in Desktop Companion mode.",
-    companionChooseFiles: "Choose files in Windows",
+      "Use your computer's file picker to add one or more files. Drag and drop is not available in Desktop Companion mode.",
+    companionChooseFiles: "Choose files on your computer",
     moveFileUp: "Move up",
     moveFileDown: "Move down",
     companionModelDescription:
@@ -455,7 +489,7 @@ const COPY = {
         "For authorized accounts using the available free quota.",
       "local-wasm": "Private browser fallback when WebGPU is unavailable.",
       "local-helper":
-        "Use the optional Windows Companion for Vulkan or CPU processing.",
+        "Use the optional Desktop Companion for Vulkan or CPU processing.",
       server: "Server processing with whisper.cpp. Google sign-in required.",
     } satisfies Record<ProcessingMode, string>,
     modeLabels: {
@@ -517,7 +551,7 @@ const COPY = {
     companionBusy: "Desktop Companion đang xử lý",
     companionUnavailable: "Desktop Companion chưa chạy",
     companionUnavailableDescription:
-      "Mở ứng dụng Windows hoặc tải từ bản phát hành mới nhất.",
+      "Tải Desktop Companion từ bản phát hành GitHub mới nhất.",
     downloadCompanion: "Tải Desktop Companion",
     companionUpdateAvailable: (version: string) =>
       `Đã có bản cập nhật Desktop Companion ${version}`,
@@ -527,12 +561,34 @@ const COPY = {
     checkCompanion: "Kiểm tra bản cập nhật",
     checkingCompanion: "Đang kiểm tra bản cập nhật…",
     companionUpToDate: "Desktop Companion đang ở phiên bản mới nhất.",
+    updateDependencies: "Cập nhật mô hình & FFmpeg",
+    updatingDependencies: "Đang cập nhật mô hình & FFmpeg…",
+    dependenciesUpdateStarted: "Đã bắt đầu cập nhật phụ thuộc",
+    dependenciesUpdateStartedDescription:
+      "Desktop Companion đang tải lại mô hình và FFmpeg.",
+    diagnostics: "Chẩn đoán",
+    diagnosticsDescription:
+      "Thông tin runtime của Desktop Companion, hữu ích khi báo lỗi.",
+    diagnosticsLoading: "Đang tải thông tin chẩn đoán…",
+    diagnosticsLoadFailed: "Không thể tải thông tin chẩn đoán.",
+    copyDiagnostics: "Sao chép thông tin chẩn đoán",
+    diagnosticsCopied: "Đã sao chép thông tin chẩn đoán.",
+    diagnosticsCopyFailed: "Không thể sao chép thông tin chẩn đoán.",
+    diagnosticsSystem: "Hệ thống",
+    diagnosticsActiveBackend: "Backend đang dùng",
+    diagnosticsPreferredBackend: "Backend ưu tiên",
+    diagnosticsGpuFeatures: "Tính năng GPU",
+    diagnosticsFfmpeg: "FFmpeg",
+    diagnosticsModels: "Mô hình",
+    diagnosticsNone: "Không có",
+    diagnosticsInstalled: "Đã cài đặt",
+    diagnosticsNotInstalled: "Chưa cài đặt",
     companionPreflight:
-      "Tệp từ Windows hiển thị tên và dung lượng. Thời lượng và số đoạn sẽ có khi bắt đầu chuyển ngữ.",
-    companionPickerTitle: "Chọn tệp trong Windows",
+      "Tệp từ Companion hiển thị tên và dung lượng. Thời lượng và số đoạn sẽ có khi bắt đầu chuyển ngữ.",
+    companionPickerTitle: "Chọn tệp trên máy tính",
     companionPickerDescription:
-      "Dùng hộp chọn tệp Windows để thêm một hoặc nhiều tệp. Không hỗ trợ kéo thả trong chế độ Desktop Companion.",
-    companionChooseFiles: "Chọn tệp trong Windows",
+      "Dùng hộp chọn tệp trên máy tính để thêm một hoặc nhiều tệp. Không hỗ trợ kéo thả trong chế độ Desktop Companion.",
+    companionChooseFiles: "Chọn tệp trên máy tính",
     moveFileUp: "Di chuyển lên",
     moveFileDown: "Di chuyển xuống",
     companionModelDescription:
@@ -693,7 +749,7 @@ const COPY = {
         "Dành cho tài khoản được cấp quyền trong hạn mức hiện có.",
       "local-wasm": "Xử lý riêng tư trong trình duyệt khi không có WebGPU.",
       "local-helper":
-        "Dùng Companion Windows tùy chọn để xử lý bằng Vulkan hoặc CPU.",
+        "Dùng Desktop Companion tùy chọn để xử lý bằng Vulkan hoặc CPU.",
       server: "Xử lý trên máy chủ bằng whisper.cpp. Cần đăng nhập Google.",
     } satisfies Record<ProcessingMode, string>,
     modeLabels: {
@@ -894,6 +950,15 @@ export function App() {
   const [companionUpdating, setCompanionUpdating] = React.useState(false)
   const [companionCheckingUpdate, setCompanionCheckingUpdate] =
     React.useState(false)
+  const [companionJobActive, setCompanionJobActive] = React.useState(false)
+  const [dependenciesUpdating, setDependenciesUpdating] = React.useState(false)
+  const [diagnosticsOpen, setDiagnosticsOpen] = React.useState(false)
+  const [diagnostics, setDiagnostics] =
+    React.useState<HelperDiagnostics | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = React.useState(false)
+  const [diagnosticsError, setDiagnosticsError] = React.useState<string | null>(
+    null
+  )
   const [selectedQueueId, setSelectedQueueId] = React.useState<string | null>(
     null
   )
@@ -1064,18 +1129,39 @@ export function App() {
   React.useEffect(() => {
     if (settings.mode !== "local-helper") return
     let cancelled = false
-    const refresh = () => {
-      void localHelperClient.discover().then((health) => {
-        if (!cancelled) setCompanionHealth(health)
-      })
-    }
-    refresh()
-    const interval = window.setInterval(refresh, 1000)
-    window.addEventListener("focus", refresh)
+    const connection = localHelperClient.subscribeEvents(
+      {
+        onOpen: () => {
+          if (cancelled) return
+          setCompanionHealth((current) =>
+            current === "checking" || current === null
+              ? { available: true, protocol_version: 1, busy: false }
+              : current
+          )
+        },
+        onHello: (event) => {
+          if (cancelled) return
+          setCompanionHealth({
+            available: true,
+            protocol_version: event.protocol_version,
+            busy: false,
+          })
+        },
+        onJob: (event) => {
+          if (cancelled) return
+          setCompanionJobActive(
+            event.status === "queued" || event.status === "running"
+          )
+        },
+      },
+      () => {
+        if (cancelled) return
+        setCompanionHealth(null)
+      }
+    )
     return () => {
       cancelled = true
-      window.clearInterval(interval)
-      window.removeEventListener("focus", refresh)
+      connection.unsubscribe()
     }
   }, [settings.mode])
 
@@ -1138,6 +1224,11 @@ export function App() {
     selectedCompanionModel &&
     companionModelSupportsLanguage(selectedCompanionModel, settings.language)
   )
+  const companionBusy =
+    companionJobActive ||
+    (companionHealth !== "checking" &&
+      companionHealth !== null &&
+      companionHealth.busy)
   const companionSelectionReady =
     selectedQueueItem?.source.kind === "companion" &&
     companionLanguageReady &&
@@ -1838,84 +1929,99 @@ export function App() {
     )
     return new Promise<TranscriptDocument>((resolve, reject) => {
       let settled = false
-      const connection = localHelperClient.subscribeProgress(
-        jobId,
-        (status) => {
-          const mapped = mapServerPhase(status.phase)
-          recordProgress({
-            phase: mapped,
-            message: helperStatusMessage(
-              status.phase,
-              runSettings.uiLanguage,
-              status.message
-            ),
-            progress: normalizeHelperProgress(status.progress),
-          })
-          setJobState(mapped)
-          if (status.phase === "complete" && status.segments) {
-            if (settled) return
+      const connection = localHelperClient.subscribeEvents(
+        {
+          onProgress: (event) => {
+            if (settled || event.job_id !== jobId) return
+            const phase = COMPANION_STREAM_PHASES[event.phase]
+            const mapped = mapServerPhase(phase)
+            recordProgress({
+              phase: mapped,
+              message: helperStatusMessage(
+                phase,
+                runSettings.uiLanguage,
+                event.message
+              ),
+              progress: normalizeHelperProgress(
+                event.percent === null ? undefined : event.percent * 100
+              ),
+            })
+            setJobState(mapped)
+          },
+          onJob: (event) => {
+            if (settled || event.job_id !== jobId) return
+            if (event.status === "queued" || event.status === "running") return
             settled = true
             connection.unsubscribe()
-            const now = new Date().toISOString()
-            const document: TranscriptDocument = {
-              id: createId("transcript"),
-              title:
-                selection.name.replace(/\.[^.]+$/, "") || t.untitledTranscript,
-              sourceName: selection.name,
-              language,
-              modelId: companionModelId,
-              mode: "local-helper",
-              createdAt: now,
-              updatedAt: now,
-              text:
-                status.text ??
-                status.segments.map((segment) => segment.text).join(" "),
-              segments: status.segments.map((segment) => ({
-                ...segment,
-                id: createId("segment"),
-              })),
-            }
-            setJobState("saving")
-            void saveTranscript(document)
-              .then(async () => {
-                updateQueueItem(item.id, {
-                  status: "complete",
-                  transcriptId: document.id,
+            if (event.status === "complete") {
+              void localHelperClient
+                .awaitJobResult(jobId)
+                .then((status) => {
+                  if (status.phase !== "complete" || !status.segments) {
+                    reject(
+                      new Error(
+                        "Helper progress complete status has invalid segments."
+                      )
+                    )
+                    return
+                  }
+                  const now = new Date().toISOString()
+                  const document: TranscriptDocument = {
+                    id: createId("transcript"),
+                    title:
+                      selection.name.replace(/\.[^.]+$/, "") ||
+                      t.untitledTranscript,
+                    sourceName: selection.name,
+                    language,
+                    modelId: companionModelId,
+                    mode: "local-helper",
+                    createdAt: now,
+                    updatedAt: now,
+                    text:
+                      status.text ??
+                      status.segments.map((segment) => segment.text).join(" "),
+                    segments: status.segments.map((segment) => ({
+                      ...segment,
+                      id: createId("segment"),
+                    })),
+                  }
+                  setJobState("saving")
+                  void saveTranscript(document)
+                    .then(async () => {
+                      updateQueueItem(item.id, {
+                        status: "complete",
+                        transcriptId: document.id,
+                      })
+                      setHistory(await listTranscripts())
+                      setJobState("complete")
+                      recordProgress({
+                        phase: "complete",
+                        message: t.transcriptReady,
+                        progress: 1,
+                      })
+                      resolve(document)
+                    })
+                    .catch(reject)
                 })
-                setHistory(await listTranscripts())
-                setJobState("complete")
-                recordProgress({
-                  phase: "complete",
-                  message: t.transcriptReady,
-                  progress: 1,
-                })
-                resolve(document)
-              })
-              .catch(reject)
-          } else if (status.phase === "complete") {
-            if (settled) return
-            settled = true
-            connection.unsubscribe()
-            reject(
-              new Error("Helper progress complete status has invalid segments.")
-            )
-          } else if (status.phase === "error" || status.phase === "cancelled") {
-            if (settled) return
-            settled = true
-            connection.unsubscribe()
-            reject(
-              new Error(
-                status.phase === "cancelled"
-                  ? helperStatusMessage("cancelled", runSettings.uiLanguage)
-                  : helperErrorMessage(runSettings.uiLanguage)
+                .catch(reject)
+            } else if (event.status === "cancelled") {
+              reject(
+                new Error(
+                  helperStatusMessage("cancelled", runSettings.uiLanguage)
+                )
               )
-            )
-          }
+            } else {
+              reject(
+                new Error(
+                  event.error ?? helperErrorMessage(runSettings.uiLanguage)
+                )
+              )
+            }
+          },
         },
         (caught) => {
           if (settled) return
           settled = true
-          connection.unsubscribe()
           reject(caught)
         }
       )
@@ -2413,6 +2519,86 @@ export function App() {
                     .finally(() => setCompanionUpdating(false))
                 }}
                 storageActionsDisabled={isBusy(jobState) || companionUpdating}
+                companionBusy={companionBusy}
+                dependenciesUpdating={dependenciesUpdating}
+                onUpdateDependencies={() => {
+                  setDependenciesUpdating(true)
+                  void localHelperClient
+                    .updateDependencies("all")
+                    .then(() => {
+                      setToastMessage({
+                        id: createId("toast"),
+                        title: t.dependenciesUpdateStarted,
+                        description: t.dependenciesUpdateStartedDescription,
+                      })
+                    })
+                    .catch(() => {
+                      const productCopy = formatProductError(settings.uiLanguage, {
+                        occurrenceId: createId("companion-dependencies"),
+                        code: "companion.update-dependencies-failed",
+                        severity: "error",
+                        scope: "runtime",
+                        scopeId: "companion",
+                        params: {},
+                        primaryAction: { code: "retry", params: {} },
+                        secondaryAction: null,
+                        retryable: true,
+                        technicalCause: null,
+                      })
+                      setToastMessage({
+                        id: createId("toast"),
+                        title: productCopy.title,
+                        description: productCopy.message,
+                        kind: "error",
+                      })
+                    })
+                    .finally(() => setDependenciesUpdating(false))
+                }}
+                diagnosticsOpen={diagnosticsOpen}
+                diagnostics={diagnostics}
+                diagnosticsLoading={diagnosticsLoading}
+                diagnosticsError={diagnosticsError}
+                onDiagnosticsOpenChange={(open) => {
+                  setDiagnosticsOpen(open)
+                  if (!open) return
+                  setDiagnostics(null)
+                  setDiagnosticsError(null)
+                  setDiagnosticsLoading(true)
+                  localHelperClient
+                    .getDiagnostics()
+                    .then((value) => {
+                      setDiagnostics(value)
+                      setDiagnosticsLoading(false)
+                    })
+                    .catch((caught: unknown) => {
+                      setDiagnosticsError(
+                        caught instanceof Error
+                          ? caught.message
+                          : t.diagnosticsLoadFailed
+                      )
+                      setDiagnosticsLoading(false)
+                    })
+                }}
+                onCopyDiagnostics={() => {
+                  if (!diagnostics) return
+                  void navigator.clipboard
+                    .writeText(JSON.stringify(diagnostics, null, 2))
+                    .then(() => {
+                      setToastMessage({
+                        id: createId("toast"),
+                        title: t.companionTitle,
+                        description: t.diagnosticsCopied,
+                      })
+                    })
+                    .catch(() => {
+                      setToastMessage({
+                        id: createId("toast"),
+                        title: t.companionTitle,
+                        description: t.diagnosticsCopyFailed,
+                        kind: "error",
+                      })
+                    })
+                }}
                 companionModelId={companionModelId}
                 onCompanionModelChange={setCompanionModelId}
               />
@@ -2619,6 +2805,15 @@ function MainControls({
   onCheckCompanion,
   onUpdateCompanion,
   storageActionsDisabled,
+  companionBusy,
+  dependenciesUpdating,
+  onUpdateDependencies,
+  diagnosticsOpen,
+  diagnostics,
+  diagnosticsLoading,
+  diagnosticsError,
+  onDiagnosticsOpenChange,
+  onCopyDiagnostics,
   companionModelId,
   onCompanionModelChange,
 }: {
@@ -2639,6 +2834,15 @@ function MainControls({
   onCheckCompanion: () => void
   onUpdateCompanion: () => void
   storageActionsDisabled: boolean
+  companionBusy: boolean
+  dependenciesUpdating: boolean
+  onUpdateDependencies: () => void
+  diagnosticsOpen: boolean
+  diagnostics: HelperDiagnostics | null
+  diagnosticsLoading: boolean
+  diagnosticsError: string | null
+  onDiagnosticsOpenChange: (open: boolean) => void
+  onCopyDiagnostics: () => void
   companionModelId: string
   onCompanionModelChange: (id: string) => void
 }) {
@@ -2657,7 +2861,8 @@ function MainControls({
       : undefined
 
   return (
-    <Card className="relative z-20 animate-in overflow-visible duration-300 ease-out fade-in slide-in-from-bottom-1">
+    <>
+      <Card className="relative z-20 animate-in overflow-visible duration-300 ease-out fade-in slide-in-from-bottom-1">
       <CardHeader>
         <CardTitle className="text-base">{copy.quickSetup}</CardTitle>
         <CardDescription>{copy.quickSetupDescription}</CardDescription>
@@ -2695,7 +2900,7 @@ function MainControls({
               <Badge
                 variant={
                   companionHealth && companionHealth !== "checking"
-                    ? companionHealth.busy
+                    ? companionBusy
                       ? "secondary"
                       : "default"
                     : "outline"
@@ -2703,7 +2908,7 @@ function MainControls({
               >
                 {companionHealth === "checking"
                   ? copy.companionChecking
-                  : companionHealth?.busy
+                  : companionHealth?.busy || companionBusy
                     ? copy.companionBusy
                     : companionHealth
                       ? copy.companionAvailable
@@ -2718,9 +2923,10 @@ function MainControls({
                     href={COMPANION_RELEASES_URL}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-medium underline underline-offset-4"
+                    className="inline-flex items-center gap-1 font-medium underline underline-offset-4"
                   >
                     {copy.downloadCompanion}
+                    <ExternalLink className="size-3" />
                   </a>
                 </>
               ) : null}
@@ -2751,6 +2957,25 @@ function MainControls({
                   </Button>
                 </>
               ) : null}
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={onUpdateDependencies}
+                disabled={
+                  dependenciesUpdating || companionBusy || storageActionsDisabled
+                }
+              >
+                {dependenciesUpdating
+                  ? copy.updatingDependencies
+                  : copy.updateDependencies}
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => onDiagnosticsOpenChange(true)}
+              >
+                {copy.diagnostics}
+              </Button>
             </div>
           ) : null}
         </div>
@@ -2897,6 +3122,103 @@ function MainControls({
         ) : null}
       </CardContent>
     </Card>
+      <Dialog open={diagnosticsOpen} onOpenChange={onDiagnosticsOpenChange}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{copy.diagnostics}</DialogTitle>
+            <DialogDescription>{copy.diagnosticsDescription}</DialogDescription>
+          </DialogHeader>
+          {diagnosticsLoading ? (
+            <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              {copy.diagnosticsLoading}
+            </div>
+          ) : diagnosticsError ? (
+            <p className="py-2 text-sm text-destructive">{diagnosticsError}</p>
+          ) : diagnostics ? (
+            <div className="grid max-h-[50vh] gap-2 overflow-auto pr-1">
+              <DiagnosticsRow
+                label={copy.diagnosticsSystem}
+                value={`${formatOsName(diagnostics.os)} (${diagnostics.arch})`}
+              />
+              <DiagnosticsRow
+                label={copy.diagnosticsActiveBackend}
+                value={diagnostics.active_backend ?? copy.diagnosticsNone}
+              />
+              <DiagnosticsRow
+                label={copy.diagnosticsPreferredBackend}
+                value={diagnostics.preferred_backend}
+              />
+              <DiagnosticsRow
+                label={copy.diagnosticsGpuFeatures}
+                value={
+                  [
+                    diagnostics.features.vulkan ? "Vulkan" : null,
+                    diagnostics.features.metal ? "Metal" : null,
+                    diagnostics.features.directml ? "DirectML" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(", ") || copy.diagnosticsNone
+                }
+              />
+              <DiagnosticsRow
+                label={copy.diagnosticsFfmpeg}
+                value={
+                  diagnostics.ffmpeg.installed
+                    ? (diagnostics.ffmpeg.version ?? copy.diagnosticsInstalled)
+                    : copy.diagnosticsNotInstalled
+                }
+              />
+              <DiagnosticsRow
+                label={copy.diagnosticsModels}
+                value={
+                  diagnostics.models.length === 0
+                    ? copy.diagnosticsNone
+                    : diagnostics.models
+                        .map(
+                          (model) =>
+                            `${model.label} - ${
+                              model.installed
+                                ? copy.diagnosticsInstalled
+                                : copy.diagnosticsNotInstalled
+                            }`
+                        )
+                        .join("\n")
+                }
+              />
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onCopyDiagnostics}
+              disabled={!diagnostics}
+            >
+              {copy.copyDiagnostics}
+            </Button>
+            <DialogClose asChild>
+              <Button type="button">{copy.closeResults}</Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+function formatOsName(os: HelperDiagnostics["os"]) {
+  return os === "macos" ? "macOS" : os === "windows" ? "Windows" : "Linux"
+}
+
+function DiagnosticsRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[9rem_1fr] items-start gap-2">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="min-w-0 whitespace-pre-wrap break-words text-xs">
+        {value}
+      </span>
+    </div>
   )
 }
 
@@ -2977,7 +3299,7 @@ function LanguageCombobox({
               role="searchbox"
               aria-label={copy.searchLanguage}
               value={query}
-              className="h-8 border-0 px-1 shadow-none focus-visible:ring-0"
+              className="h-8 border-0 shadow-none focus-visible:ring-0"
               placeholder={copy.searchLanguage}
               autoFocus
               onChange={(event) => setQuery(event.target.value)}

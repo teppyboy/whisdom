@@ -424,4 +424,308 @@ describe("LocalHelperClient", () => {
       })
     )
   })
+
+  it("accepts null capabilities active_backend and reports preferred_backend", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...capabilities,
+            active_backend: null,
+            preferred_backend: "metal",
+            models: [
+              {
+                ...capabilities.models[0],
+                active_backend: null,
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+    const caps = await client.getCapabilities()
+
+    expect(caps.active_backend).toBeNull()
+    expect(caps.preferred_backend).toBe("metal")
+    expect(caps.models[0].active_backend).toBe("unavailable")
+  })
+
+  it("rejects malformed capabilities active_backend values", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ ...capabilities, active_backend: "gpu" }),
+          { status: 200 }
+        )
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+
+    await expect(client.getCapabilities()).rejects.toThrow(
+      "Helper returned invalid capabilities."
+    )
+  })
+
+  it("parses strict diagnostics payloads", async () => {
+    const diagnostics = {
+      protocol_version: 2,
+      os: "macos",
+      arch: "arm64",
+      features: { vulkan: false, metal: true, directml: false },
+      active_backend: null,
+      preferred_backend: "metal",
+      ffmpeg: { installed: true, version: "ffmpeg version 7.1", source_url: "https://example.com" },
+      models: [
+        {
+          id: "ggml-large-v3-turbo-q5_0",
+          label: "Whisper Large v3 Turbo",
+          installed: true,
+          engine: "whisper.cpp",
+          size_bytes: 574041195,
+          active_backend: null,
+        },
+      ],
+    }
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(diagnostics), { status: 200 })
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+
+    expect(await client.getDiagnostics()).toEqual(diagnostics)
+  })
+
+  it("rejects malformed diagnostics payloads", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            protocol_version: 2,
+            os: "templeos",
+            arch: "arm64",
+            features: { vulkan: false, metal: true, directml: false },
+            active_backend: null,
+            preferred_backend: "metal",
+            ffmpeg: { installed: true, version: null, source_url: "x" },
+            models: [],
+          }),
+          { status: 200 }
+        )
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+
+    await expect(client.getDiagnostics()).rejects.toThrow(
+      "Helper returned invalid diagnostics."
+    )
+  })
+
+  it("posts update-dependencies with the requested scope and validates the job id", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ job_id: "deps-1" }), { status: 200 })
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+
+    expect(await client.updateDependencies("all")).toEqual({
+      job_id: "deps-1",
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "http://127.0.0.1:8788/api/v1/update-dependencies",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ scope: "all" }),
+      })
+    )
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ job_id: "../escape" }), { status: 200 })
+    )
+    await expect(client.updateDependencies("ffmpeg")).rejects.toThrow(
+      "Helper returned an invalid dependency update job."
+    )
+  })
+
+  it("awaits a job result from the legacy progress stream", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockHealth())
+      .mockResolvedValueOnce(
+        new Response(
+          [
+            'data: {"id":"other","phase":"transcribing","progress":50}\n\n',
+            'data: {"id":"job-123","phase":"transcribing","progress":50}\n\n',
+            'data: {"id":"job-123","phase":"complete","progress":100,"segments":[{"start":0,"end":1,"text":"done"}]}\n\n',
+          ].join(""),
+          { status: 200 }
+        )
+      )
+    const client = new LocalHelperClient()
+    await client.discover()
+
+    expect(await client.awaitJobResult("job-123")).toEqual(
+      expect.objectContaining({
+        id: "job-123",
+        phase: "complete",
+        segments: [{ start: 0, end: 1, text: "done" }],
+      })
+    )
+  })
+
+  it("streams hello, progress, and job events with the token query parameter", async () => {
+    class MockEventSource {
+      static instances: MockEventSource[] = []
+      url: string
+      onopen: (() => void) | null = null
+      onerror: (() => void) | null = null
+      closed = false
+      private listeners = new Map<
+        string,
+        Array<(event: { data: string }) => void>
+      >()
+      constructor(url: string) {
+        this.url = url
+        MockEventSource.instances.push(this)
+      }
+      addEventListener(name: string, cb: (event: { data: string }) => void) {
+        const list = this.listeners.get(name) ?? []
+        list.push(cb)
+        this.listeners.set(name, list)
+      }
+      emit(name: string, data: string) {
+        for (const cb of this.listeners.get(name) ?? []) cb({ data })
+      }
+      open() {
+        this.onopen?.()
+      }
+      fail() {
+        this.onerror?.()
+      }
+      close() {
+        this.closed = true
+      }
+    }
+    vi.stubGlobal("EventSource", MockEventSource)
+    localStorage.setItem("whisdom.local-helper.token.v1", "secret-token")
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(mockHealth())
+    const client = new LocalHelperClient()
+    await client.discover()
+
+    const onHello = vi.fn()
+    const onProgress = vi.fn()
+    const onJob = vi.fn()
+    const onLog = vi.fn()
+    const connection = client.subscribeEvents({
+      onHello,
+      onProgress,
+      onJob,
+      onLog,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const source = MockEventSource.instances.at(-1)!
+    expect(source.url).toBe(
+      "http://127.0.0.1:8788/api/v1/events?token=secret-token"
+    )
+
+    source.open()
+    source.emit(
+      "hello",
+      JSON.stringify({
+        protocol_version: 2,
+        features: { vulkan: false, metal: true, directml: false },
+        preferred_backend: "metal",
+      })
+    )
+    source.emit(
+      "progress",
+      JSON.stringify({
+        job_id: "job-123",
+        phase: "transcribe",
+        percent: 0.5,
+        message: "Working",
+      })
+    )
+    source.emit(
+      "log",
+      JSON.stringify({
+        ts: "2026-01-01T00:00:00Z",
+        level: "info",
+        target: "engine",
+        message: "ready",
+      })
+    )
+    source.emit(
+      "job",
+      JSON.stringify({ job_id: "job-123", status: "running" })
+    )
+    source.emit("progress", "not-json")
+    source.emit(
+      "progress",
+      JSON.stringify({ job_id: "job-123", phase: "warp", percent: 2 })
+    )
+
+    expect(onHello).toHaveBeenCalledTimes(1)
+    expect(onProgress).toHaveBeenCalledTimes(1)
+    expect(onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ job_id: "job-123", percent: 0.5 })
+    )
+    expect(onLog).toHaveBeenCalledTimes(1)
+    expect(onJob).toHaveBeenCalledWith(
+      expect.objectContaining({ job_id: "job-123", status: "running" })
+    )
+
+    connection.unsubscribe()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(source.closed).toBe(true)
+    vi.unstubAllGlobals()
+  })
+
+  it("reports event stream errors and stops after unsubscribe", async () => {
+    class MockEventSource {
+      static instances: MockEventSource[] = []
+      onopen: (() => void) | null = null
+      onerror: (() => void) | null = null
+      closed = false
+      private listeners = new Map<
+        string,
+        Array<(event: { data: string }) => void>
+      >()
+      constructor(public url: string) {
+        MockEventSource.instances.push(this)
+      }
+      addEventListener() {}
+      fail() {
+        this.onerror?.()
+      }
+      close() {
+        this.closed = true
+      }
+    }
+    vi.stubGlobal("EventSource", MockEventSource)
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(mockHealth())
+    const client = new LocalHelperClient()
+    await client.discover()
+    const onError = vi.fn()
+    const connection = client.subscribeEvents({}, onError)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    MockEventSource.instances.at(-1)!.fail()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Helper event stream disconnected.",
+      })
+    )
+    connection.unsubscribe()
+    vi.unstubAllGlobals()
+  })
 })

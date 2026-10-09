@@ -1,3 +1,7 @@
+// Version follows the @ffmpeg/core npm dependency; no CDN pin.
+import coreUrl from "@ffmpeg/core?url"
+import coreWasmUrl from "@ffmpeg/core/wasm?url"
+
 type ConvertRequest = {
   type: "convert"
   id: string
@@ -82,8 +86,8 @@ async function loadFfmpeg() {
     import("@ffmpeg/ffmpeg"),
     import("@ffmpeg/util"),
   ])
+  // SAFETY: @ffmpeg/ffmpeg's FFmpeg class exposes the small subset of APIs typed by FfmpegInstance; the worker only uses load/writeFile/exec/readFile/on(progress).
   const ffmpeg = new FFmpeg() as unknown as FfmpegInstance
-  const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm"
 
   ffmpeg.on("progress", ({ progress }) => {
     self.postMessage({
@@ -96,8 +100,8 @@ async function loadFfmpeg() {
   })
 
   await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+    coreURL: await toBlobURL(coreUrl, "text/javascript"),
+    wasmURL: await toBlobURL(coreWasmUrl, "application/wasm"),
   })
 
   return ffmpeg

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "fake-indexeddb/auto"
-import { act, render, screen, waitFor, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
@@ -79,6 +79,12 @@ describe("component harness", () => {
     await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
     vi.spyOn(localHelperClient, "discover").mockResolvedValue(health)
     vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
+    vi.spyOn(localHelperClient, "subscribeEvents").mockImplementation(
+      (handlers) => {
+        handlers.onOpen?.()
+        return { unsubscribe: vi.fn() }
+      }
+    )
 
     renderCompanion()
 
@@ -91,28 +97,18 @@ describe("component harness", () => {
     expect(screen.queryByText(/high -/i)).not.toBeInTheDocument()
   })
 
-  it("refreshes Desktop Companion health every second and stops after unmount", async () => {
+  it("subscribes to helper events while mounted and unsubscribes after unmount", async () => {
     await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    const discover = vi
-      .spyOn(localHelperClient, "discover")
-      .mockResolvedValue(health)
-    vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
+    const unsubscribe = vi.fn()
+    const subscribeEvents = vi
+      .spyOn(localHelperClient, "subscribeEvents")
+      .mockImplementation(() => ({ unsubscribe }))
 
     const { unmount } = renderCompanion()
-    await screen.findByText("Desktop Companion is ready")
-    const initialCalls = discover.mock.calls.length
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000)
-    })
-    expect(discover).toHaveBeenCalledTimes(initialCalls + 1)
+    await waitFor(() => expect(subscribeEvents).toHaveBeenCalledTimes(1))
 
     unmount()
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000)
-    })
-    expect(discover).toHaveBeenCalledTimes(initialCalls + 1)
-    vi.useRealTimers()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
 
   it("links to Releases when Desktop Companion is unavailable", async () => {
@@ -145,10 +141,10 @@ describe("component harness", () => {
     renderCompanion()
 
     const choose = await screen.findByRole("button", {
-      name: "Choose files in Windows",
+      name: "Choose files on your computer",
     })
     expect(
-      screen.getByRole("heading", { name: "Choose files in Windows" })
+      screen.getByRole("heading", { name: "Choose files on your computer" })
     ).toBeInTheDocument()
     expect(
       screen.queryByRole("heading", { name: "Desktop Companion" })
@@ -181,7 +177,7 @@ describe("component harness", () => {
     const { unmount } = renderCompanion()
 
     await user.click(
-      await screen.findByRole("button", { name: "Choose files in Windows" })
+      await screen.findByRole("button", { name: "Choose files on your computer" })
     )
     expect(selectFiles).toHaveBeenCalledTimes(1)
     expect(screen.queryByText("meeting.mkv")).not.toBeInTheDocument()
@@ -205,9 +201,15 @@ describe("component harness", () => {
     vi.spyOn(localHelperClient, "startSelection").mockResolvedValue({
       jobId: "job-queued",
     })
-    vi.spyOn(localHelperClient, "subscribeProgress").mockImplementation(
-      (_jobId, onStatus) => {
-        onStatus({ id: "job-queued", phase: "queued", progress: 0 })
+    vi.spyOn(localHelperClient, "subscribeEvents").mockImplementation(
+      (handlers) => {
+        handlers.onProgress?.({
+          kind: "progress",
+          job_id: "job-queued",
+          phase: "other",
+          percent: 0,
+          message: "Waiting to start",
+        })
         return { unsubscribe: vi.fn() }
       }
     )
@@ -215,7 +217,7 @@ describe("component harness", () => {
     renderCompanion()
 
     await user.click(
-      await screen.findByRole("button", { name: "Choose files in Windows" })
+      await screen.findByRole("button", { name: "Choose files on your computer" })
     )
     await screen.findByText("meeting.mkv")
     await user.click(
@@ -224,7 +226,7 @@ describe("component harness", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Choose files in Windows" })
+        screen.getByRole("button", { name: "Choose files on your computer" })
       ).toBeDisabled()
       expect(
         screen.getByRole("button", { name: "Remove: meeting.mkv" })
@@ -251,21 +253,14 @@ describe("component harness", () => {
     vi.spyOn(localHelperClient, "startSelection").mockResolvedValue({
       jobId: "job-vad-toggle",
     })
-    vi.spyOn(localHelperClient, "subscribeProgress").mockImplementation(
-      (_jobId, onStatus) => {
-        onStatus({
-          id: "job-vad-toggle",
-          phase: "queued",
-          progress: 0,
-        })
-        return { unsubscribe: vi.fn() }
-      }
-    )
+    vi.spyOn(localHelperClient, "subscribeEvents").mockImplementation(() => ({
+      unsubscribe: vi.fn(),
+    }))
     const user = userEvent.setup()
     renderCompanion()
 
     await user.click(
-      await screen.findByRole("button", { name: "Choose files in Windows" })
+      await screen.findByRole("button", { name: "Choose files on your computer" })
     )
     await screen.findByText("meeting.mkv")
     await user.click(screen.getByRole("button", { name: "Account menu" }))
@@ -294,7 +289,7 @@ describe("component harness", () => {
     )
   })
 
-  it("marks a companion queue row as Error when progress rejects after an invalid complete status", async () => {
+  it("marks a companion queue row as Error when the job result is invalid after completion", async () => {
     await saveSettings({ ...DEFAULT_SETTINGS, mode: "local-helper" })
     vi.spyOn(localHelperClient, "connect").mockResolvedValue(capabilities)
     vi.spyOn(localHelperClient, "selectFiles").mockResolvedValue([
@@ -303,22 +298,26 @@ describe("component harness", () => {
     vi.spyOn(localHelperClient, "startSelection").mockResolvedValue({
       jobId: "job-invalid-complete",
     })
-    vi.spyOn(localHelperClient, "subscribeProgress").mockImplementation(
-      (_jobId, onStatus, onError) => {
+    vi.spyOn(localHelperClient, "subscribeEvents").mockImplementation(
+      (handlers) => {
         queueMicrotask(() => {
-          onStatus({ id: "job-invalid-complete", phase: "complete" })
-          onError?.(
-            new Error("Helper progress complete status has invalid segments.")
-          )
+          handlers.onJob?.({
+            kind: "job",
+            job_id: "job-invalid-complete",
+            status: "complete",
+          })
         })
         return { unsubscribe: vi.fn() }
       }
+    )
+    vi.spyOn(localHelperClient, "awaitJobResult").mockRejectedValue(
+      new Error("Helper progress complete status has invalid segments.")
     )
     const user = userEvent.setup()
     renderCompanion()
 
     await user.click(
-      await screen.findByRole("button", { name: "Choose files in Windows" })
+      await screen.findByRole("button", { name: "Choose files on your computer" })
     )
     await screen.findByText("meeting.mkv")
     await user.click(

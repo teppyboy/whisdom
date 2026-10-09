@@ -4,11 +4,23 @@ import type {
   HelperCacheClearResult,
   HelperCacheStatus,
   HelperCapabilities,
+  HelperDiagnostics,
+  HelperDiagnosticsModel,
+  HelperEventHandlers,
+  HelperFeatureFlags,
   HelperHealth,
+  HelperHelloEvent,
+  HelperJobEvent,
+  HelperLogEvent,
   HelperModel,
   HelperPairResponse,
+  HelperProgressEvent,
   HelperSelection,
+  HelperStreamJobStatus,
+  HelperStreamPhase,
   HelperUpdate,
+  HelperUpdateDependenciesResult,
+  HelperUpdateScope,
 } from "./types"
 import type { ServerJobStatus } from "@/features/server-transcription/types"
 
@@ -33,7 +45,33 @@ const HELPER_ENGINES = new Set([
   "sherpa-onnx",
   "nemo-speech.cpp",
 ])
-const HELPER_BACKENDS = new Set(["cpu", "directml", "vulkan", "unavailable"])
+const HELPER_BACKENDS = new Set([
+  "cpu",
+  "directml",
+  "vulkan",
+  "metal",
+  "unavailable",
+])
+const HELPER_LOADED_BACKENDS = new Set(["cpu", "vulkan", "metal"])
+const HELPER_OS = new Set(["macos", "windows", "linux"])
+const HELPER_STREAM_PHASES = new Set<HelperStreamPhase>([
+  "download_model",
+  "ffmpeg",
+  "convert",
+  "transcribe",
+  "deps",
+  "other",
+])
+const HELPER_JOB_STATUSES = new Set<HelperStreamJobStatus>([
+  "queued",
+  "running",
+  "complete",
+  "failed",
+  "cancelled",
+])
+const HELPER_LOG_LEVELS = new Set(["info", "warn", "error"])
+const EVENTS_BACKOFF_START_MS = 500
+const EVENTS_BACKOFF_MAX_MS = 10_000
 const LANGUAGE_CODE = /^[a-z]{2,3}$/
 
 type LegacyWhisperDefaults = {
@@ -55,8 +93,10 @@ function parseModel(
     engine = legacy?.engine,
     supported_languages: supportedLanguages = legacy ? ["*"] : undefined,
     supports_auto_language: supportsAutoLanguage = legacy ? true : undefined,
-    active_backend: activeBackend = legacy?.activeBackend,
+    active_backend: rawActiveBackend = legacy?.activeBackend,
   } = value
+  const activeBackend =
+    rawActiveBackend === null ? "unavailable" : rawActiveBackend
   if (
     !validOpaqueId(id) ||
     typeof label !== "string" ||
@@ -96,6 +136,18 @@ function parseModel(
   }
 }
 
+function parseFeatureFlags(value: unknown): HelperFeatureFlags | null {
+  if (!isPlainObject(value)) return null
+  const { vulkan, metal, directml } = value
+  if (
+    typeof vulkan !== "boolean" ||
+    typeof metal !== "boolean" ||
+    typeof directml !== "boolean"
+  )
+    return null
+  return { vulkan, metal, directml }
+}
+
 function parseUpdate(value: unknown): HelperUpdate | null {
   if (
     !isPlainObject(value) ||
@@ -124,6 +176,8 @@ function parseCapabilities(value: unknown): HelperCapabilities {
     model_ready: modelReady,
     ffmpeg_ready: ffmpegReady,
     native_picker: nativePicker,
+    active_backend: activeBackend,
+    preferred_backend: preferredBackend,
   } = value
   if (
     typeof available !== "boolean" ||
@@ -133,7 +187,13 @@ function parseCapabilities(value: unknown): HelperCapabilities {
     !validOpaqueId(modelId) ||
     typeof modelReady !== "boolean" ||
     typeof ffmpegReady !== "boolean" ||
-    typeof nativePicker !== "boolean"
+    typeof nativePicker !== "boolean" ||
+    (activeBackend !== undefined &&
+      activeBackend !== null &&
+      (typeof activeBackend !== "string" || !HELPER_BACKENDS.has(activeBackend))) ||
+    (preferredBackend !== undefined &&
+      preferredBackend !== null &&
+      typeof preferredBackend !== "string")
   )
     throw new Error("Helper returned invalid capabilities.")
   const legacy =
@@ -157,7 +217,214 @@ function parseCapabilities(value: unknown): HelperCapabilities {
     model_ready: modelReady,
     ffmpeg_ready: ffmpegReady,
     native_picker: nativePicker,
+    active_backend:
+      activeBackend === undefined
+        ? undefined
+        : (activeBackend as HelperCapabilities["active_backend"]),
+    preferred_backend: preferredBackend as string | undefined,
     models: models as HelperModel[],
+  }
+}
+
+function parseDiagnosticsModel(value: unknown): HelperDiagnosticsModel | null {
+  if (!isPlainObject(value)) return null
+  const {
+    id,
+    label,
+    installed,
+    engine,
+    size_bytes: sizeBytes,
+    active_backend: activeBackend,
+  } = value
+  if (
+    !validOpaqueId(id) ||
+    typeof label !== "string" ||
+    label.length === 0 ||
+    /[\\/]/.test(label) ||
+    typeof installed !== "boolean" ||
+    typeof engine !== "string" ||
+    !HELPER_ENGINES.has(engine) ||
+    typeof sizeBytes !== "number" ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes < 0 ||
+    (activeBackend !== null &&
+      (typeof activeBackend !== "string" ||
+        !HELPER_LOADED_BACKENDS.has(activeBackend)))
+  )
+    return null
+  return {
+    id,
+    label,
+    installed,
+    engine: engine as HelperDiagnosticsModel["engine"],
+    size_bytes: sizeBytes,
+    active_backend: activeBackend as HelperDiagnosticsModel["active_backend"],
+  }
+}
+
+function parseDiagnostics(value: unknown): HelperDiagnostics {
+  if (!isPlainObject(value))
+    throw new Error("Helper returned invalid diagnostics.")
+  const {
+    protocol_version: protocolVersion,
+    os,
+    arch,
+    features,
+    active_backend: activeBackend,
+    preferred_backend: preferredBackend,
+    ffmpeg,
+    models,
+  } = value
+  if (
+    typeof protocolVersion !== "number" ||
+    !Number.isSafeInteger(protocolVersion) ||
+    typeof os !== "string" ||
+    !HELPER_OS.has(os) ||
+    typeof arch !== "string" ||
+    arch.length === 0 ||
+    arch.length > 64 ||
+    (activeBackend !== null &&
+      (typeof activeBackend !== "string" ||
+        !HELPER_LOADED_BACKENDS.has(activeBackend))) ||
+    typeof preferredBackend !== "string" ||
+    preferredBackend.length === 0 ||
+    !isPlainObject(ffmpeg) ||
+    !Array.isArray(models)
+  )
+    throw new Error("Helper returned invalid diagnostics.")
+  const parsedFeatures = parseFeatureFlags(features)
+  if (!parsedFeatures)
+    throw new Error("Helper returned invalid diagnostics.")
+  const {
+    installed,
+    version,
+    source_url: sourceUrl,
+  } = ffmpeg as Record<string, unknown>
+  if (
+    typeof installed !== "boolean" ||
+    (version !== null && typeof version !== "string") ||
+    typeof sourceUrl !== "string"
+  )
+    throw new Error("Helper returned invalid diagnostics.")
+  const parsedModels = models.map(parseDiagnosticsModel)
+  if (parsedModels.some((model) => model === null))
+    throw new Error("Helper returned invalid diagnostics.")
+  return {
+    protocol_version: protocolVersion,
+    os: os as HelperDiagnostics["os"],
+    arch,
+    features: parsedFeatures,
+    active_backend:
+      activeBackend as HelperDiagnostics["active_backend"],
+    preferred_backend: preferredBackend,
+    ffmpeg: {
+      installed,
+      version: version as string | null,
+      source_url: sourceUrl,
+    },
+    models: parsedModels as HelperDiagnosticsModel[],
+  }
+}
+
+function parseHelloEvent(value: unknown): HelperHelloEvent | null {
+  if (!isPlainObject(value)) return null
+  const {
+    protocol_version: protocolVersion,
+    features,
+    preferred_backend: preferredBackend,
+  } = value
+  const parsedFeatures = parseFeatureFlags(features)
+  if (
+    typeof protocolVersion !== "number" ||
+    !Number.isSafeInteger(protocolVersion) ||
+    !parsedFeatures ||
+    typeof preferredBackend !== "string" ||
+    preferredBackend.length === 0
+  )
+    return null
+  return {
+    kind: "hello",
+    protocol_version: protocolVersion,
+    features: parsedFeatures,
+    preferred_backend: preferredBackend,
+  }
+}
+
+function parseLogEvent(value: unknown): HelperLogEvent | null {
+  if (!isPlainObject(value)) return null
+  const {
+    ts,
+    level,
+    target,
+    message,
+    job_id: jobId,
+  } = value
+  if (
+    typeof ts !== "string" ||
+    typeof level !== "string" ||
+    !HELPER_LOG_LEVELS.has(level) ||
+    typeof target !== "string" ||
+    typeof message !== "string" ||
+    (jobId !== undefined && !validOpaqueId(jobId))
+  )
+    return null
+  return {
+    kind: "log",
+    ts,
+    level: level as HelperLogEvent["level"],
+    target,
+    message,
+    ...(jobId === undefined ? {} : { job_id: jobId }),
+  }
+}
+
+function parseProgressEvent(value: unknown): HelperProgressEvent | null {
+  if (!isPlainObject(value)) return null
+  const {
+    job_id: jobId,
+    phase,
+    percent,
+    message,
+    detail,
+  } = value
+  if (
+    !validOpaqueId(jobId) ||
+    typeof phase !== "string" ||
+    !HELPER_STREAM_PHASES.has(phase as HelperStreamPhase) ||
+    (percent !== null &&
+      (typeof percent !== "number" ||
+        !Number.isFinite(percent) ||
+        percent < 0 ||
+        percent > 1)) ||
+    typeof message !== "string" ||
+    (detail !== undefined && typeof detail !== "string")
+  )
+    return null
+  return {
+    kind: "progress",
+    job_id: jobId,
+    phase: phase as HelperStreamPhase,
+    percent,
+    message,
+    ...(detail === undefined ? {} : { detail }),
+  }
+}
+
+function parseJobEvent(value: unknown): HelperJobEvent | null {
+  if (!isPlainObject(value)) return null
+  const { job_id: jobId, status, error } = value
+  if (
+    !validOpaqueId(jobId) ||
+    typeof status !== "string" ||
+    !HELPER_JOB_STATUSES.has(status as HelperStreamJobStatus) ||
+    (error !== undefined && typeof error !== "string")
+  )
+    return null
+  return {
+    kind: "job",
+    job_id: jobId,
+    status: status as HelperStreamJobStatus,
+    ...(error === undefined ? {} : { error }),
   }
 }
 
@@ -438,6 +705,173 @@ export class LocalHelperClient {
       } catch (caught) {
         if (caught instanceof Error && caught.name === "AbortError") return
         onError?.(caught instanceof Error ? caught : new Error(String(caught)))
+      }
+    })()
+    return { unsubscribe: () => controller.abort() }
+  }
+
+  async getDiagnostics(): Promise<HelperDiagnostics> {
+    const baseUrl = await this.requireBaseUrl()
+    const data = await this.request<unknown>(
+      `${baseUrl}${API_PREFIX}/diagnostics`,
+      { method: "GET", headers: this.authHeaders() }
+    )
+    return parseDiagnostics(data)
+  }
+
+  async updateDependencies(
+    scope: HelperUpdateScope
+  ): Promise<HelperUpdateDependenciesResult> {
+    const baseUrl = await this.requireBaseUrl()
+    const response = await fetch(
+      `${baseUrl}${API_PREFIX}/update-dependencies`,
+      {
+        method: "POST",
+        headers: { ...this.authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ scope }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }
+    )
+    if (!response.ok)
+      throw new Error(`Helper dependency update failed: ${response.status}`)
+    const data: unknown = await response.json()
+    if (!isPlainObject(data) || !validOpaqueId(data.job_id))
+      throw new Error("Helper returned an invalid dependency update job.")
+    return { job_id: data.job_id }
+  }
+
+  async awaitJobResult(jobId: string): Promise<ServerJobStatus> {
+    const baseUrl = await this.requireBaseUrl()
+    const response = await fetch(
+      `${baseUrl}${API_PREFIX}/progress/${encodeURIComponent(jobId)}`,
+      {
+        headers: { ...this.authHeaders(), Accept: "text/event-stream" },
+      }
+    )
+    if (!response.ok)
+      throw new Error(`Helper job result failed: ${response.status}`)
+    if (!response.body) throw new Error("Helper job result returned no body.")
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith("data: ")) continue
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(trimmed.slice(6))
+          } catch {
+            continue
+          }
+          const status = parseProgressStatus(parsed)
+          if (!status || status.id !== jobId) continue
+          if (
+            status.phase === "complete" ||
+            status.phase === "error" ||
+            status.phase === "cancelled"
+          )
+            return status
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    throw new Error("Helper job stream ended before completion.")
+  }
+
+  subscribeEvents(
+    handlers: HelperEventHandlers,
+    onError?: (error: Error) => void
+  ): SseConnection {
+    const controller = new AbortController()
+    void (async () => {
+      let backoffMs = EVENTS_BACKOFF_START_MS
+      while (!controller.signal.aborted) {
+        let source: EventSource | null = null
+        try {
+          const baseUrl = await this.requireBaseUrl()
+          const token = localStorage.getItem(TOKEN_KEY)
+          const url = `${baseUrl}${API_PREFIX}/events${
+            token ? `?token=${encodeURIComponent(token)}` : ""
+          }`
+          if (typeof EventSource === "undefined")
+            throw new Error("EventSource is not supported in this environment.")
+          source = new EventSource(url)
+          const dispatch = (eventName: string, raw: unknown) => {
+            if (typeof raw !== "string") return
+            let value: unknown
+            try {
+              value = JSON.parse(raw)
+            } catch {
+              return
+            }
+            if (eventName === "hello") {
+              const event = parseHelloEvent(value)
+              if (event) handlers.onHello?.(event)
+            } else if (eventName === "log") {
+              const event = parseLogEvent(value)
+              if (event) handlers.onLog?.(event)
+            } else if (eventName === "progress") {
+              const event = parseProgressEvent(value)
+              if (event) handlers.onProgress?.(event)
+            } else if (eventName === "job") {
+              const event = parseJobEvent(value)
+              if (event) handlers.onJob?.(event)
+            }
+          }
+          source.addEventListener("hello", (event) =>
+            dispatch("hello", (event as MessageEvent).data)
+          )
+          source.addEventListener("log", (event) =>
+            dispatch("log", (event as MessageEvent).data)
+          )
+          source.addEventListener("progress", (event) =>
+            dispatch("progress", (event as MessageEvent).data)
+          )
+          source.addEventListener("job", (event) =>
+            dispatch("job", (event as MessageEvent).data)
+          )
+          await new Promise<never>((_resolve, reject) => {
+            source!.onopen = () => {
+              backoffMs = EVENTS_BACKOFF_START_MS
+              handlers.onOpen?.()
+            }
+            source!.onerror = () =>
+              reject(new Error("Helper event stream disconnected."))
+            controller.signal.addEventListener(
+              "abort",
+              () => reject(new Error("Helper event stream unsubscribed.")),
+              { once: true }
+            )
+          })
+        } catch (caught) {
+          source?.close()
+          if (controller.signal.aborted) return
+          onError?.(
+            caught instanceof Error ? caught : new Error(String(caught))
+          )
+        }
+        source?.close()
+        if (controller.signal.aborted) return
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, backoffMs)
+          controller.signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer)
+              resolve(undefined)
+            },
+            { once: true }
+          )
+        })
+        backoffMs = Math.min(backoffMs * 2, EVENTS_BACKOFF_MAX_MS)
       }
     })()
     return { unsubscribe: () => controller.abort() }
