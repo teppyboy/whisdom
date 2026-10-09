@@ -8,6 +8,7 @@ use super::auth::HelperAuth;
 use super::cache::HelperCache;
 use super::config::HelperConfig;
 use super::engine::SharedRuntime;
+use super::events::{progress_phase, job_status, EventHub, HelperEvent, JobEvent, ProgressEvent};
 use super::protocol::{HelperError, JobStatus};
 use super::selection::SelectionStore;
 
@@ -31,6 +32,7 @@ pub struct HelperState {
     pub auth: HelperAuth,
     pub cache: HelperCache,
     pub queue: HelperQueue,
+    pub events: EventHub,
     pub runtime: SharedRuntime,
     pub selections: SelectionStore,
     pub native_file_picker: Option<NativeFilePicker>,
@@ -41,6 +43,16 @@ pub struct HelperState {
 #[derive(Clone)]
 pub struct HelperQueue {
     jobs: Arc<Mutex<HashMap<String, JobEntry>>>,
+    events: Option<EventHub>,
+}
+
+impl HelperQueue {
+    /// Attaches the unified events hub so every published job transition is
+    /// also broadcast as `job` and `progress` events on `/events`.
+    pub fn with_events(mut self, events: EventHub) -> Self {
+        self.events = Some(events);
+        self
+    }
 }
 
 #[derive(Clone)]
@@ -80,6 +92,7 @@ impl Default for HelperQueue {
     fn default() -> Self {
         Self {
             jobs: Arc::new(Mutex::new(HashMap::new())),
+            events: None,
         }
     }
 }
@@ -119,8 +132,31 @@ impl HelperQueue {
     }
 
     pub async fn publish(&self, id: &str) {
+        let status = {
+            let jobs = self.jobs.lock().await;
+            match jobs.get(id) {
+                Some(entry) => entry.job.lock().await.status(),
+                None => return,
+            }
+        };
+        if let Some(events) = &self.events {
+            let error = status.error.clone();
+            events.emit(HelperEvent::Job(JobEvent {
+                job_id: status.id.clone(),
+                status: job_status(&status.phase),
+                error,
+            }));
+            if let Some(phase) = progress_phase(&status.phase) {
+                events.emit(HelperEvent::Progress(ProgressEvent {
+                    job_id: status.id.clone(),
+                    phase: phase.into(),
+                    percent: status.progress.map(|value| value / 100.0),
+                    message: status.message.clone().unwrap_or_default(),
+                    detail: None,
+                }));
+            }
+        }
         if let Some(entry) = self.jobs.lock().await.get(id) {
-            let status = entry.job.lock().await.status();
             let _ = entry.events.send(status);
         }
     }

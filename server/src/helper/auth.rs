@@ -45,6 +45,16 @@ impl HelperAuth {
     }
 
     pub async fn authorize(&self, headers: &HeaderMap) -> Result<(), HelperError> {
+        self.authorize_with_query(headers, None).await
+    }
+
+    /// Header bearer auth first, then an optional query-param token (used by
+    /// EventSource, which cannot set request headers).
+    pub async fn authorize_with_query(
+        &self,
+        headers: &HeaderMap,
+        query_token: Option<&str>,
+    ) -> Result<(), HelperError> {
         if !self.origin_allowed(headers) {
             return Err(HelperError::OriginDenied);
         }
@@ -52,7 +62,9 @@ impl HelperAuth {
             .get("authorization")
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
-            .unwrap_or("");
+            .map(ToOwned::to_owned)
+            .or_else(|| query_token.map(ToOwned::to_owned))
+            .unwrap_or_default();
         let expected = self.token.read().await;
         if constant_time_equal(provided.as_bytes(), expected.as_bytes()) {
             Ok(())
@@ -93,5 +105,23 @@ mod tests {
         assert!(constant_time_equal(b"token", b"token"));
         assert!(!constant_time_equal(b"token", b"tokens"));
         assert!(!constant_time_equal(b"token", b"Token"));
+    }
+
+    #[tokio::test]
+    async fn query_token_is_accepted_when_header_is_absent() {
+        let config = HelperConfig::from_env().expect("helper config");
+        let auth = HelperAuth::load(&config).await.expect("auth");
+        let mut headers = HeaderMap::new();
+        headers.insert("origin", "https://whisdom.app".parse().expect("origin"));
+        // Fresh profiles hold an empty token; a mismatching query token must
+        // still be rejected by the constant-time comparison.
+        assert!(auth
+            .authorize_with_query(&headers, Some("mismatch"))
+            .await
+            .is_err());
+        assert!(auth
+            .authorize_with_query(&headers, Some(""))
+            .await
+            .is_ok());
     }
 }

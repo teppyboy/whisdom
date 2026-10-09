@@ -90,18 +90,47 @@ pub async fn transcribe_wav(
 
 // sherpa-onnx 1.13.6 exposes no active-provider query. The loaded backend is
 // therefore the provider requested for the custom, verified runtime bundle.
-pub async fn active_backend(model: &NativeModel, runtime: &SharedRuntime) -> &'static str {
-    let Some(loaded_runtime) = runtime.read().await.as_ref().cloned() else {
-        return "cpu";
-    };
+// `None` means "nothing is loaded (or a different model is loaded)": the
+// helper must never claim "cpu" just because inference has not started yet.
+pub async fn active_backend(model: &NativeModel, runtime: &SharedRuntime) -> Option<&'static str> {
+    let loaded_runtime = runtime.read().await.as_ref().cloned()?;
     match (&*loaded_runtime, model.engine) {
         (LoadedRuntime::Whisper(loaded), AsrEngine::WhisperCpp) if loaded.model_id == model.id => {
-            loaded_backend(loaded_runtime.as_ref())
+            reportable_backend(loaded_backend(loaded_runtime.as_ref()))
         }
         (LoadedRuntime::Parakeet(loaded), AsrEngine::SherpaOnnx) if loaded.model_id == model.id => {
-            loaded_backend(loaded_runtime.as_ref())
+            reportable_backend(loaded_backend(loaded_runtime.as_ref()))
         }
-        _ => "cpu",
+        _ => None,
+    }
+}
+
+/// Backend of whatever runtime is currently loaded, regardless of model.
+pub async fn current_backend(runtime: &SharedRuntime) -> Option<&'static str> {
+    let loaded_runtime = runtime.read().await.as_ref().cloned()?;
+    reportable_backend(loaded_backend(loaded_runtime.as_ref()))
+}
+
+/// The capabilities/diagnostics contract reports only cpu, vulkan, and metal.
+/// A loaded DirectML Parakeet runtime is surfaced through `preferred_backend`
+/// and the feature flags instead; sherpa-onnx 1.13.6 exposes no active-provider
+/// query, so "directml" is a requested-provider claim, not an observed one.
+pub fn reportable_backend(backend: &'static str) -> Option<&'static str> {
+    matches!(backend, "cpu" | "vulkan" | "metal").then_some(backend)
+}
+
+/// Backend this binary would prefer, derived from compiled cargo features.
+/// Mirrors the feature priority used by the runtime loaders: metal, then
+/// vulkan, then directml, then cpu.
+pub fn preferred_backend() -> &'static str {
+    if cfg!(feature = "metal") {
+        "metal"
+    } else if cfg!(feature = "vulkan") {
+        "vulkan"
+    } else if cfg!(feature = "directml") {
+        "directml"
+    } else {
+        "cpu"
     }
 }
 
@@ -111,6 +140,8 @@ pub fn loaded_backend(runtime: &LoadedRuntime) -> &'static str {
             transcribe::ModelBackend::Cpu => "cpu",
             #[cfg(feature = "vulkan")]
             transcribe::ModelBackend::Vulkan => "vulkan",
+            #[cfg(feature = "metal")]
+            transcribe::ModelBackend::Metal => "metal",
         },
         LoadedRuntime::Parakeet(model) => model.backend.id(),
     }
@@ -140,12 +171,26 @@ mod tests {
         let whisper = find_native_model("ggml-base-q5_1").unwrap();
         assert_eq!(
             futures::executor::block_on(active_backend(whisper, &SharedRuntime::default())),
-            "cpu"
+            None
         );
         assert_eq!(
             futures::executor::block_on(active_backend(parakeet, &SharedRuntime::default())),
-            "cpu"
+            None
         );
+        assert_eq!(
+            futures::executor::block_on(current_backend(&SharedRuntime::default())),
+            None
+        );
+        let expected = if cfg!(feature = "metal") {
+            "metal"
+        } else if cfg!(feature = "vulkan") {
+            "vulkan"
+        } else if cfg!(feature = "directml") {
+            "directml"
+        } else {
+            "cpu"
+        };
+        assert_eq!(preferred_backend(), expected);
         assert!(should_try_next_parakeet_backend(&HelperError::BadRequest(
             "Parakeet DirectML runtime initialization failed".into()
         )));

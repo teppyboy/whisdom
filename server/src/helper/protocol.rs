@@ -67,7 +67,7 @@ pub struct NativeModelResponse {
     pub engine: &'static str,
     pub supported_languages: Vec<String>,
     pub supports_auto_language: bool,
-    pub active_backend: &'static str,
+    pub active_backend: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +80,9 @@ pub struct CapabilitiesResponse {
     pub model_ready: bool,
     pub ffmpeg_ready: bool,
     pub native_picker: bool,
+    /// Backend of whatever runtime is currently loaded; null before first use.
+    pub active_backend: Option<&'static str>,
+    pub preferred_backend: &'static str,
     pub models: Vec<NativeModelResponse>,
 }
 
@@ -109,6 +112,61 @@ pub struct StartSelectionRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct StartSelectionResponse {
     pub job_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateDependenciesRequest {
+    pub scope: UpdateScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateScope {
+    Ffmpeg,
+    Models,
+    All,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateDependenciesResponse {
+    pub job_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticsFeatures {
+    pub vulkan: bool,
+    pub metal: bool,
+    pub directml: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticsFfmpeg {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub source_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticsModel {
+    pub id: String,
+    pub label: String,
+    pub installed: bool,
+    pub engine: &'static str,
+    pub size_bytes: u64,
+    pub active_backend: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticsResponse {
+    pub protocol_version: u32,
+    pub os: &'static str,
+    pub arch: &'static str,
+    pub features: DiagnosticsFeatures,
+    pub active_backend: Option<&'static str>,
+    pub preferred_backend: &'static str,
+    pub ffmpeg: DiagnosticsFfmpeg,
+    pub models: Vec<DiagnosticsModel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -20,6 +20,8 @@ pub enum ModelBackend {
     Cpu,
     #[cfg(feature = "vulkan")]
     Vulkan,
+    #[cfg(feature = "metal")]
+    Metal,
 }
 
 pub struct LoadedModel {
@@ -68,10 +70,10 @@ async fn load_model_with_backend(
     cache: &HelperCache,
     model: &SharedModel,
     model_spec: &'static NativeModel,
-    prefer_vulkan: bool,
+    prefer_gpu: bool,
 ) -> Result<Arc<LoadedModel>, HelperError> {
     if let Some(loaded) = model.read().await.as_ref() {
-        if loaded.model_id == model_spec.id && cached_backend_matches(prefer_vulkan, loaded.backend)
+        if loaded.model_id == model_spec.id && cached_backend_matches(prefer_gpu, loaded.backend)
         {
             tracing::debug!(backend = ?loaded.backend, "using cached Whisper model");
             return Ok(Arc::clone(loaded));
@@ -87,7 +89,7 @@ async fn load_model_with_backend(
     let path = cache.ensure_model(model_spec).await?;
     let context = tokio::task::spawn_blocking(move || {
         #[cfg(feature = "vulkan")]
-        if prefer_vulkan {
+        if prefer_gpu {
             configure_vulkan_workarounds();
             let mut gpu_params = WhisperContextParameters::default();
             gpu_params.use_gpu(true);
@@ -105,10 +107,27 @@ async fn load_model_with_backend(
         }
 
         #[cfg(feature = "vulkan")]
-        if prefer_vulkan {
+        if prefer_gpu {
             return Err(HelperError::BadRequest(
                 "Whisper Vulkan backend is unavailable; CPU fallback is disabled".into(),
             ));
+        }
+
+        #[cfg(feature = "metal")]
+        if prefer_gpu {
+            let mut gpu_params = WhisperContextParameters::default();
+            gpu_params.use_gpu(true);
+            match WhisperContext::new_with_params(&path, gpu_params) {
+                Ok(context) => {
+                    tracing::info!("Whisper Metal backend selected");
+                    return Ok((Arc::new(context), ModelBackend::Metal));
+                }
+                Err(error) => {
+                    return Err(HelperError::BadRequest(format!(
+                        "Whisper Metal model load failed: {error}"
+                    )));
+                }
+            }
         }
 
         let mut cpu_params = WhisperContextParameters::default();
@@ -133,7 +152,7 @@ async fn load_model_with_backend(
     let mut guard = model.write().await;
     if let Some(existing) = guard.as_ref() {
         if existing.model_id == model_spec.id
-            && cached_backend_matches(prefer_vulkan, existing.backend)
+            && cached_backend_matches(prefer_gpu, existing.backend)
         {
             return Ok(Arc::clone(existing));
         }
@@ -155,14 +174,14 @@ pub(crate) fn is_vulkan_backend(backend: ModelBackend) -> bool {
     }
 }
 
-fn cached_backend_matches(prefer_vulkan: bool, backend: ModelBackend) -> bool {
+fn cached_backend_matches(prefer_gpu: bool, backend: ModelBackend) -> bool {
     #[cfg(feature = "vulkan")]
     {
-        prefer_vulkan == is_vulkan_backend(backend)
+        prefer_gpu == is_vulkan_backend(backend)
     }
     #[cfg(not(feature = "vulkan"))]
     {
-        let _ = prefer_vulkan;
+        let _ = prefer_gpu;
         let _ = backend;
         true
     }
@@ -327,6 +346,60 @@ fn transcribe_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helper::models::find_native_model;
+
+    // Real Metal smoke test: downloads the tiny model through the unpinned catalog
+    // path and transcribes a generated tone. Opt-in via WHISDOM_REAL_METAL=1.
+    #[cfg(feature = "metal")]
+    #[tokio::test]
+    #[ignore = "requires network, macOS GPU, and WHISDOM_REAL_METAL=1"]
+    async fn metal_backend_loads_and_transcribes() {
+        if std::env::var_os("WHISDOM_REAL_METAL").is_none() {
+            return;
+        }
+        let config = crate::helper::config::HelperConfig::from_env().expect("helper config");
+        let cache = crate::helper::cache::HelperCache::new(config);
+        let model_spec = find_native_model("ggml-tiny-q5_1").expect("tiny model in catalog");
+        let shared: SharedModel = Arc::new(RwLock::new(None));
+        let loaded = load_model(&cache, &shared, model_spec)
+            .await
+            .expect("model load with Metal");
+        assert_eq!(loaded.backend, ModelBackend::Metal);
+
+        let wav_path = std::env::temp_dir().join("whisdom-metal-smoke.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: SAMPLE_RATE as u32,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&wav_path, spec).expect("wav writer");
+        for index in 0..SAMPLE_RATE {
+            let value = (index as f32 * 440.0 * std::f32::consts::TAU / SAMPLE_RATE as f32)
+                .sin()
+                * (i16::MAX as f32 * 0.4);
+            writer.write_sample(value as i16).expect("wav sample");
+        }
+        writer.finalize().expect("wav finalize");
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let guard = cache.job_guard().await.expect("job guard");
+        let segments = transcribe_wav(
+            &wav_path,
+            loaded,
+            Some("en".to_string()),
+            cancel,
+            cancel_rx,
+            &guard,
+            None,
+            None,
+        )
+        .await
+        .expect("Metal transcription succeeds");
+        // A pure tone is not speech; success means the pipeline ran on Metal.
+        tracing::info!(segments = segments.len(), "Metal smoke transcription done");
+    }
 
     #[test]
     fn abort_callback_tracks_the_cancellation_flag() {

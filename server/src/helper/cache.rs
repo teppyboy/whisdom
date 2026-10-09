@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::config::HelperConfig;
-use super::download::{download_verified, verify_file_sha256};
+use super::download::{download_verified, download_verified_progress, verify_file_sha256, DownloadProgress};
 use super::engine::SharedRuntime;
 use super::models::NativeArchive;
 use super::models::NativeModel;
@@ -76,9 +76,14 @@ impl HelperCache {
         &self.client
     }
 
-    pub async fn ensure_model(
+    pub async fn ensure_model(&self, model: &NativeModel) -> Result<std::path::PathBuf, HelperError> {
+        self.ensure_model_progress(model, None).await
+    }
+
+    pub async fn ensure_model_progress(
         &self,
         model: &NativeModel,
+        progress: Option<DownloadProgress>,
     ) -> Result<std::path::PathBuf, HelperError> {
         let _lock = self.model_lock.lock().await;
         let path = self.model_path(model);
@@ -88,20 +93,29 @@ impl HelperCache {
             }
             tokio::fs::remove_file(&path).await?;
         }
-        download_verified(
+        download_verified_progress(
             &self.client,
             model.url,
             &path,
             model.sha256,
             self.config.max_download_bytes,
+            progress,
         )
         .await?;
         Ok(path)
     }
 
     pub async fn ensure_model_assets(&self, model: &NativeModel) -> Result<PathBuf, HelperError> {
+        self.ensure_model_assets_progress(model, None).await
+    }
+
+    pub async fn ensure_model_assets_progress(
+        &self,
+        model: &NativeModel,
+        progress: Option<DownloadProgress>,
+    ) -> Result<PathBuf, HelperError> {
         let Some(archive) = model.archive else {
-            return self.ensure_model(model).await;
+            return self.ensure_model_progress(model, progress).await;
         };
         let _lock = self.model_lock.lock().await;
         let destination = self.model_dir(model);
@@ -113,12 +127,13 @@ impl HelperCache {
         tokio::fs::create_dir_all(&partial).await?;
         let archive_path = partial.join(archive.filename);
         let result = async {
-            download_verified(
+            download_verified_progress(
                 &self.client,
                 archive.url,
                 &archive_path,
                 archive.sha256,
                 self.config.max_download_bytes,
+                progress,
             )
             .await?;
             let extracted = partial.join("extracted");
@@ -175,7 +190,6 @@ impl HelperCache {
         .await?;
         Ok(path)
     }
-
     pub async fn model_is_installed(&self, model: &NativeModel) -> Result<bool, HelperError> {
         let Some(archive) = model.archive else {
             let path = self.model_path(model);
@@ -282,6 +296,41 @@ impl HelperCache {
         };
         self.config.create_dirs().await?;
         Ok(result)
+    }
+
+    /// Clears managed model caches only. Refuses while a transcription job is
+    /// active and drops the tagged runtime before deleting managed assets.
+    pub async fn clear_models(&self, runtime: &SharedRuntime) -> Result<bool, HelperError> {
+        let _gate = self
+            .admission_gate
+            .try_lock()
+            .map_err(|_| HelperError::Busy)?;
+        if self.is_busy() {
+            return Err(HelperError::Busy);
+        }
+        *runtime.write().await = None;
+        let deleted = remove_path(&self.config.models_dir()).await?;
+        tokio::fs::create_dir_all(self.config.models_dir())
+            .await
+            .map_err(HelperError::Io)?;
+        Ok(deleted)
+    }
+
+    /// Clears the managed FFmpeg tool directory only. Refuses while a
+    /// transcription job is active.
+    pub async fn clear_ffmpeg(&self) -> Result<bool, HelperError> {
+        let _gate = self
+            .admission_gate
+            .try_lock()
+            .map_err(|_| HelperError::Busy)?;
+        if self.is_busy() {
+            return Err(HelperError::Busy);
+        }
+        let deleted = remove_path(&self.config.tools_dir()).await?;
+        tokio::fs::create_dir_all(self.config.tools_dir())
+            .await
+            .map_err(HelperError::Io)?;
+        Ok(deleted)
     }
 }
 
@@ -800,7 +849,7 @@ mod tests {
             .expect("Parakeet exists");
         assert!(cache
             .model_dir(model)
-            .ends_with("sherpa-onnx\\sherpa-parakeet-tdt-v3-int8"));
+            .ends_with(std::path::Path::new("sherpa-onnx").join("sherpa-parakeet-tdt-v3-int8")));
         assert_eq!(
             model.archive.expect("archive").files,
             [
@@ -832,6 +881,25 @@ mod tests {
             Err(HelperError::Busy)
         ));
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn admission_gate_blocks_scoped_dependency_clears_while_job_is_active() {
+        let config = HelperConfig::from_env().expect("default helper config");
+        let cache = HelperCache::new(config);
+        let guard = cache.job_guard().await.expect("job admission");
+        let runtime = Arc::new(tokio::sync::RwLock::new(None));
+        assert!(matches!(
+            cache.clear_models(&runtime).await,
+            Err(HelperError::Busy)
+        ));
+        assert!(matches!(
+            cache.clear_ffmpeg().await,
+            Err(HelperError::Busy)
+        ));
+        drop(guard);
+        assert!(cache.clear_ffmpeg().await.is_ok());
+        assert!(cache.clear_models(&runtime).await.is_ok());
     }
 
     #[test]

@@ -1,7 +1,8 @@
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use axum::extract::{DefaultBodyLimit, Json, Multipart, Path, State};
+use axum::extract::{DefaultBodyLimit, Json, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
@@ -14,16 +15,17 @@ use tower_http::trace::TraceLayer;
 
 use super::cache::CacheStatus;
 use super::engine;
+use super::events::{EventHub, HelperEvent, JobEvent, ProgressEvent};
 use super::models::{default_native_model, find_native_model, native_models, supports_language};
 use super::protocol::{
-    CapabilitiesResponse, HealthResponse, HelperError, NativeModelResponse,
+    CapabilitiesResponse, DiagnosticsFeatures, DiagnosticsFfmpeg, DiagnosticsModel,
+    DiagnosticsResponse, HealthResponse, HelperError, NativeModelResponse,
     NativeSelectionResponse, PairResponse, SelectFilesResponse, StartSelectionRequest,
-    StartSelectionResponse, PROTOCOL_VERSION,
+    StartSelectionResponse, UpdateDependenciesRequest, UpdateDependenciesResponse, UpdateScope,
+    PROTOCOL_VERSION,
 };
 use super::runtime;
 use super::state::HelperState;
-
-const FFMPEG_DIR: &str = "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1";
 
 pub fn router(state: Arc<HelperState>) -> Router {
     let multipart_limit = state.config.max_upload_bytes.saturating_add(1024 * 1024);
@@ -31,6 +33,9 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/api/health", get(health))
         .route("/api/pair", post(pair))
         .route("/api/capabilities", get(capabilities))
+        .route("/api/diagnostics", get(diagnostics))
+        .route("/api/events", get(events))
+        .route("/api/update-dependencies", post(update_dependencies))
         .route("/api/cache/status", get(cache_status))
         .route("/api/cache/clear", post(cache_clear))
         .route(
@@ -42,6 +47,9 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/api/v1/health", get(health))
         .route("/api/v1/pair", post(pair))
         .route("/api/v1/capabilities", get(capabilities))
+        .route("/api/v1/diagnostics", get(diagnostics))
+        .route("/api/v1/events", get(events))
+        .route("/api/v1/update-dependencies", post(update_dependencies))
         .route("/api/v1/cache/status", get(cache_status))
         .route("/api/v1/cache/clear", post(cache_clear))
         .route(
@@ -56,6 +64,9 @@ pub fn router(state: Arc<HelperState>) -> Router {
         .route("/v1/health", get(health))
         .route("/v1/pair", post(pair))
         .route("/v1/capabilities", get(capabilities))
+        .route("/v1/diagnostics", get(diagnostics))
+        .route("/v1/events", get(events))
+        .route("/v1/update-dependencies", post(update_dependencies))
         .route("/v1/cache/status", get(cache_status))
         .route("/v1/cache/clear", post(cache_clear))
         .route(
@@ -142,15 +153,223 @@ async fn capabilities(
             .cache
             .model_is_installed(default_native_model())
             .await?,
-        ffmpeg_ready: state
-            .config
-            .tools_dir()
-            .join(FFMPEG_DIR)
-            .join("ffmpeg.exe")
-            .exists(),
+        ffmpeg_ready: super::ffmpeg::installed_executable(&state.config).exists(),
         native_picker: state.native_file_picker.is_some(),
+        active_backend: engine::current_backend(&state.runtime).await,
+        preferred_backend: engine::preferred_backend(),
         models,
     }))
+}
+
+async fn diagnostics(
+    State(state): State<Arc<HelperState>>,
+    headers: HeaderMap,
+) -> Result<axum::Json<DiagnosticsResponse>, HelperError> {
+    state.auth.authorize(&headers).await?;
+    let mut models = Vec::with_capacity(native_models().len());
+    for model in native_models() {
+        models.push(DiagnosticsModel {
+            id: model.id.into(),
+            label: model.label.into(),
+            installed: state.cache.model_is_installed(model).await.unwrap_or(false),
+            engine: model.engine.id(),
+            size_bytes: model.size_bytes,
+            active_backend: engine::active_backend(model, &state.runtime).await,
+        });
+    }
+    Ok(axum::Json(DiagnosticsResponse {
+        protocol_version: PROTOCOL_VERSION,
+        os: os_name(),
+        arch: std::env::consts::ARCH,
+        features: DiagnosticsFeatures {
+            vulkan: cfg!(feature = "vulkan"),
+            metal: cfg!(feature = "metal"),
+            directml: cfg!(feature = "directml"),
+        },
+        active_backend: engine::current_backend(&state.runtime).await,
+        preferred_backend: engine::preferred_backend(),
+        ffmpeg: DiagnosticsFfmpeg {
+            installed: super::ffmpeg::installed_executable(&state.config).exists(),
+            version: super::ffmpeg::installed_version(&state.config).await,
+            source_url: state.config.ffmpeg_url.clone(),
+        },
+        models,
+    }))
+}
+
+fn os_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "linux"
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct EventsQuery {
+    token: Option<String>,
+}
+
+async fn events(
+    State(state): State<Arc<HelperState>>,
+    Query(query): Query<EventsQuery>,
+    headers: HeaderMap,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, HelperError> {
+    // EventSource cannot set headers, so the token may arrive in the query
+    // string; header bearer auth keeps working for fetch-based clients.
+    state
+        .auth
+        .authorize_with_query(&headers, query.token.as_deref())
+        .await?;
+    let receiver = state.events.subscribe();
+    let (tx, output) = tokio::sync::mpsc::channel(256);
+    let hello = Event::default()
+        .event("hello")
+        .json_data(HelperEvent::hello())
+        .map_err(|error| HelperError::BadRequest(error.to_string()))?;
+    let _ = tx.send(Ok(hello)).await;
+    tokio::spawn(async move {
+        let mut stream = BroadcastStream::new(receiver);
+        while let Some(Ok(event)) = tokio_stream::StreamExt::next(&mut stream).await {
+            let Ok(data) = Event::default().event(event.event_name()).json_data(&*event) else {
+                break;
+            };
+            if tx.send(Ok(data)).await.is_err() {
+                break;
+            }
+        }
+    });
+    // KeepAlive emits an SSE comment every interval, keeping proxies and
+    // EventSource connections alive without fabricating events.
+    Ok(Sse::new(ReceiverStream::new(output)).keep_alive(
+        KeepAlive::new().interval(std::time::Duration::from_secs(15)),
+    ))
+}
+
+async fn update_dependencies(
+    State(state): State<Arc<HelperState>>,
+    headers: HeaderMap,
+    request: Result<Json<UpdateDependenciesRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<axum::Json<UpdateDependenciesResponse>, HelperError> {
+    state.auth.authorize(&headers).await?;
+    let request = request
+        .map_err(|_| HelperError::BadRequest("invalid dependency update request".into()))?
+        .0;
+    // Scoped clears share the transcription admission gate: they refuse while
+    // a job is active instead of deleting caches under running work.
+    match request.scope {
+        UpdateScope::Ffmpeg => {
+            state.cache.clear_ffmpeg().await?;
+        }
+        UpdateScope::Models => {
+            state.cache.clear_models(&state.runtime).await?;
+        }
+        UpdateScope::All => {
+            state.cache.clear_models(&state.runtime).await?;
+            state.cache.clear_ffmpeg().await?;
+        }
+    }
+    let job_id = uuid::Uuid::new_v4().to_string();
+    state.events.emit(HelperEvent::Job(JobEvent {
+        job_id: job_id.clone(),
+        status: "running",
+        error: None,
+    }));
+    tracing::info!(job_id = %job_id, scope = ?request.scope, "dependency update started");
+    let worker_state = state.clone();
+    let worker_job_id = job_id.clone();
+    tokio::spawn(async move {
+        let result = run_dependency_update(&worker_state, &worker_job_id, request.scope).await;
+        match result {
+            Ok(()) => {
+                tracing::info!(job_id = %worker_job_id, "dependency update complete");
+                worker_state.events.emit(HelperEvent::Progress(ProgressEvent {
+                    job_id: worker_job_id.clone(),
+                    phase: "deps".into(),
+                    percent: Some(1.0),
+                    message: "Dependencies are up to date".into(),
+                    detail: None,
+                }));
+                worker_state.events.emit(HelperEvent::Job(JobEvent {
+                    job_id: worker_job_id,
+                    status: "complete",
+                    error: None,
+                }));
+            }
+            Err(error) => {
+                tracing::error!(job_id = %worker_job_id, error = %error, "dependency update failed");
+                worker_state.events.emit(HelperEvent::Job(JobEvent {
+                    job_id: worker_job_id,
+                    status: "failed",
+                    error: Some(error.to_string()),
+                }));
+            }
+        }
+    });
+    Ok(axum::Json(UpdateDependenciesResponse { job_id }))
+}
+
+fn dependency_progress_callback(
+    events: &EventHub,
+    job_id: &str,
+    phase: &str,
+    message: &str,
+) -> super::download::DownloadProgress {
+    let events = events.clone();
+    let job_id = job_id.to_owned();
+    let phase = phase.to_owned();
+    let message = message.to_owned();
+    let last_percent = Arc::new(AtomicU32::new(u32::MAX));
+    Arc::new(move |downloaded, total| {
+        let percent = total
+            .filter(|size| *size > 0)
+            .map(|size| (downloaded.min(size) as f32) / (size as f32));
+        if let Some(value) = percent {
+            // 1% granularity keeps the events stream quiet on fast links.
+            let scaled = (value * 100.0).clamp(0.0, 100.0) as u32;
+            if scaled == last_percent.swap(scaled, Ordering::AcqRel) {
+                return;
+            }
+        }
+        events.emit(HelperEvent::Progress(ProgressEvent {
+            job_id: job_id.clone(),
+            phase: phase.clone(),
+            percent,
+            message: message.clone(),
+            detail: None,
+        }));
+    })
+}
+
+async fn run_dependency_update(
+    state: &Arc<HelperState>,
+    job_id: &str,
+    scope: UpdateScope,
+) -> Result<(), HelperError> {
+    if matches!(scope, UpdateScope::Ffmpeg | UpdateScope::All) {
+        let progress =
+            dependency_progress_callback(&state.events, job_id, "ffmpeg", "Downloading FFmpeg");
+        super::ffmpeg::ensure_ffmpeg_progress(&state.cache, Some(progress)).await?;
+    }
+    if matches!(scope, UpdateScope::Models | UpdateScope::All) {
+        // Actively re-fetch the default model so the helper is usable right
+        // away; remaining catalog models re-download through ensure_model on
+        // their next use.
+        let model = default_native_model();
+        let progress = dependency_progress_callback(
+            &state.events,
+            job_id,
+            "download_model",
+            &format!("Downloading {}", model.label),
+        );
+        state
+            .cache
+            .ensure_model_progress(model, Some(progress))
+            .await?;
+    }
+    Ok(())
 }
 
 async fn cache_status(
@@ -423,6 +642,7 @@ mod tests {
     use crate::helper::cache::HelperCache;
     use crate::helper::config::HelperConfig;
     use crate::helper::engine::SharedRuntime;
+    use crate::helper::events::EventHub;
     use crate::helper::selection::SelectionStore;
     use crate::helper::state::{HelperQueue, NativeFilePicker};
 
@@ -466,6 +686,7 @@ mod tests {
             config,
             auth,
             queue: HelperQueue::default(),
+            events: EventHub::default(),
             runtime: SharedRuntime::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(picker),
@@ -640,11 +861,122 @@ mod tests {
             .find(|model| model["id"] == "sherpa-parakeet-tdt-v3-int8")
             .expect("Parakeet model");
         assert_eq!(parakeet["engine"], "sherpa-onnx");
-        assert_eq!(parakeet["active_backend"], "cpu");
+        assert!(parakeet["active_backend"].is_null());
         assert!(parakeet["supported_languages"]
             .as_array()
             .expect("languages")
             .iter()
             .all(|language| language != "vi"));
+    }
+
+    #[tokio::test]
+    async fn diagnostics_reports_contract_shape_without_paths() {
+        let media = tempfile::NamedTempFile::new().expect("test media");
+        let (app, token) = paired_router(media.path().to_owned()).await;
+        let response = app
+            .oneshot(request(
+                "GET",
+                "/api/v1/diagnostics",
+                &token,
+                Body::empty(),
+            ))
+            .await
+            .expect("diagnostics response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("diagnostics body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("diagnostics JSON");
+        assert_eq!(value["protocol_version"], PROTOCOL_VERSION);
+        assert!(matches!(
+            value["os"].as_str(),
+            Some("macos") | Some("windows") | Some("linux")
+        ));
+        assert!(value["arch"].is_string());
+        assert!(value["features"]["vulkan"].is_boolean());
+        assert!(value["features"]["metal"].is_boolean());
+        assert!(value["features"]["directml"].is_boolean());
+        assert!(value["active_backend"].is_null());
+        assert!(value["preferred_backend"].is_string());
+        assert_eq!(value["ffmpeg"]["installed"], false);
+        assert!(value["ffmpeg"]["version"].is_null());
+        assert_eq!(
+            value["ffmpeg"]["source_url"],
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/x/file.zip"
+        );
+        let models = value["models"].as_array().expect("models");
+        assert_eq!(models.len(), native_models().len());
+        assert!(models
+            .iter()
+            .all(|model| model.get("path").is_none() && model.get("url").is_none()));
+        assert!(models
+            .iter()
+            .all(|model| model["active_backend"].is_null()));
+    }
+
+    #[tokio::test]
+    async fn diagnostics_requires_authorization() {
+        let media = tempfile::NamedTempFile::new().expect("test media");
+        let (app, _token) = paired_router(media.path().to_owned()).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/diagnostics")
+                    .header("origin", "https://whisdom.app")
+                    .header("authorization", "Bearer wrong")
+                    .body(Body::empty())
+                    .expect("diagnostics request"),
+            )
+            .await
+            .expect("diagnostics response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn events_rejects_a_wrong_query_token() {
+        let media = tempfile::NamedTempFile::new().expect("test media");
+        let (app, token) = paired_router(media.path().to_owned()).await;
+        for (uri, expected) in [
+            ("/api/v1/events?token=wrong", StatusCode::UNAUTHORIZED),
+            (format!("/api/v1/events?token={token}").as_str(), StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .header("origin", "https://whisdom.app")
+                        .body(Body::empty())
+                        .expect("events request"),
+                )
+                .await
+                .expect("events response");
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_dependencies_returns_a_synthetic_job_id() {
+        let media = tempfile::NamedTempFile::new().expect("test media");
+        let (app, token) = paired_router(media.path().to_owned()).await;
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/update-dependencies",
+                &token,
+                Body::from(r#"{"scope":"all"}"#),
+            ))
+            .await
+            .expect("update response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("update body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("update JSON");
+        assert!(value["job_id"].as_str().is_some_and(|id| !id.is_empty()));
     }
 }

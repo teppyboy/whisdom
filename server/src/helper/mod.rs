@@ -4,6 +4,7 @@ pub mod cache;
 pub mod config;
 pub mod download;
 pub mod engine;
+pub mod events;
 pub mod ffmpeg;
 pub mod logging;
 pub mod models;

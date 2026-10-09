@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use reqwest::header::LOCATION;
 use sha2::{Digest, Sha256};
@@ -9,6 +10,10 @@ use super::protocol::HelperError;
 const MAX_REDIRECTS: usize = 5;
 
 pub async fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<bool, HelperError> {
+    // Empty expected checksum means "unpinned": accept any content.
+    if expected_sha256.is_empty() {
+        return Ok(true);
+    }
     let path = path.to_owned();
     let expected = expected_sha256.to_ascii_lowercase();
     tokio::task::spawn_blocking(move || {
@@ -31,6 +36,9 @@ pub async fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<bo
     .map_err(HelperError::Io)
 }
 
+/// Streaming progress callback: `(downloaded_bytes, total_bytes_if_known)`.
+pub type DownloadProgress = Arc<dyn Fn(u64, Option<u64>) + Send + Sync>;
+
 pub async fn download_verified(
     client: &reqwest::Client,
     url: &str,
@@ -38,10 +46,31 @@ pub async fn download_verified(
     expected_sha256: &str,
     max_bytes: u64,
 ) -> Result<(), HelperError> {
+    download_verified_progress(
+        client,
+        url,
+        destination,
+        expected_sha256,
+        max_bytes,
+        None,
+    )
+    .await
+}
+
+pub async fn download_verified_progress(
+    client: &reqwest::Client,
+    url: &str,
+    destination: &Path,
+    expected_sha256: &str,
+    max_bytes: u64,
+    progress: Option<DownloadProgress>,
+) -> Result<(), HelperError> {
     let initial = reqwest::Url::parse(url)
         .map_err(|_| HelperError::Config("asset URL must be valid HTTPS".into()))?;
     validate_asset_url(initial.as_str())?;
-    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    if !expected_sha256.is_empty()
+        && (expected_sha256.len() != 64
+            || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()))
     {
         return Err(HelperError::Config(
             "download checksum must be a 64-character SHA-256 hex digest".into(),
@@ -54,6 +83,7 @@ pub async fn download_verified(
         expected_sha256,
         max_bytes,
         validate_asset_url,
+        progress,
     )
     .await
 }
@@ -65,6 +95,7 @@ async fn download_verified_with_validator<F>(
     expected_sha256: &str,
     max_bytes: u64,
     validate_url: F,
+    progress: Option<DownloadProgress>,
 ) -> Result<(), HelperError>
 where
     F: Fn(&str) -> Result<(), HelperError>,
@@ -78,7 +109,8 @@ where
 
     tracing::info!("starting verified asset download");
     let response = follow_verified_redirects(client, initial, validate_url).await?;
-    let result = stream_verified_response(response, &partial, expected_sha256, max_bytes).await;
+    let result =
+        stream_verified_response(response, &partial, expected_sha256, max_bytes, progress).await;
     if result.is_err() {
         let _ = tokio::fs::remove_file(&partial).await;
     }
@@ -146,6 +178,7 @@ async fn stream_verified_response(
     partial: &Path,
     expected_sha256: &str,
     max_bytes: u64,
+    progress: Option<DownloadProgress>,
 ) -> Result<(), HelperError> {
     if response
         .content_length()
@@ -156,32 +189,39 @@ async fn stream_verified_response(
         ));
     }
 
+    let content_total = response.content_length();
     let mut stream = response.bytes_stream();
     let mut file = tokio::fs::File::create(partial).await?;
     let mut digest = Sha256::new();
-    let mut total = 0u64;
+    let mut downloaded = 0u64;
 
     use futures::StreamExt;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| HelperError::BadRequest("download stream failed".into()))?;
-        total = total.saturating_add(chunk.len() as u64);
-        if total > max_bytes {
+        downloaded = downloaded.saturating_add(chunk.len() as u64);
+        if downloaded > max_bytes {
             return Err(HelperError::BadRequest(
                 "download exceeds configured size limit".into(),
             ));
         }
         digest.update(&chunk);
         tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
+        if let Some(progress) = &progress {
+            progress(downloaded, content_total);
+        }
     }
     tokio::io::AsyncWriteExt::flush(&mut file).await?;
     drop(file);
 
-    let actual = hex::encode(digest.finalize());
-    if !constant_time_equal(
-        actual.as_bytes(),
-        expected_sha256.to_ascii_lowercase().as_bytes(),
-    ) {
-        return Err(HelperError::BadRequest("download checksum mismatch".into()));
+    // Empty expected checksum means the asset is unpinned; only the size cap protects the download.
+    if !expected_sha256.is_empty() {
+        let actual = hex::encode(digest.finalize());
+        if !constant_time_equal(
+            actual.as_bytes(),
+            expected_sha256.to_ascii_lowercase().as_bytes(),
+        ) {
+            return Err(HelperError::BadRequest("download checksum mismatch".into()));
+        }
     }
     Ok(())
 }
@@ -305,6 +345,7 @@ mod tests {
             &expected,
             16,
             &validator,
+            None,
         )
         .await
         .expect("allowed redirects download asset");
@@ -317,6 +358,7 @@ mod tests {
             &expected,
             16,
             &validator,
+            None,
         )
         .await;
         assert!(forbidden.is_err());
@@ -330,6 +372,7 @@ mod tests {
             &expected,
             16,
             &validator,
+            None,
         )
         .await;
         assert!(
