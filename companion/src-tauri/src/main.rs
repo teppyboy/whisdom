@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 use whisdom_server::helper;
 use whisdom_server::helper::auth::HelperAuth;
 use whisdom_server::helper::cache::HelperCache;
-use whisdom_server::helper::config::HelperConfig;
+use whisdom_server::helper::config::{default_root, HelperConfig};
 use whisdom_server::helper::engine::SharedRuntime;
 use whisdom_server::helper::events::EventHub;
 use whisdom_server::helper::logging::{self, HelperLogGuard};
@@ -22,26 +22,7 @@ fn ensure_companion_root() {
     if std::env::var_os("WHISDOM_HELPER_ROOT").is_some() {
         return;
     }
-    let base = if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        PathBuf::from(local_app_data)
-    } else {
-        #[cfg(target_os = "macos")]
-        {
-            std::env::var_os("HOME")
-                .map(|home| {
-                    PathBuf::from(home)
-                        .join("Library")
-                        .join("Application Support")
-                })
-                .unwrap_or_else(std::env::temp_dir)
-        }
-        #[cfg(not(target_os = "macos"))]
-        std::env::temp_dir()
-    };
-    std::env::set_var(
-        "WHISDOM_HELPER_ROOT",
-        base.join("Whisdom").join("Companion"),
-    );
+    std::env::set_var("WHISDOM_HELPER_ROOT", default_root("Companion"));
 }
 
 fn main() {

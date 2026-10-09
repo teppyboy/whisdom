@@ -33,7 +33,7 @@ impl HelperConfig {
     pub fn from_env() -> Result<Self, HelperError> {
         let root = std::env::var_os("WHISDOM_HELPER_ROOT")
             .map(PathBuf::from)
-            .unwrap_or_else(default_root);
+            .unwrap_or_else(|| default_root("Helper"));
         validate_root(&root)?;
 
         let allowed_origins = std::env::var("WHISDOM_HELPER_ORIGINS")
@@ -113,9 +113,12 @@ impl HelperConfig {
     }
 }
 
-fn default_root() -> PathBuf {
+/// Shared default base for helper roots: `<platform base>/Whisdom/<dir>`.
+/// The standalone helper uses "Helper"; the Tauri companion overrides
+/// `WHISDOM_HELPER_ROOT` with "Companion" before `from_env` runs.
+pub fn default_root(dir: &str) -> PathBuf {
     if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(local_app_data).join("Whisdom").join("Helper");
+        return PathBuf::from(local_app_data).join("Whisdom").join(dir);
     }
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
@@ -123,9 +126,9 @@ fn default_root() -> PathBuf {
             .join("Library")
             .join("Application Support")
             .join("Whisdom")
-            .join("Helper");
+            .join(dir);
     }
-    std::env::temp_dir().join("Whisdom").join("Helper")
+    std::env::temp_dir().join("Whisdom").join(dir)
 }
 
 fn validate_root(root: &Path) -> Result<(), HelperError> {

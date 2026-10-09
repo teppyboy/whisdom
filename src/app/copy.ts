@@ -4,7 +4,6 @@ import {
   type InterfaceLanguage,
 } from "@/app/copy-types"
 
-export type ProductSeverity = "info" | "warning" | "error"
 export type ProductScope =
   | "navigation"
   | "source"
@@ -44,15 +43,6 @@ export interface ProductError {
     safeCode: string | null
     developmentStack: string | null
   } | null
-}
-export interface ProductIssue {
-  code: string
-  severity: ProductSeverity
-  scope: ProductScope
-  scopeId: string
-  params: CopyParams
-  blocking: boolean
-  recoveryAction: RecoveryAction | null
 }
 export const SHELL_COPY = defineCopy({
   en: {
@@ -126,36 +116,3 @@ export function formatProductError(
   }
 }
 
-export function formatProductIssue(
-  language: InterfaceLanguage,
-  issue: ProductIssue
-): string {
-  return issue.code === "storage.unsupported-version"
-    ? SHELL_COPY[language].errors.unsupportedVersionMessage(issue.params)
-    : SHELL_COPY[language].errors.genericMessage
-}
-
-export const SETTINGS_COPY = defineCopy({
-  en: {
-    page: {
-      title: "Settings",
-      description: "Manage local data and advanced processing options.",
-    },
-  },
-  vi: {
-    page: {
-      title: "Cài đặt",
-      description: "Quản lý dữ liệu cục bộ và tùy chọn xử lý nâng cao.",
-    },
-  },
-})
-
-export interface CopyRegistry {
-  shell: typeof SHELL_COPY
-  settings: typeof SETTINGS_COPY
-}
-
-export const COPY_REGISTRY: Readonly<CopyRegistry> = Object.freeze({
-  shell: SHELL_COPY,
-  settings: SETTINGS_COPY,
-})

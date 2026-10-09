@@ -239,10 +239,6 @@ type NavigatorWithGpu = Navigator & {
   }
 }
 
-export async function canUseWebGpu() {
-  return (await getWebGpuStatus()).available
-}
-
 type WebGpuStatus = {
   available: boolean
   reason: string
