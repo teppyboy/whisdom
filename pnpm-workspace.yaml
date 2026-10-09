@@ -2,6 +2,9 @@ packages:
   - worker
   - companion
 
+overrides:
+  sharp: ^0.35.5
+
 allowBuilds:
   '@swc/core': true
   esbuild: true
@@ -10,3 +13,8 @@ allowBuilds:
   protobufjs: false
   sharp: false
   workerd: false
+
+minimumReleaseAgeExclude:
+  - '@rollup/rollup-linux-ppc64-gnu@4.64.3'
+  - '@rollup/rollup-linux-s390x-gnu@4.64.3'
+  - '@rollup/rollup-win32-x64-msvc@4.64.3'

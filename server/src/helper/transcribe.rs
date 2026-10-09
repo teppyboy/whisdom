@@ -346,6 +346,7 @@ fn transcribe_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "metal")]
     use crate::helper::models::find_native_model;
 
     // Real Metal smoke test: downloads the tiny model through the unpinned catalog
