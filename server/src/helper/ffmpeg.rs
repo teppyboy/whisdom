@@ -6,17 +6,76 @@ use tokio::process::Command;
 use tokio::sync::watch;
 
 use super::cache::HelperCache;
-use super::download::download_verified;
+use super::config::HelperConfig;
+use super::download::{download_verified_progress, DownloadProgress};
 use super::protocol::HelperError;
 
-const FFMPEG_DIR: &str = "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1";
-const FFMPEG_ENTRY: &str = "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1/bin/ffmpeg.exe";
+const FFMPEG_DIR: &str = "ffmpeg";
+// Resolved by basename inside the downloaded archive at runtime; the archive's
+// directory prefix changes with every ffmpeg release and must never be pinned.
+const FFMPEG_EXECUTABLE: &str = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
 const FFMPEG_TIMEOUT: Duration = Duration::from_secs(30);
 const FFMPEG_SPLIT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const FFMPEG_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Path of the managed ffmpeg executable when installed.
+pub fn installed_executable(config: &HelperConfig) -> PathBuf {
+    config.tools_dir().join(FFMPEG_DIR).join(FFMPEG_EXECUTABLE)
+}
+
+/// First line of `ffmpeg -version`, e.g. "ffmpeg version 8.1 ...".
+pub async fn installed_version(config: &HelperConfig) -> Option<String> {
+    let executable = installed_executable(config);
+    if !executable.is_file() {
+        return None;
+    }
+    match query_version(&executable).await {
+        Ok(version) => Some(version),
+        Err(error) => {
+            tracing::warn!(error = %error, "managed FFmpeg version query failed");
+            None
+        }
+    }
+}
+
+async fn query_version(executable: &Path) -> Result<String, HelperError> {
+    let output = tokio::time::timeout(
+        FFMPEG_VERSION_TIMEOUT,
+        Command::new(executable)
+            .arg("-version")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| HelperError::BadRequest("FFmpeg version check timed out".into()))?
+    .map_err(|error| HelperError::BadRequest(format!("FFmpeg launch failed: {error}")))?;
+    if !output.status.success() {
+        return Err(HelperError::BadRequest(
+            "FFmpeg version verification failed".into(),
+        ));
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .filter(|line| line.contains("ffmpeg version"))
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            HelperError::BadRequest("FFmpeg version verification failed".into())
+        })
+}
 
 pub async fn ensure_ffmpeg(cache: &HelperCache) -> Result<PathBuf, HelperError> {
+    ensure_ffmpeg_progress(cache, None).await
+}
+
+pub async fn ensure_ffmpeg_progress(
+    cache: &HelperCache,
+    progress: Option<DownloadProgress>,
+) -> Result<PathBuf, HelperError> {
     let root = cache.config().tools_dir().join(FFMPEG_DIR);
-    let executable = root.join("ffmpeg.exe");
+    let executable = root.join(FFMPEG_EXECUTABLE);
     if executable.exists() {
         tracing::debug!("using cached FFmpeg");
         verify_executable(&executable, &cache.config().ffmpeg_exe_sha256).await?;
@@ -26,12 +85,13 @@ pub async fn ensure_ffmpeg(cache: &HelperCache) -> Result<PathBuf, HelperError> 
 
     let archive = cache.config().temp_dir().join("ffmpeg.zip");
     tracing::info!("downloading FFmpeg");
-    download_verified(
+    download_verified_progress(
         cache.client(),
         &cache.config().ffmpeg_url,
         &archive,
         &cache.config().ffmpeg_sha256,
         cache.config().max_download_bytes,
+        progress,
     )
     .await?;
     extract_ffmpeg_zip(&archive, &root).await?;
@@ -61,12 +121,17 @@ async fn extract_ffmpeg_zip(archive: &Path, destination: &Path) -> Result<(), He
             let Some(name) = entry.enclosed_name().map(|path| path.to_owned()) else {
                 return Err(std::io::Error::other("archive path traversal"));
             };
-            if !is_expected_entry(&name) {
+            if !is_ffmpeg_entry(&name) {
                 continue;
             }
-            let output = temp_destination.join("ffmpeg.exe");
+            let output = temp_destination.join(FFMPEG_EXECUTABLE);
             let mut writer = std::fs::File::create(&output)?;
             std::io::copy(&mut entry, &mut writer)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755))?;
+            }
             found = true;
             break;
         }
@@ -116,8 +181,8 @@ async fn verify_version(executable: &Path) -> Result<(), HelperError> {
     Ok(())
 }
 
-fn is_expected_entry(path: &Path) -> bool {
-    path.to_string_lossy().replace('\\', "/") == FFMPEG_ENTRY
+fn is_ffmpeg_entry(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == FFMPEG_EXECUTABLE)
 }
 
 pub async fn split_to_wav_chunks(
@@ -244,6 +309,19 @@ pub async fn convert_to_wav(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires network and WHISDOM_REAL_FFMPEG=1"]
+    async fn ffmpeg_downloads_latest_and_verifies() {
+        if std::env::var_os("WHISDOM_REAL_FFMPEG").is_none() {
+            return;
+        }
+        let config = crate::helper::config::HelperConfig::from_env().expect("helper config");
+        let cache = HelperCache::new(config);
+        let executable = ensure_ffmpeg(&cache).await.expect("ffmpeg installed");
+        assert!(executable.is_file());
+    }
+
     #[tokio::test]
     async fn pre_cancelled_conversion_does_not_start_ffmpeg() {
         let (_sender, receiver) = watch::channel(true);
@@ -271,14 +349,14 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_pinned_ffmpeg_archive_entry() {
-        assert!(is_expected_entry(Path::new(FFMPEG_ENTRY)));
-        assert!(is_expected_entry(Path::new(
-            "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1\\bin\\ffmpeg.exe"
-        )));
-        assert!(!is_expected_entry(Path::new("bin/ffmpeg.exe")));
-        assert!(!is_expected_entry(Path::new(
-            "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1/../ffmpeg.exe"
-        )));
+    fn resolves_the_ffmpeg_entry_by_basename_at_runtime() {
+        assert!(is_ffmpeg_entry(Path::new(FFMPEG_EXECUTABLE)));
+        let other = if cfg!(windows) { "ffmpeg" } else { "ffmpeg.exe" };
+        assert!(is_ffmpeg_entry(Path::new(&format!(
+            "ffmpeg-n8.1-latest-win64-gpl-8.1/bin/{FFMPEG_EXECUTABLE}"
+        ))));
+        assert!(!is_ffmpeg_entry(Path::new(other)));
+        assert!(!is_ffmpeg_entry(Path::new("ffprobe.exe")));
+        assert!(!is_ffmpeg_entry(Path::new("ffprobe")));
     }
 }

@@ -13,6 +13,7 @@ use whisdom_server::helper::auth::HelperAuth;
 use whisdom_server::helper::cache::HelperCache;
 use whisdom_server::helper::config::HelperConfig;
 use whisdom_server::helper::engine::SharedRuntime;
+use whisdom_server::helper::events::EventHub;
 use whisdom_server::helper::logging::{self, HelperLogGuard};
 use whisdom_server::helper::selection::SelectionStore;
 use whisdom_server::helper::state::{HelperQueue, HelperState, NativeFilePicker};
@@ -21,12 +22,26 @@ fn ensure_companion_root() {
     if std::env::var_os("WHISDOM_HELPER_ROOT").is_some() {
         return;
     }
-    let root = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Whisdom")
-        .join("Companion");
-    std::env::set_var("WHISDOM_HELPER_ROOT", root);
+    let base = if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        PathBuf::from(local_app_data)
+    } else {
+        #[cfg(target_os = "macos")]
+        {
+            std::env::var_os("HOME")
+                .map(|home| {
+                    PathBuf::from(home)
+                        .join("Library")
+                        .join("Application Support")
+                })
+                .unwrap_or_else(std::env::temp_dir)
+        }
+        #[cfg(not(target_os = "macos"))]
+        std::env::temp_dir()
+    };
+    std::env::set_var(
+        "WHISDOM_HELPER_ROOT",
+        base.join("Whisdom").join("Companion"),
+    );
 }
 
 fn main() {
@@ -42,6 +57,9 @@ fn main() {
 }
 
 fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
+    // Tray-only app: hide the Dock icon on macOS.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     let handle = app.handle().clone();
     let status = MenuItem::with_id(
         app,
@@ -50,10 +68,11 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         false,
         None::<&str>,
     )?;
+    let autostart_label = "Launch at login";
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
-        "Start with Windows",
+        autostart_label,
         true,
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
@@ -62,6 +81,8 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
     let menu = Menu::with_items(app, &[&status, &autostart, &quit])?;
 
     TrayIconBuilder::new()
+        // macOS renders an empty menu bar item without an icon.
+        .icon(tauri::include_image!("icons/128x128.png"))
         .menu(&menu)
         .tooltip("Whisdom Companion")
         .show_menu_on_left_click(true)
@@ -74,7 +95,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
                     app.autolaunch().enable()
                 };
                 if let Err(error) = result {
-                    tracing::error!(error = %error, "failed to update Windows startup setting");
+                    tracing::error!(error = %error, "failed to update autostart setting");
                 }
             }
             "quit" => app.exit(0),
@@ -149,18 +170,20 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         let cache = HelperCache::new(config.clone());
+        let events = EventHub::new();
         let state = Arc::new(HelperState {
             config,
             auth,
             cache,
-            queue: HelperQueue::default(),
+            queue: HelperQueue::default().with_events(events.clone()),
+            events: events.clone(),
             runtime: SharedRuntime::default(),
             selections: SelectionStore::default(),
             native_file_picker: Some(native_file_picker),
             update_check: None,
             update_install: None,
         });
-        let log_guard: HelperLogGuard = match logging::init(&state.config) {
+        let log_guard: HelperLogGuard = match logging::init(&state.config, &state.events) {
             Ok(guard) => guard,
             Err(error) => {
                 handle

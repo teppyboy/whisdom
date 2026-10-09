@@ -117,7 +117,11 @@ def main() -> int:
     if args.cpu_only and (args.vulkan or args.directml):
         raise RuntimeError("--cpu-only cannot be combined with --vulkan or --directml")
     if not args.cpu_only and not args.vulkan and not args.directml:
-        args.vulkan = True
+        # macOS builds enable Metal by default; Windows defaults to Vulkan.
+        if platform.system() == "Darwin":
+            pass
+        else:
+            args.vulkan = True
     if args.directml and os.name != "nt":
         raise RuntimeError("DirectML is only available on Windows")
     repo = Path(__file__).resolve().parent.parent
@@ -159,6 +163,8 @@ def main() -> int:
         features.append("vulkan")
     if args.directml:
         features.append("directml")
+    if platform.system() == "Darwin":
+        features.append("metal")
     cargo_args = ["--features", ",".join(features)] if features else []
 
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -224,12 +230,46 @@ def main() -> int:
                 f"Required DirectML DLLs are missing: {', '.join(missing)}"
             )
 
+    if platform.system() == "Darwin":
+        # The binary and dylibs link via @rpath but ship without LC_RPATH entries.
+        # Resources land in Contents/Resources (or beside the binary in the
+        # portable zip), so give every image the rpaths that cover both layouts.
+        def add_rpath(path: Path, rpath: str) -> None:
+            result = subprocess.run(
+                ["/usr/bin/install_name_tool", "-add_rpath", rpath, str(path)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0 and "would duplicate" not in result.stderr:
+                raise RuntimeError(
+                    f"install_name_tool -add_rpath {rpath} failed for {path}: {result.stderr.strip()}"
+                )
+
+        fixups = list(runtime_files)
+        for image in fixups:
+            for rpath in (
+                "@executable_path",
+                "@executable_path/../Resources",
+                "@loader_path",
+            ):
+                add_rpath(image, rpath)
+            # install_name_tool invalidates the ad-hoc signature.
+            subprocess.run(
+                ["/usr/bin/codesign", "--force", "--sign", "-", str(image)],
+                check=True,
+                capture_output=True,
+            )
+
     original_config = config_path.read_text(encoding="utf-8")
     try:
         config = json.loads(original_config)
         config["bundle"]["resources"] = {
             str(library): library.name for library in runtime_files
         }
+        if platform.system() == "Darwin":
+            # No Apple Developer account: skip signed updater artifacts.
+            config["bundle"]["createUpdaterArtifacts"] = False
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         bundle_name = {
             "Windows": "nsis",

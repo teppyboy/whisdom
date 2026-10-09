@@ -5,15 +5,17 @@ use super::protocol::HelperError;
 const DEFAULT_PORT: u16 = 8788;
 const DEFAULT_ORIGINS: &str =
     "https://whisdom.tretrauit.me,https://whisdom.app,http://localhost:5173";
-const DEFAULT_FFMPEG_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-15-13-02/ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip";
-const DEFAULT_FFMPEG_SHA256: &str =
-    "0e7829b6e1ba867e37bbad17153de258bd3bffaa3b745626a6424df0ea113970";
-const DEFAULT_FFMPEG_EXE_SHA256: &str =
-    "5d5e06fbb900fd7a45a82eb0529e67f905853432139f673ac90aff45930504d8";
+// macOS: evermeet.cx publishes the latest ffmpeg release zip and redirects to a
+// rotating mirror; all known mirrors are allowlisted below.
+#[cfg(target_os = "macos")]
+const DEFAULT_FFMPEG_URL: &str = "https://evermeet.cx/ffmpeg/getrelease/zip";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_FFMPEG_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n8.1-latest-win64-gpl-8.1.zip";
+const DEFAULT_FFMPEG_SHA256: &str = "";
+const DEFAULT_FFMPEG_EXE_SHA256: &str = "";
 pub const VAD_MODEL_URL: &str =
-    "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin?download=true";
-pub const VAD_MODEL_SHA256: &str =
-    "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987";
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin?download=true";
+pub const VAD_MODEL_SHA256: &str = "";
 
 #[derive(Clone, Debug)]
 pub struct HelperConfig {
@@ -55,8 +57,13 @@ impl HelperConfig {
             DEFAULT_FFMPEG_EXE_SHA256,
         );
         validate_asset_url(&ffmpeg_url)?;
-        validate_sha256(&ffmpeg_sha256, "WHISDOM_HELPER_FFMPEG_SHA256")?;
-        validate_sha256(&ffmpeg_exe_sha256, "WHISDOM_HELPER_FFMPEG_EXE_SHA256")?;
+        // Empty checksums mean "unpinned": the download runs unverified.
+        if !ffmpeg_sha256.is_empty() {
+            validate_sha256(&ffmpeg_sha256, "WHISDOM_HELPER_FFMPEG_SHA256")?;
+        }
+        if !ffmpeg_exe_sha256.is_empty() {
+            validate_sha256(&ffmpeg_exe_sha256, "WHISDOM_HELPER_FFMPEG_EXE_SHA256")?;
+        }
 
         Ok(Self {
             port: parse_port("WHISDOM_HELPER_PORT", DEFAULT_PORT)?,
@@ -107,11 +114,18 @@ impl HelperConfig {
 }
 
 fn default_root() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Whisdom")
-        .join("Helper")
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local_app_data).join("Whisdom").join("Helper");
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("Whisdom")
+            .join("Helper");
+    }
+    std::env::temp_dir().join("Whisdom").join("Helper")
 }
 
 fn validate_root(root: &Path) -> Result<(), HelperError> {
@@ -157,6 +171,10 @@ pub fn validate_asset_url(value: &str) -> Result<(), HelperError> {
                 | "github.com"
                 | "objects.githubusercontent.com"
                 | "release-assets.githubusercontent.com"
+                // evermeet.cx macOS ffmpeg mirrors (getrelease redirects rotate between them).
+                | "evermeet.cx"
+                | "evermint.com"
+                | "e.deolaha.ca"
         )
     {
         return Err(HelperError::Config(
