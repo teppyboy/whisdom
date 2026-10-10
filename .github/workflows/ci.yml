@@ -170,6 +170,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build web UI
+        shell: pwsh
+        run: |
+          pnpm build
+          $ui = Join-Path $env:GITHUB_WORKSPACE "companion\ui"
+          if (Test-Path -LiteralPath $ui) {
+            Remove-Item -LiteralPath $ui -Recurse -Force
+          }
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "dist") `
+            -Destination $ui -Recurse
+
       - name: Set Companion release version
         shell: pwsh
         run: |
@@ -355,6 +366,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build web UI
+        run: |
+          pnpm build
+          rm -rf companion/ui
+          cp -R dist companion/ui
 
       - name: Set Companion release version
         run: |

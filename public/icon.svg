@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14" />
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.04" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.3" cy="0.1" r="0.85">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.2" />
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- Rounded black tile with a subtle rim light -->
+  <rect x="64" y="64" width="896" height="896" rx="212" fill="#000000" />
+  <rect
+    x="65.5"
+    y="65.5"
+    width="893"
+    height="893"
+    rx="210.5"
+    fill="none"
+    stroke="#ffffff"
+    stroke-opacity="0.12"
+    stroke-width="3"
+  />
+
+  <!-- Audio-lines + edit glyph, white -->
+  <g
+    transform="translate(296 296) scale(18)"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="2.1"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M10 2v15" />
+    <path d="M14 6v6.5" />
+    <path d="M18 4v5" />
+    <path d="M2 8v3" />
+    <path
+      d="M21.34 16.632a1 1 0 0 0-3.004-3.004l-4.01 4.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"
+    />
+    <path d="M22 8v1.5" />
+    <path d="M6 4v11" />
+  </g>
+
+  <!-- Liquid-glass sheen -->
+  <rect x="64" y="64" width="896" height="896" rx="212" fill="url(#glass)" />
+  <rect x="64" y="64" width="896" height="896" rx="212" fill="url(#sheen)" />
+</svg>

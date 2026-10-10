@@ -3,8 +3,7 @@ use std::path::{Path, PathBuf};
 use super::protocol::HelperError;
 
 const DEFAULT_PORT: u16 = 8788;
-const DEFAULT_ORIGINS: &str =
-    "https://whisdom.tretrauit.me,https://whisdom.app,http://localhost:5173";
+const DEFAULT_ORIGINS: &str = "https://whisdom.tretrauit.me,https://whisdom.app,http://localhost:5173,tauri://localhost,http://tauri.localhost";
 // macOS: evermeet.cx publishes the latest ffmpeg release zip and redirects to a
 // rotating mirror; all known mirrors are allowlisted below.
 #[cfg(target_os = "macos")]
@@ -211,9 +210,11 @@ mod tests {
 
     #[test]
     fn default_origins_include_the_deployed_site() {
-        assert!(DEFAULT_ORIGINS
-            .split(',')
-            .any(|origin| origin == "https://whisdom.tretrauit.me"));
+        let origins: Vec<&str> = DEFAULT_ORIGINS.split(',').collect();
+        assert!(origins.contains(&"https://whisdom.tretrauit.me"));
+        // Tauri WebView origins so the embedded companion UI can pair.
+        assert!(origins.contains(&"tauri://localhost"));
+        assert!(origins.contains(&"http://tauri.localhost"));
     }
 
     #[test]

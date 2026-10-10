@@ -49,6 +49,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         false,
         None::<&str>,
     )?;
+    let open = MenuItem::with_id(app, "open", "Open Whisdom", true, None::<&str>)?;
     let autostart_label = "Launch at login";
     let autostart = CheckMenuItem::with_id(
         app,
@@ -59,7 +60,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&status, &autostart, &quit])?;
+    let menu = Menu::with_items(app, &[&status, &open, &autostart, &quit])?;
 
     TrayIconBuilder::new()
         // macOS renders an empty menu bar item without an icon.
@@ -79,10 +80,34 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
                     tracing::error!(error = %error, "failed to update autostart setting");
                 }
             }
+            "open" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(error) = window
+                        .show()
+                        .and_then(|_| window.unminimize())
+                        .and_then(|_| window.set_focus())
+                    {
+                        tracing::warn!(error = %error, "failed to open companion window");
+                    }
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         })
         .build(app)?;
+
+    // Closing the window hides it; the tray Quit item exits the app.
+    if let Some(window) = app.get_webview_window("main") {
+        let window_handle = window.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if let Err(error) = window_handle.hide() {
+                    tracing::warn!(error = %error, "failed to hide companion window");
+                }
+            }
+        });
+    }
 
     ensure_companion_root();
     HelperConfig::from_env()?;

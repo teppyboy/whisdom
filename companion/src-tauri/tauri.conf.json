@@ -7,7 +7,18 @@
     "frontendDist": "../ui"
   },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Whisdom",
+        "url": "index.html",
+        "width": 1200,
+        "height": 820,
+        "minWidth": 720,
+        "minHeight": 560,
+        "visible": false
+      }
+    ],
     "security": {
       "csp": "default-src 'self';"
     }

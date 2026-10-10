@@ -68,3 +68,6 @@ src/wasm/.omo/
 /server/check.*
 /server/missing-output
 .vitest/
+
+# Companion embeds the built web UI at build time (CI / build_companion.py)
+companion/ui/

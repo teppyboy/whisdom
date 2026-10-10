@@ -10,7 +10,6 @@ import platform
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REQUIRED_DIRECTML_DLLS = {
@@ -168,14 +167,13 @@ def main() -> int:
     cargo_args = ["--features", ",".join(features)] if features else []
 
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    portable_dir = Path(tempfile.gettempdir()) / "whisdom-companion-portable"
-    try:
-        shutil.rmtree(portable_dir, ignore_errors=True)
-        portable_dir.mkdir(parents=True)
-    except OSError as error:
-        raise RuntimeError(
-            f"Could not prepare portable staging directory: {portable_dir}: {error}"
-        ) from error
+
+    # The companion window embeds the production web UI; build it fresh.
+    run(["pnpm", "build"], repo, env)
+    ui_dir = companion / "ui"
+    if ui_dir.exists():
+        shutil.rmtree(ui_dir)
+    shutil.copytree(repo / "dist", ui_dir)
 
     run(
         [
@@ -312,13 +310,7 @@ def main() -> int:
     for bundle_file in bundle_files:
         shutil.copy2(bundle_file, artifact_dir / bundle_file.name)
 
-    shutil.copy2(binary, portable_dir / binary.name)
-    for library in runtime_files:
-        shutil.copy2(library, portable_dir / library.name)
-    portable_zip = artifact_dir / "Whisdom-Companion-portable.zip"
-    shutil.make_archive(str(portable_zip.with_suffix("")), "zip", portable_dir)
-
-    for artifact in (*bundle_files, portable_zip):
+    for artifact in bundle_files:
         print(f"{artifact}\t{artifact.stat().st_size} bytes")
     return 0
 
