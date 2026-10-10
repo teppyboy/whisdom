@@ -397,6 +397,12 @@ const COPY = {
     filesSelected: (count: number) => `${count} files selected`,
     selectedFile: (name: string) => `Selected: ${name}`,
     fileQueue: "Files",
+    addMoreFiles: "Add more files",
+    batchStopped: "Batch stopped",
+    batchStoppedDescription: (saved: number, total: number) =>
+      saved > 0
+        ? `Cancelled with ${saved} of ${total} files saved.`
+        : "Cancelled before any file was saved.",
     selectFile: "Open file",
     removeFile: "Remove",
     stepAddFiles: "Step 1 · Add files",
@@ -661,6 +667,12 @@ const COPY = {
     filesSelected: (count: number) => `Đã chọn ${count} tệp`,
     selectedFile: (name: string) => `Đang chọn: ${name}`,
     fileQueue: "Tệp đã chọn",
+    addMoreFiles: "Thêm tệp khác",
+    batchStopped: "Đã dừng loạt chuyển ngữ",
+    batchStoppedDescription: (saved: number, total: number) =>
+      saved > 0
+        ? `Đã hủy, lưu được ${saved}/${total} tệp.`
+        : "Đã hủy trước khi lưu tệp nào.",
     selectFile: "Mở tệp",
     removeFile: "Xóa",
     stepAddFiles: "Bước 1 · Thêm tệp",
@@ -933,6 +945,9 @@ export function App() {
   const t = COPY[settings.uiLanguage]
   const [file, setFile] = React.useState<File | null>(null)
   const [queue, setQueue] = React.useState<QueuedFile[]>([])
+  const [batchRunning, setBatchRunning] = React.useState(false)
+  const batchRunningRef = React.useRef(false)
+  const batchCancelledRef = React.useRef(false)
   const [helperCapabilities, setHelperCapabilities] =
     React.useState<HelperCapabilities | null>(null)
   const [companionHealth, setCompanionHealth] =
@@ -1242,6 +1257,7 @@ export function App() {
     companionLanguageReady &&
     companionBackendReady
   const canStart =
+    !batchRunning &&
     !isBusy(jobState) &&
     (settings.mode === "local-helper"
       ? companionSelectionReady
@@ -1249,6 +1265,7 @@ export function App() {
         Boolean(analysis) &&
         (settings.mode !== "server" || serverSelectionReady))
   const canStartAll =
+    !batchRunning &&
     queue.length > 1 &&
     !isBusy(jobState) &&
     (settings.mode === "local-helper"
@@ -1492,7 +1509,8 @@ export function App() {
         status: "pending" as const,
       }))
       setQueue((current) => [...current, ...added])
-      if (queue.length === 0) selectCompanionQueueItem(added[0])
+      if (queue.length === 0 || !selectedQueueId)
+        selectCompanionQueueItem(added[0])
     } catch (caught) {
       if (
         generation !== companionPickerGeneration.current ||
@@ -2123,6 +2141,7 @@ export function App() {
   async function cancelActiveHelperJob() {
     const jobId = activeHelperJobId
     if (!jobId || cancellingHelperJob) return
+    batchCancelledRef.current = true
     setCancellingHelperJob(true)
     try {
       await localHelperClient.cancelJob(jobId)
@@ -2209,6 +2228,7 @@ export function App() {
   }
 
   async function startBatchTranscription() {
+    if (batchRunningRef.current) return
     const runSettings = settingsRef.current
     const queueSnapshot =
       queue.length > 0
@@ -2222,28 +2242,54 @@ export function App() {
               },
             ]
           : []
+    if (queueSnapshot.length === 0) return
     const completed: TranscriptDocument[] = []
     const failures: string[] = []
+    const total = queueSnapshot.length
 
+    batchRunningRef.current = true
+    batchCancelledRef.current = false
+    setBatchRunning(true)
     setIsResultOpen(false)
 
-    for (const item of queueSnapshot) {
-      try {
-        const document =
-          runSettings.mode === "local-helper"
-            ? await transcribeCompanionSelection(item, runSettings)
-            : item.source.kind === "browser"
-              ? await transcribeFile(item.source.file, item.id, runSettings)
-              : (() => {
-                  throw new Error("Invalid browser queue item.")
-                })()
-        completed.push(document)
-      } catch (caught) {
-        const message =
-          caught instanceof Error ? caught.message : t.transcriptionFailed
-        failures.push(`${queueFileName(item)}: ${message}`)
-        updateQueueItem(item.id, { status: "error", error: message })
+    try {
+      for (const item of queueSnapshot) {
+        if (batchCancelledRef.current) break
+        try {
+          const document =
+            runSettings.mode === "local-helper"
+              ? await transcribeCompanionSelection(item, runSettings)
+              : item.source.kind === "browser"
+                ? await transcribeFile(item.source.file, item.id, runSettings)
+                : (() => {
+                    throw new Error("Invalid browser queue item.")
+                  })()
+          completed.push(document)
+        } catch (caught) {
+          if (batchCancelledRef.current) {
+            updateQueueItem(item.id, { status: "pending" })
+            break
+          }
+          const message =
+            caught instanceof Error ? caught.message : t.transcriptionFailed
+          failures.push(`${queueFileName(item)}: ${message}`)
+          updateQueueItem(item.id, { status: "error", error: message })
+        }
       }
+    } finally {
+      batchRunningRef.current = false
+      setBatchRunning(false)
+    }
+
+    if (batchCancelledRef.current) {
+      setJobState("idle")
+      if (completed.length > 0) setHistory(await listTranscripts())
+      setToastMessage({
+        id: createId("toast"),
+        title: t.batchStopped,
+        description: t.batchStoppedDescription(completed.length, total),
+      })
+      return
     }
 
     if (completed.length > 0) {
@@ -2644,6 +2690,7 @@ export function App() {
                       onSelect={(item) => void selectQueueItem(item)}
                       onRemove={(id) => void removeQueuedFile(id)}
                       onMove={moveQueueItem}
+                      onAddMore={() => void selectCompanionFiles()}
                     />
                   ) : null}
                 </>
@@ -2670,7 +2717,7 @@ export function App() {
                       event.currentTarget.value = ""
                     }}
                   />
-                  {queue.length > 1 ? (
+                  {queue.length > 0 ? (
                     <FileQueuePanel
                       queue={queue}
                       selectedId={selectedQueueId}
@@ -2679,6 +2726,7 @@ export function App() {
                       onSelect={(item) => void selectQueueItem(item)}
                       onRemove={(id) => void removeQueuedFile(id)}
                       onMove={moveQueueItem}
+                      onAddMore={() => fileInputRef.current?.click()}
                     />
                   ) : null}
                 </>
@@ -3636,7 +3684,12 @@ function PreflightPanel({
             etaSeconds={panelEtaSeconds}
           />
           <div className={cn("grid gap-2", queueCount > 1 && "sm:grid-cols-2")}>
-            <Button className="w-full" disabled={!canStart} onClick={onStart}>
+            <Button
+              className="w-full"
+              variant={queueCount > 1 ? "outline" : "default"}
+              disabled={!canStart}
+              onClick={onStart}
+            >
               {isBusy(jobState) ? (
                 <Loader2 className="animate-spin" />
               ) : (
@@ -3649,7 +3702,6 @@ function PreflightPanel({
             {queueCount > 1 ? (
               <Button
                 className="w-full"
-                variant="outline"
                 disabled={!canStartAll}
                 onClick={onStartAll}
               >

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Trash2 } from "lucide-react"
+import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react"
 
 import type { Copy } from "@/App"
 import { Badge } from "@/components/ui/badge"
@@ -26,6 +26,7 @@ export function FileQueuePanel({
   onSelect,
   onRemove,
   onMove,
+  onAddMore,
 }: {
   queue: QueuedFile[]
   selectedId: string | null
@@ -34,6 +35,7 @@ export function FileQueuePanel({
   onSelect: (item: QueuedFile) => void
   onRemove: (id: string) => void
   onMove: (id: string, direction: -1 | 1) => void
+  onAddMore: () => void
 }) {
   return (
     <Card className="animate-in duration-300 ease-out fade-in slide-in-from-bottom-1">
@@ -76,7 +78,9 @@ export function FileQueuePanel({
                       ? "destructive"
                       : item.status === "complete"
                         ? "secondary"
-                        : "outline"
+                        : item.status === "active"
+                          ? "default"
+                          : "outline"
                   }
                 >
                   {copy.queueStatusLabels[item.status]}
@@ -120,6 +124,16 @@ export function FileQueuePanel({
             </div>
           )
         })}
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full border-dashed"
+          disabled={disabled}
+          onClick={onAddMore}
+        >
+          <Plus />
+          {copy.addMoreFiles}
+        </Button>
       </CardContent>
     </Card>
   )
