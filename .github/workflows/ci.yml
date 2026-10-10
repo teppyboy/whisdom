@@ -328,80 +328,70 @@ jobs:
           }
           Write-Output "Installer resources are beside the executable"
 
-      - name: Package portable Companion ZIP
-        shell: pwsh
-        run: |
-          $targetRoot = $env:CARGO_TARGET_DIR
-          $releaseDirs = @(
-            (Join-Path $targetRoot "x86_64-pc-windows-msvc\release")
-          )
-          $releaseDir = $releaseDirs |
-            Where-Object {
-              Test-Path (Join-Path $_ "whisdom-companion.exe")
-            } |
-            Select-Object -First 1
-          if (-not $releaseDir) {
-            throw "Built companion release directory not found: $targetRoot"
-          }
-          $stagingDir = Join-Path $env:RUNNER_TEMP `
-            "whisdom-companion-portable"
-          $zip = Join-Path $env:GITHUB_WORKSPACE `
-            "dist\bin\whisdom-companion-portable.zip"
-          Remove-Item -LiteralPath $stagingDir -Recurse -Force `
-            -ErrorAction SilentlyContinue
-          $zipDir = Split-Path -Parent $zip
-          New-Item -ItemType Directory -Force `
-            -Path @($stagingDir, $zipDir) | Out-Null
+  release-companion-macos:
+    name: Release Desktop Companion (macOS)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [release-companion]
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
 
-          $binary = Join-Path $releaseDir "whisdom-companion.exe"
-          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
-            throw "Built companion binary not found: $binary"
-          }
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-          $runtimeDlls = @(Get-ChildItem -LiteralPath $releaseDir `
-            -Filter "*.dll" -File)
-          $requiredDirectML = @(
-            "sherpa-onnx-c-api.dll",
-            "onnxruntime.dll",
-            "DirectML.dll"
-          )
-          foreach ($name in $requiredDirectML) {
-            if (-not ($runtimeDlls.Name -contains $name)) {
-              $path = Join-Path $releaseDir $name
-              throw "Required DirectML runtime DLL not found: $path"
-            }
-          }
-
-          Copy-Item -LiteralPath $binary -Destination $stagingDir -Force
-          Copy-Item -LiteralPath $runtimeDlls.FullName `
-            -Destination $stagingDir -Force
-          $stagingFiles = Join-Path $stagingDir "*"
-          Compress-Archive -Path $stagingFiles -DestinationPath $zip `
-            -Force
-          $archiveEntries = tar.exe -tf $zip
-          foreach ($name in $requiredDirectML) {
-            if (-not ($archiveEntries -contains $name)) {
-              throw "Portable package missing $name"
-            }
-          }
-          Write-Output "Portable package: $zip"
-          Write-Output "Runtime DLLs: $($runtimeDlls.Name -join ', ')"
-
-      - name: Upload portable Companion artifact
-        uses: actions/upload-artifact@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          name: whisdom-companion-portable
-          path: dist/bin/whisdom-companion-portable.zip
-          if-no-files-found: error
+          version: 11.5.2
 
-      - name: Upload portable ZIP to release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set Companion release version
         run: |
-          gh release upload "companion-v0.0.${{ github.run_number }}" `
-            "dist/bin/whisdom-companion-portable.zip" `
-            --clobber
+          node -e "
+            const fs = require('fs')
+            const path = 'companion/src-tauri/tauri.conf.json'
+            const config = JSON.parse(fs.readFileSync(path, 'utf8'))
+            config.version = '0.0.${{ github.run_number }}'
+            fs.writeFileSync(path, JSON.stringify(config, null, 2))
+          "
+
+      - name: Build Companion (Metal)
+        run: |
+          cargo build --release \
+            --manifest-path companion/src-tauri/Cargo.toml \
+            --features metal
+
+      - name: Publish Companion DMG
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: companion
+          tauriScript: pnpm exec tauri
+          tagName: companion-v__VERSION__
+          releaseName: Whisdom Companion v__VERSION__
+          releaseBody: >-
+            macOS DMG (Apple silicon, Metal).
+            Ad-hoc signed, no updater.
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: false
+          args: >-
+            --features metal
+            --bundles dmg
+            --config
+            '{"bundle":{"createUpdaterArtifacts":false}}'
 
   deploy:
     name: Deploy GitHub Pages
