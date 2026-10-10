@@ -21,11 +21,6 @@ export type HelperFeatureFlags = {
   directml: boolean
 }
 
-export type HelperUpdate = {
-  version: string
-  body: string | null
-}
-
 export type HelperModel = {
   id: string
   label: string

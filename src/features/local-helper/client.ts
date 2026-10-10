@@ -18,7 +18,6 @@ import type {
   HelperSelection,
   HelperStreamJobStatus,
   HelperStreamPhase,
-  HelperUpdate,
   HelperUpdateDependenciesResult,
   HelperUpdateScope,
 } from "./types"
@@ -146,22 +145,6 @@ function parseFeatureFlags(value: unknown): HelperFeatureFlags | null {
   )
     return null
   return { vulkan, metal, directml }
-}
-
-function parseUpdate(value: unknown): HelperUpdate | null {
-  if (
-    !isPlainObject(value) ||
-    (value.update !== null && !isPlainObject(value.update))
-  )
-    throw new Error("Helper returned invalid update information.")
-  if (value.update === null) return null
-  if (
-    typeof value.update.version !== "string" ||
-    (value.update.body !== null && typeof value.update.body !== "string")
-  )
-    throw new Error("Helper returned invalid update information.")
-  // SAFETY: update.version/body are validated immediately above.
-  return value.update as unknown as HelperUpdate
 }
 
 function parseCapabilities(value: unknown): HelperCapabilities {
@@ -557,24 +540,6 @@ export class LocalHelperClient {
       { method: "GET", headers: this.authHeaders() }
     )
     return parseCapabilities(data)
-  }
-
-  async checkForUpdate(): Promise<HelperUpdate | null> {
-    const baseUrl = await this.requireBaseUrl()
-    const data = await this.request<unknown>(`${baseUrl}${API_PREFIX}/update`, {
-      method: "GET",
-      headers: this.authHeaders(),
-    })
-    return parseUpdate(data)
-  }
-
-  async installUpdate(): Promise<HelperUpdate | null> {
-    const baseUrl = await this.requireBaseUrl()
-    const data = await this.request<unknown>(
-      `${baseUrl}${API_PREFIX}/update/install`,
-      { method: "POST", headers: this.authHeaders() }
-    )
-    return parseUpdate(data)
   }
 
   async selectFiles(): Promise<HelperSelection[]> {

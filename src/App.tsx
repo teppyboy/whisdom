@@ -120,7 +120,6 @@ import type {
   HelperLogEvent,
   HelperModel,
   HelperStreamPhase,
-  HelperUpdate,
 } from "@/features/local-helper/types"
 import {
   queueFileName,
@@ -276,14 +275,6 @@ const COPY = {
     companionUnavailableDescription:
       "Get the Desktop Companion from the latest GitHub release.",
     downloadCompanion: "Get Desktop Companion",
-    companionUpdateAvailable: (version: string) =>
-      `Desktop Companion update ${version} is ready`,
-    updateCompanion: "Update Companion",
-    updatingCompanion: "Updating Companion…",
-    companionUpdateFailed: "Could not update Desktop Companion.",
-    checkCompanion: "Check for updates",
-    checkingCompanion: "Checking for updates…",
-    companionUpToDate: "Desktop Companion is up to date.",
     updateDependencies: "Update models & FFmpeg",
     updatingDependencies: "Updating models & FFmpeg…",
     dependenciesUpdateStarted: "Dependency update started",
@@ -550,14 +541,6 @@ const COPY = {
     companionUnavailableDescription:
       "Tải Desktop Companion từ bản phát hành GitHub mới nhất.",
     downloadCompanion: "Tải Desktop Companion",
-    companionUpdateAvailable: (version: string) =>
-      `Đã có bản cập nhật Desktop Companion ${version}`,
-    updateCompanion: "Cập nhật Companion",
-    updatingCompanion: "Đang cập nhật Companion…",
-    companionUpdateFailed: "Không thể cập nhật Desktop Companion.",
-    checkCompanion: "Kiểm tra bản cập nhật",
-    checkingCompanion: "Đang kiểm tra bản cập nhật…",
-    companionUpToDate: "Desktop Companion đang ở phiên bản mới nhất.",
     updateDependencies: "Cập nhật mô hình & FFmpeg",
     updatingDependencies: "Đang cập nhật mô hình & FFmpeg…",
     dependenciesUpdateStarted: "Đã bắt đầu cập nhật phụ thuộc",
@@ -955,11 +938,6 @@ export function App() {
   const [companionHealth, setCompanionHealth] =
     React.useState<CompanionHealthState>("checking")
   const [companionModelId, setCompanionModelId] = React.useState("")
-  const [companionUpdate, setCompanionUpdate] =
-    React.useState<HelperUpdate | null>(null)
-  const [companionUpdating, setCompanionUpdating] = React.useState(false)
-  const [companionCheckingUpdate, setCompanionCheckingUpdate] =
-    React.useState(false)
   const [companionJobActive, setCompanionJobActive] = React.useState(false)
   const [dependenciesUpdating, setDependenciesUpdating] = React.useState(false)
   const [diagnosticsOpen, setDiagnosticsOpen] = React.useState(false)
@@ -1214,12 +1192,6 @@ export function App() {
             ? { available: true, protocol_version: 1, busy: false }
             : current
         )
-        void localHelperClient
-          .checkForUpdate()
-          .then((update) => {
-            if (!cancelled) setCompanionUpdate(update)
-          })
-          .catch(() => undefined)
         setCompanionModelId((current) =>
           capabilities.models.some((model) => model.id === current)
             ? current
@@ -2723,48 +2695,7 @@ export function App() {
                 serverCapabilities={activeServerCapabilities}
                 helperCapabilities={helperCapabilities}
                 companionHealth={companionHealth}
-                companionUpdate={companionUpdate}
-                companionUpdating={companionUpdating}
-                companionCheckingUpdate={companionCheckingUpdate}
-                onCheckCompanion={() => {
-                  setCompanionCheckingUpdate(true)
-                  void localHelperClient
-                    .checkForUpdate()
-                    .then((update) => setCompanionUpdate(update))
-                    .catch(() => {
-                      setToastMessage({
-                        id: createId("toast"),
-                        title: t.transcriptionFailed,
-                        description: t.companionUpdateFailed,
-                        kind: "error",
-                      })
-                    })
-                    .finally(() => setCompanionCheckingUpdate(false))
-                }}
-                onUpdateCompanion={() => {
-                  setCompanionUpdating(true)
-                  void localHelperClient
-                    .installUpdate()
-                    .then((update) => {
-                      if (!update) {
-                        setToastMessage({
-                          id: createId("toast"),
-                          title: t.companionTitle,
-                          description: t.companionUpToDate,
-                        })
-                      }
-                    })
-                    .catch(() => {
-                      setToastMessage({
-                        id: createId("toast"),
-                        title: t.transcriptionFailed,
-                        description: t.companionUpdateFailed,
-                        kind: "error",
-                      })
-                    })
-                    .finally(() => setCompanionUpdating(false))
-                }}
-                storageActionsDisabled={isBusy(jobState) || companionUpdating}
+                storageActionsDisabled={isBusy(jobState)}
                 companionBusy={companionBusy}
                 dependenciesUpdating={dependenciesUpdating}
                 onUpdateDependencies={() => {
@@ -2994,11 +2925,6 @@ function MainControls({
   serverCapabilities,
   helperCapabilities,
   companionHealth,
-  companionUpdate,
-  companionUpdating,
-  companionCheckingUpdate,
-  onCheckCompanion,
-  onUpdateCompanion,
   storageActionsDisabled,
   companionBusy,
   dependenciesUpdating,
@@ -3024,11 +2950,6 @@ function MainControls({
   serverCapabilities: ServerCapabilitiesState
   helperCapabilities: HelperCapabilities | null
   companionHealth: CompanionHealthState
-  companionUpdate: HelperUpdate | null
-  companionUpdating: boolean
-  companionCheckingUpdate: boolean
-  onCheckCompanion: () => void
-  onUpdateCompanion: () => void
   storageActionsDisabled: boolean
   companionBusy: boolean
   dependenciesUpdating: boolean
@@ -3127,33 +3048,6 @@ function MainControls({
                     {copy.downloadCompanion}
                     <ExternalLink className="size-3" />
                   </a>
-                </>
-              ) : null}
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={onCheckCompanion}
-                disabled={companionCheckingUpdate || companionUpdating}
-              >
-                {companionCheckingUpdate
-                  ? copy.checkingCompanion
-                  : copy.checkCompanion}
-              </Button>
-              {companionUpdate ? (
-                <>
-                  <span className="text-muted-foreground">
-                    {copy.companionUpdateAvailable(companionUpdate.version)}
-                  </span>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={onUpdateCompanion}
-                    disabled={companionUpdating || companionCheckingUpdate}
-                  >
-                    {companionUpdating
-                      ? copy.updatingCompanion
-                      : copy.updateCompanion}
-                  </Button>
                 </>
               ) : null}
               <Button
