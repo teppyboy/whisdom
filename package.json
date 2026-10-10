@@ -8,14 +8,14 @@
     "node": ">=22.22.2"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "dev": "vp dev",
+    "build": "tsc -b && vp build",
+    "lint": "vp lint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
-    "test": "vitest run",
+    "test": "vp test run",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview",
+    "preview": "vp preview",
     "build:wasm": "wasm-pack build audio-processor --target web --out-dir ../src/wasm/audio-processor",
     "build:companion": "python scripts/build_companion.py",
     "release:check-rollback-floor": "node scripts/check-rollback-floor.mjs"
@@ -42,7 +42,6 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
-    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.64.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",
@@ -53,21 +52,16 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "axe-core": "^4.14.0",
-    "eslint": "^10.12.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.7",
     "fake-indexeddb": "^6.2.5",
-    "globals": "^17.13.0",
     "jsdom": "^30.1.2",
     "prettier": "^3.9.9",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "rollup": "^4.64.3",
+    "shadcn": "^4.21.4",
     "typescript": "^7.0.2",
-    "typescript-eslint": "^8.71.1",
-    "vite": "^8.3.4",
+    "vite": "catalog:",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.6.0",
-    "vitest": "^5.0.3",
-    "shadcn": "^4.21.4"
+    "vite-plus": "catalog:"
   }
 }

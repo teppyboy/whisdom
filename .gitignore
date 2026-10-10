@@ -67,3 +67,4 @@ src/wasm/.omo/
 /server/tmp/
 /server/check.*
 /server/missing-output
+.vitest/

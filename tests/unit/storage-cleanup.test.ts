@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { clearModelCaches, MODEL_CACHE_KEYS } from "@/features/storage/cleanup"
 

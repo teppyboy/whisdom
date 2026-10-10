@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { LocalHelperClient } from "../../src/features/local-helper/client"
 import {

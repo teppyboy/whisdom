@@ -5,7 +5,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 // @ts-expect-error -- release tooling is plain ESM JavaScript with no type declarations.
 import { run } from "../../scripts/check-rollback-floor.mjs"

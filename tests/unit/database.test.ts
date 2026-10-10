@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vite-plus/test"
 import { openDB } from "idb"
 
 import { closeDatabase, openCompatibleDatabase } from "@/features/storage/database"

@@ -2,7 +2,7 @@
 import "fake-indexeddb/auto"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test"
 
 import { App } from "../../src/App"
 import { ThemeProvider } from "../../src/components/theme-provider"

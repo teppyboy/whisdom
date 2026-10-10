@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto"
 import { openDB, type IDBPDatabase } from "idb"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vite-plus/test"
 
 import {
   compatibilityMsToLegacySeconds,

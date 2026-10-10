@@ -4,6 +4,7 @@ packages:
 
 overrides:
   sharp: ^0.35.5
+  vite@*: 'catalog:'
 
 allowBuilds:
   '@swc/core': true
@@ -18,3 +19,11 @@ minimumReleaseAgeExclude:
   - '@rollup/rollup-linux-ppc64-gnu@4.64.3'
   - '@rollup/rollup-linux-s390x-gnu@4.64.3'
   - '@rollup/rollup-win32-x64-msvc@4.64.3'
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@1.1.0
+  vite-plus: 1.1.0
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: '*'
