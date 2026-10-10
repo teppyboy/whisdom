@@ -168,3 +168,9 @@
     transform: translateX(300%);
   }
 }
+
+/* Whisdom Companion (Tauri): the macOS title bar overlays the page, so the
+   app header must clear the traffic lights and act as the drag region. */
+html[data-tauri="true"] main > header {
+  padding-top: 38px;
+}

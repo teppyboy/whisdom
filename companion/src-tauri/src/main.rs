@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+#[cfg(target_os = "macos")]
+use tauri::{ActivationPolicy, RunEvent};
 use tauri::{Manager, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::{DialogExt, FilePath};
@@ -33,8 +35,48 @@ fn main() {
             Some(vec!["--background"]),
         ))
         .setup(setup)
-        .run(tauri::generate_context!())
-        .expect("error while running Whisdom Companion");
+        .build(tauri::generate_context!())
+        .expect("error while building Whisdom Companion")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(event, RunEvent::Reopen { .. }) {
+                show_main_window(app);
+            }
+        });
+}
+
+#[cfg(target_os = "macos")]
+fn show_main_window(app: &tauri::AppHandle) {
+    let _ = app.set_activation_policy(ActivationPolicy::Regular);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    let _ = app.set_activation_policy(ActivationPolicy::Accessory);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
 }
 
 fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
@@ -80,17 +122,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
                     tracing::error!(error = %error, "failed to update autostart setting");
                 }
             }
-            "open" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Err(error) = window
-                        .show()
-                        .and_then(|_| window.unminimize())
-                        .and_then(|_| window.set_focus())
-                    {
-                        tracing::warn!(error = %error, "failed to open companion window");
-                    }
-                }
-            }
+            "open" => show_main_window(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -102,9 +134,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         window.on_window_event(move |event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                if let Err(error) = window_handle.hide() {
-                    tracing::warn!(error = %error, "failed to hide companion window");
-                }
+                hide_main_window(window_handle.app_handle());
             }
         });
     }
@@ -116,15 +146,7 @@ fn setup(app: &mut tauri::App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         let app_handle = picker_handle.clone();
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel::<Vec<PathBuf>>();
-            if let Some(window) = app_handle.get_webview_window("main") {
-                if let Err(error) = window
-                    .show()
-                    .and_then(|_| window.unminimize())
-                    .and_then(|_| window.set_focus())
-                {
-                    tracing::warn!(error = %error, "failed to activate Companion before opening native picker");
-                }
-            }
+            show_main_window(&app_handle);
             app_handle
                 .dialog()
                 .file()

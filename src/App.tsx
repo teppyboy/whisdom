@@ -2528,7 +2528,10 @@ export function App() {
       className="min-h-svh bg-background text-foreground"
       data-testid="compatibility-product-ready"
     >
-      <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <header
+        className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+        data-tauri-drag-region
+      >
         <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
           <button
             className="flex items-center gap-2.5"
