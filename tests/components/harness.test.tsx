@@ -90,7 +90,7 @@ describe("component harness", () => {
 
     expect(await screen.findByText("Desktop Companion is ready")).toBeVisible()
     expect(
-      screen.getByText(
+      await screen.findByText(
         "High accuracy with faster processing than full Large v3. Download: about 548 MB."
       )
     ).toBeVisible()
