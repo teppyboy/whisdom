@@ -2528,10 +2528,7 @@ export function App() {
       className="min-h-svh bg-background text-foreground"
       data-testid="compatibility-product-ready"
     >
-      <header
-        className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
-        data-tauri-drag-region
-      >
+      <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
           <button
             className="flex items-center gap-2.5"
@@ -3030,7 +3027,7 @@ function MainControls({
 
   return (
     <>
-      <Card className="relative z-20 animate-in overflow-visible duration-300 ease-out fade-in slide-in-from-bottom-1">
+      <Card className="animate-in overflow-visible duration-300 ease-out fade-in slide-in-from-bottom-1">
       <CardHeader>
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {stepLabel}
