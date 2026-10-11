@@ -292,7 +292,14 @@ jobs:
           tauriScript: pnpm exec tauri
           tagName: companion-v__VERSION__
           releaseName: Whisdom Companion v__VERSION__
-          releaseBody: Signed Windows installer and updater artifacts.
+          releaseBody: |-
+            Windows NSIS installer plus signed updater artifacts.
+            - Web UI embedded in the Companion window — no browser
+              needed
+            - Appears in the macOS Dock while its window is open
+              (tray-only when closed)
+            - Legacy updater check removed
+            Requires the local helper server bundled in the installer.
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
@@ -398,9 +405,15 @@ jobs:
           tauriScript: pnpm exec tauri
           tagName: companion-v__VERSION__
           releaseName: Whisdom Companion v__VERSION__
-          releaseBody: >-
-            macOS DMG (Apple silicon, Metal).
-            Ad-hoc signed, no updater.
+          releaseBody: |-
+            macOS DMG (Apple silicon, Metal), ad-hoc signed, no
+            updater artifacts.
+            - Web UI embedded in the Companion window — no browser
+              needed
+            - Appears in the Dock while open; stays tray-only when
+              the window is closed
+            - Traffic lights no longer overlap the app header
+            - Legacy updater check removed
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: false
