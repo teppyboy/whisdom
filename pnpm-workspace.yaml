@@ -21,7 +21,7 @@ minimumReleaseAgeExclude:
   - '@rollup/rollup-win32-x64-msvc@4.64.3'
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@1.1.0
-  vite-plus: 1.1.0
+  vite-plus: 1.3.0
 peerDependencyRules:
   allowAny:
     - vite
